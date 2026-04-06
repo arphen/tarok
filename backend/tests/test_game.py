@@ -20,8 +20,11 @@ async def test_full_game_with_random_players():
     # All hands empty
     for hand in state.hands:
         assert len(hand) == 0
-    # Scores should balance (zero-sum for 2v2)
-    assert sum(scores.values()) == 0, f"Scores don't balance: {scores}"
+    # Only declarer team should score; opponents get 0
+    if state.declarer is not None and not state.contract.is_klop:
+        for p in range(4):
+            if state.get_team(p) != state.get_team(state.declarer):
+                assert scores.get(p, 0) == 0, f"Opponent {p} has non-zero score: {scores}"
     # Every player should have a score
     assert len(scores) == 4
 
@@ -36,6 +39,9 @@ async def test_multiple_games():
 
         assert state.phase.value == "finished"
         assert state.tricks_played == 12
-        # Klop and berac are not zero-sum; other contracts are
+        # Only declarer team should score, opponents get 0
         if state.contract and not state.contract.is_klop:
-            assert sum(scores.values()) == 0, f"Game {seed}: scores={scores}"
+            for p in range(4):
+                team = state.get_team(p)
+                if team != state.get_team(state.declarer):
+                    assert scores.get(p, 0) == 0, f"Game {seed}: opponent {p} scored {scores}"

@@ -83,6 +83,8 @@ async def start_training(req: TrainingRequest):
         games_per_session=req.games_per_session,
         stockskis_ratio=req.stockskis_ratio,
         stockskis_strength=req.stockskis_strength,
+        use_rust_engine=req.use_rust_engine,
+        warmup_games=req.warmup_games,
     )
 
     async def on_metrics(metrics: TrainingMetrics):

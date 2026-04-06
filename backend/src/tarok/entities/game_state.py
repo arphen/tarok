@@ -9,7 +9,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from enum import Enum
 
-from tarok.entities.card import Card, CardType, Suit, SuitRank, SKIS, PAGAT
+from tarok.entities.card import Card, CardType, Suit, SuitRank, SKIS, PAGAT, MOND
 
 
 class Phase(Enum):
@@ -34,10 +34,13 @@ class Contract(Enum):
     SOLO_ONE = -1
     SOLO = 0    # No talon, no partner
     BERAC = -100  # Declarer bids to take 0 tricks, no talon, plays solo
+    BARVNI_VALAT = -101  # Colour valat: suits beat taroks, must take all tricks
 
     @property
     def is_solo(self) -> bool:
-        return self.value <= 0 and self not in (Contract.KLOP, Contract.BERAC)
+        return self.value <= 0 and self not in (
+            Contract.KLOP, Contract.BERAC, Contract.BARVNI_VALAT,
+        )
 
     @property
     def is_klop(self) -> bool:
@@ -48,13 +51,17 @@ class Contract(Enum):
         return self == Contract.BERAC
 
     @property
+    def is_barvni_valat(self) -> bool:
+        return self == Contract.BARVNI_VALAT
+
+    @property
     def requires_overplay(self) -> bool:
         """Must play a higher card than what's on the table."""
         return self in (Contract.KLOP, Contract.BERAC)
 
     @property
     def talon_cards(self) -> int:
-        if self in (Contract.KLOP, Contract.BERAC):
+        if self in (Contract.KLOP, Contract.BERAC, Contract.BARVNI_VALAT):
             return 0
         return abs(self.value)
 
@@ -71,13 +78,14 @@ class Contract(Enum):
             Contract.SOLO_ONE: 6,
             Contract.SOLO: 7,
             Contract.BERAC: 8,
+            Contract.BARVNI_VALAT: 9,
         }
         return order[self]
 
     @property
     def is_biddable(self) -> bool:
         """Can a player actively bid this contract?"""
-        return self not in (Contract.KLOP,)
+        return self not in (Contract.KLOP, Contract.BARVNI_VALAT)
 
 
 class PlayerRole(Enum):
@@ -96,6 +104,7 @@ class Announcement(Enum):
     KINGS = "kings"          # Declarer team will collect all 4 kings
     PAGAT_ULTIMO = "pagat_ultimo"  # Pagat played in the last trick and wins
     VALAT = "valat"          # Win all 12 tricks
+    BARVNI_VALAT = "barvni_valat"  # Colour valat — announced after solo, must take all tricks
 
 
 class KontraLevel(Enum):
@@ -253,11 +262,13 @@ class GameState:
         lead_suit = None
         best_card = None
         trick_card_count = 0
+        trick_cards: tuple[Card, ...] = ()
 
         if self.current_trick is not None and self.current_trick.cards:
             lead_card = self.current_trick.cards[0][1]
             lead_suit = self.current_trick.lead_suit
             trick_card_count = len(self.current_trick.cards)
+            trick_cards = tuple(c for _, c in self.current_trick.cards)
             # Find the current best card in the trick
             best_card = lead_card
             for _, c in self.current_trick.cards:
@@ -269,6 +280,7 @@ class GameState:
         if self.contract is not None:
             _cname_map = {
                 Contract.KLOP: "klop", Contract.BERAC: "berac",
+                Contract.BARVNI_VALAT: "barvni_valat",
                 Contract.THREE: "three", Contract.TWO: "two", Contract.ONE: "one",
                 Contract.SOLO_THREE: "solo_three", Contract.SOLO_TWO: "solo_two",
                 Contract.SOLO_ONE: "solo_one", Contract.SOLO: "solo",
@@ -284,6 +296,7 @@ class GameState:
             is_first_trick=(self.tricks_played == 0),
             is_last_trick=self.is_last_trick,
             trick_card_count=trick_card_count,
+            trick_cards=trick_cards,
         )
 
         trace = generate_legal_moves(ctx)
@@ -303,11 +316,13 @@ class GameState:
         lead_suit = None
         best_card = None
         trick_card_count = 0
+        trick_cards: tuple[Card, ...] = ()
 
         if self.current_trick is not None and self.current_trick.cards:
             lead_card = self.current_trick.cards[0][1]
             lead_suit = self.current_trick.lead_suit
             trick_card_count = len(self.current_trick.cards)
+            trick_cards = tuple(c for _, c in self.current_trick.cards)
             best_card = lead_card
             for _, c in self.current_trick.cards:
                 if c.beats(best_card, lead_suit):
@@ -317,6 +332,7 @@ class GameState:
         if self.contract is not None:
             _cname_map = {
                 Contract.KLOP: "klop", Contract.BERAC: "berac",
+                Contract.BARVNI_VALAT: "barvni_valat",
                 Contract.THREE: "three", Contract.TWO: "two", Contract.ONE: "one",
                 Contract.SOLO_THREE: "solo_three", Contract.SOLO_TWO: "solo_two",
                 Contract.SOLO_ONE: "solo_one", Contract.SOLO: "solo",
@@ -332,6 +348,7 @@ class GameState:
             is_first_trick=(self.tricks_played == 0),
             is_last_trick=self.is_last_trick,
             trick_card_count=trick_card_count,
+            trick_cards=trick_cards,
         )
 
         return generate_legal_moves(ctx)

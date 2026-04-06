@@ -7,7 +7,7 @@ from hypothesis import strategies as st
 
 from tarok.entities.card import Card, CardType, Suit, SuitRank, DECK, tarok, suit_card, PAGAT, MOND, SKIS
 from tarok.entities.game_state import (
-    Contract, GameState, Phase, PlayerRole, Trick, Announcement,
+    Contract, GameState, Phase, PlayerRole, Team, Trick, Announcement,
 )
 from tarok.entities.scoring import compute_card_points, score_game, TOTAL_GAME_POINTS
 from tarok.use_cases.deal import deal
@@ -134,12 +134,12 @@ def test_legal_plays_always_nonempty(seed):
 
 
 # ---------------------------------------------------------------------------
-# Property: Scores are always zero-sum after a complete game
+# Property: Only declarer team scores after a complete game
 # ---------------------------------------------------------------------------
 
 @hgiven(random_seeds)
 @settings(max_examples=50, deadline=5000)
-def test_scores_zero_sum(seed):
+def test_opponents_score_zero(seed):
     rng = random.Random(seed)
     state = GameState(phase=Phase.DEALING)
     state = deal(state, rng=rng)
@@ -174,8 +174,10 @@ def test_scores_zero_sum(seed):
             state = play_card(state, state.current_player, card)
 
     scores = score_game(state)
-    total = sum(scores.values())
-    assert total == 0, f"Scores not zero-sum: {scores}"
+    for p in range(4):
+        team = state.get_team(p)
+        if team != Team.DECLARER_TEAM:
+            assert scores[p] == 0, f"Opponent {p} scored {scores[p]}: {scores}"
 
 
 # ---------------------------------------------------------------------------

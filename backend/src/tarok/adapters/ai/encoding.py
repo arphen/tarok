@@ -71,129 +71,140 @@ KING_ACTIONS: list[Suit] = list(Suit)  # [HEARTS, DIAMONDS, CLUBS, SPADES]
 SUIT_TO_IDX: dict[Suit, int] = {s: i for i, s in enumerate(KING_ACTIONS)}
 
 
-def encode_state(state: GameState, player_idx: int, decision_type: DecisionType = DecisionType.CARD_PLAY) -> torch.Tensor:
-    """Encode visible game state for a specific player as a flat tensor.
-
-    Expanded to include bidding context, talon visibility, hand strength,
-    and the current decision type.
-    """
-    features: list[float] = []
+def _encode_state_into(
+    buf: torch.Tensor,
+    state: GameState,
+    player_idx: int,
+    decision_type: DecisionType = DecisionType.CARD_PLAY,
+) -> None:
+    """Write state features into a pre-zeroed buffer (in-place)."""
+    o = 0  # running offset
 
     # Cards in hand (54 binary)
-    hand_vec = [0.0] * 54
     for card in state.hands[player_idx]:
-        hand_vec[CARD_TO_IDX[card]] = 1.0
-    features.extend(hand_vec)
+        buf[o + CARD_TO_IDX[card]] = 1.0
+    o += 54
 
     # Cards already played (54 binary)
-    played_vec = [0.0] * 54
     for trick in state.tricks:
         for _, card in trick.cards:
-            played_vec[CARD_TO_IDX[card]] = 1.0
-    features.extend(played_vec)
+            buf[o + CARD_TO_IDX[card]] = 1.0
+    o += 54
 
     # Cards in current trick (54 binary)
-    trick_vec = [0.0] * 54
     if state.current_trick:
         for _, card in state.current_trick.cards:
-            trick_vec[CARD_TO_IDX[card]] = 1.0
-    features.extend(trick_vec)
+            buf[o + CARD_TO_IDX[card]] = 1.0
+    o += 54
 
     # Talon cards visible to this player (54 binary)
-    talon_vec = [0.0] * 54
     if state.talon_revealed and player_idx == state.declarer:
         for group in state.talon_revealed:
             for card in group:
-                talon_vec[CARD_TO_IDX[card]] = 1.0
-    features.extend(talon_vec)
+                buf[o + CARD_TO_IDX[card]] = 1.0
+    o += 54
 
     # Player position relative to dealer (4 one-hot)
-    pos_vec = [0.0] * 4
     relative_pos = (player_idx - state.dealer) % state.num_players
-    pos_vec[relative_pos] = 1.0
-    features.extend(pos_vec)
+    buf[o + relative_pos] = 1.0
+    o += 4
 
-    # Contract (9 one-hot: none + KLOP + 8 biddable including berac)
-    contract_vec = [0.0] * 9
+    # Contract (10 one-hot: none + KLOP + 8 biddable + BARVNI_VALAT)
     if state.contract:
         contract_list = list(Contract)
         idx = contract_list.index(state.contract)
-        if idx < 9:
-            contract_vec[idx] = 1.0
-    features.extend(contract_vec)
+        if idx < 10:
+            buf[o + idx] = 1.0
+    o += 10
 
     # Phase encoding (3 features: bidding, trick_play, other)
-    phase_vec = [0.0] * 3
     if state.phase == Phase.BIDDING:
-        phase_vec[0] = 1.0
+        buf[o] = 1.0
     elif state.phase == Phase.TRICK_PLAY:
-        phase_vec[1] = 1.0
+        buf[o + 1] = 1.0
     else:
-        phase_vec[2] = 1.0
-    features.extend(phase_vec)
+        buf[o + 2] = 1.0
+    o += 3
 
     # Partner known
-    features.append(1.0 if state.is_partner_revealed else 0.0)
+    if state.is_partner_revealed:
+        buf[o] = 1.0
+    o += 1
 
     # Tricks won by my team (normalized 0-1)
     my_team = state.get_team(player_idx)
     my_tricks = sum(
         1 for t in state.tricks if state.get_team(t.winner()) == my_team
     )
-    features.append(my_tricks / 12.0)
+    buf[o] = my_tricks / 12.0
+    o += 1
 
     # Tricks played (normalized 0-1)
-    features.append(state.tricks_played / 12.0)
+    buf[o] = state.tricks_played / 12.0
+    o += 1
 
     # Decision type (5 one-hot)
-    dt_vec = [0.0] * 5
-    dt_vec[decision_type.value] = 1.0
-    features.extend(dt_vec)
+    buf[o + decision_type.value] = 1.0
+    o += 5
 
     # Bidding context: highest bid so far (9 one-hot: no_bid + 8 contracts)
-    bid_vec = [0.0] * 9
     bids_with_contract = [b.contract for b in state.bids if b.contract is not None]
     if bids_with_contract:
         highest = max(bids_with_contract, key=lambda c: c.strength)
-        bid_vec[BID_TO_IDX.get(highest, 0)] = 1.0
+        buf[o + BID_TO_IDX.get(highest, 0)] = 1.0
     else:
-        bid_vec[0] = 1.0  # No bid yet → index 0 (pass slot, meaning "nothing bid")
-    features.extend(bid_vec)
+        buf[o] = 1.0  # No bid yet
+    o += 9
 
     # Which players have passed (4 binary, relative to dealer)
     passed_set = {b.player for b in state.bids if b.contract is None}
     for i in range(state.num_players):
         p = (state.dealer + 1 + i) % state.num_players
-        features.append(1.0 if p in passed_set else 0.0)
+        if p in passed_set:
+            buf[o + i] = 1.0
+    o += 4
 
-    # Hand strength features (normalized, always useful)
+    # Hand strength features (normalized)
     hand = state.hands[player_idx]
     tarok_count = sum(1 for c in hand if c.card_type == CardType.TAROK)
     high_taroks = sum(1 for c in hand if c.card_type == CardType.TAROK and c.value >= 15)
     king_count = sum(1 for c in hand if c.is_king)
     suits_in_hand = {c.suit for c in hand if c.suit is not None}
     void_count = 4 - len(suits_in_hand)
-
-    features.append(tarok_count / 12.0)
-    features.append(high_taroks / 7.0)
-    features.append(king_count / 4.0)
-    features.append(void_count / 4.0)
+    buf[o] = tarok_count / 12.0
+    buf[o + 1] = high_taroks / 7.0
+    buf[o + 2] = king_count / 4.0
+    buf[o + 3] = void_count / 4.0
+    o += 4
 
     # Announcements made (4 binary: trula, kings, pagat, valat — by either team)
     ann_set: set[Announcement] = set()
     for anns in state.announcements.values():
         ann_set.update(anns)
-    for ann in [Announcement.TRULA, Announcement.KINGS, Announcement.PAGAT_ULTIMO, Announcement.VALAT]:
-        features.append(1.0 if ann in ann_set else 0.0)
+    for i, ann in enumerate(
+        [Announcement.TRULA, Announcement.KINGS, Announcement.PAGAT_ULTIMO, Announcement.VALAT]
+    ):
+        if ann in ann_set:
+            buf[o + i] = 1.0
+    o += 4
 
     # Kontra levels (5 features, normalized: game + 4 bonuses, each 0/0.33/0.67/1)
     _KONTRA_KEYS = ["game", Announcement.TRULA.value, Announcement.KINGS.value,
                     Announcement.PAGAT_ULTIMO.value, Announcement.VALAT.value]
-    for key in _KONTRA_KEYS:
+    for i, key in enumerate(_KONTRA_KEYS):
         level = state.kontra_levels.get(key, KontraLevel.NONE)
-        features.append((level.value - 1) / 7.0)  # 0→0, 1→0.14, 3→0.43, 7→1.0
+        buf[o + i] = (level.value - 1) / 7.0  # 0→0, 1→0.14, 3→0.43, 7→1.0
+    o += 5
 
-    return torch.tensor(features, dtype=torch.float32)
+
+def encode_state(state: GameState, player_idx: int, decision_type: DecisionType = DecisionType.CARD_PLAY) -> torch.Tensor:
+    """Encode visible game state for a specific player as a flat tensor.
+
+    Uses a pre-allocated buffer to avoid per-call Python list allocation.
+    """
+    _state_buf.zero_()
+    _encode_state_into(_state_buf, state, player_idx, decision_type)
+    return _state_buf.clone()
 
 
 # Compute STATE_SIZE from the feature layout
@@ -203,7 +214,7 @@ STATE_SIZE = (
     54 +  # current_trick
     54 +  # talon_visible
     4 +   # player_position
-    9 +   # contract (incl. berac)
+    10 +  # contract (incl. berac + barvni_valat)
     3 +   # phase
     1 +   # partner_known
     1 +   # tricks_won_by_team
@@ -214,10 +225,14 @@ STATE_SIZE = (
     4 +   # hand_strength
     4 +   # announcements_made
     5     # kontra_levels
-)  # = 265
+)  # = 267
 # Oracle critic sees all opponent hands (Perfect Training, Imperfect Execution)
 ORACLE_EXTRA_SIZE = 3 * 54  # 3 opponent hand vectors
-ORACLE_STATE_SIZE = STATE_SIZE + ORACLE_EXTRA_SIZE  # 263 + 162 = 425
+ORACLE_STATE_SIZE = STATE_SIZE + ORACLE_EXTRA_SIZE  # 267 + 162 = 429
+
+# Pre-allocated encoding buffers (one per process, safe for async single-threaded use)
+_state_buf = torch.zeros(STATE_SIZE, dtype=torch.float32)
+_oracle_buf = torch.zeros(ORACLE_STATE_SIZE, dtype=torch.float32)
 
 
 def encode_oracle_state(
@@ -225,21 +240,19 @@ def encode_oracle_state(
 ) -> torch.Tensor:
     """Encode perfect-information state for the oracle critic.
 
-    Extends the regular imperfect-info state with all opponent hands,
-    giving the critic access to hidden information during training.
-    The actor never sees this — only the critic uses it for value estimation.
+    Uses a pre-allocated buffer and the shared encoding helper.
     """
-    regular = encode_state(state, player_idx, decision_type)
+    _oracle_buf.zero_()
+    _encode_state_into(_oracle_buf, state, player_idx, decision_type)
 
-    extra: list[float] = []
+    o = STATE_SIZE
     for offset in range(1, state.num_players):
         opp_idx = (player_idx + offset) % state.num_players
-        hand_vec = [0.0] * 54
         for card in state.hands[opp_idx]:
-            hand_vec[CARD_TO_IDX[card]] = 1.0
-        extra.extend(hand_vec)
+            _oracle_buf[o + CARD_TO_IDX[card]] = 1.0
+        o += 54
 
-    return torch.cat([regular, torch.tensor(extra, dtype=torch.float32)])
+    return _oracle_buf.clone()
 
 def encode_legal_mask(legal_cards: list[Card]) -> torch.Tensor:
     """Create a binary mask over the 54-card action space."""

@@ -96,8 +96,8 @@ class TestStockSkisFullGame:
         assert state.phase.value == "finished"
         # All 4 players should have scores
         assert len(scores) == 4
-        # Scores should sum to 0 (zero-sum game)
-        assert sum(scores.values()) == 0
+        # Only declarer team should score
+        assert all(scores[p] == 0 for p in range(4) if state.get_team(p) != state.get_team(state.declarer)) or state.contract.is_klop
 
     def test_multiple_games_consistent(self):
         """Play 10 games to ensure consistency across different deals."""
@@ -107,7 +107,7 @@ class TestStockSkisFullGame:
             game = GameLoop(players)
             state, scores = asyncio.run(game.run(dealer=dealer % 4))
             assert state.phase.value == "finished"
-            assert sum(scores.values()) == 0
+            assert len(scores) == 4
 
 
 class TestStockSkisVsRLAgent:

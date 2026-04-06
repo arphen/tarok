@@ -67,6 +67,7 @@ _CONTRACT_MAP = {
     "solo": "solo",
     "klop": "klop",
     "berac": "berac",
+    "barvni_valat": "barvni_valat",
 }
 
 
@@ -103,6 +104,7 @@ def test_legal_moves(scenario):
     lead_card = parse_card(given["lead_card"]) if given.get("lead_card") else None
     best_card = parse_card(given["best_card"]) if given.get("best_card") else None
     contract = _CONTRACT_MAP.get(given.get("contract", ""), None)
+    trick_cards = tuple(parse_card(c) for c in given["trick_cards"]) if given.get("trick_cards") else ()
 
     # Derive lead_suit
     lead_suit = None
@@ -118,6 +120,7 @@ def test_legal_moves(scenario):
         is_first_trick=given.get("is_first_trick", False),
         is_last_trick=given.get("is_last_trick", False),
         trick_card_count=given.get("trick_card_count", 0),
+        trick_cards=trick_cards,
     )
 
     trace = generate_legal_moves(ctx)

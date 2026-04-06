@@ -81,6 +81,16 @@ rules:
 
 # Ban rules — applied AFTER the pipeline, in priority order.
 ban_rules:
+  - name: ForcePagatWhenMondSkisInTrick
+    priority: 200
+    condition: mond_skis_in_trick_has_pagat_overplay
+    filter: force_pagat_if_mond_skis_in_trick
+    params:
+      description: >
+        In Klop/Berac, if Mond and Škis are already in the trick and
+        the player holds Pagat, they MUST play it (Pagat wins via the
+        trula trick rule, so it is forced out of the hand).
+
   - name: BanPagatInOverplay
     priority: 100
     condition: pagat_exposed_in_overplay
@@ -89,3 +99,4 @@ ban_rules:
       description: >
         In Klop/Berac the Pagat cannot be voluntarily played if there
         are other taroks in hand. It must be forced out as the last tarok.
+        Exception: if Mond+Škis are in the trick, ban is lifted (Pagat wins).

@@ -133,6 +133,44 @@ legal_moves:
       cards: ["T1"]
       triggered_rule: FollowTarokOverplay
 
+  # --- PAGAT FORCED OUT WHEN MOND+ŠKIS IN TRICK ---
+
+  - name: "Klop — Pagat forced out when Mond and Škis in trick"
+    given:
+      hand: ["T1", "T5", "T10"]
+      lead_card: "T21"
+      best_card: "T22"
+      contract: klop
+      trick_cards: ["T21", "T22"]
+    expected:
+      cards: ["T1"]
+      triggered_rule: FollowTarokOverplay
+      applied_bans: ["ForcePagatWhenMondSkisInTrick"]
+
+  - name: "Berac — Pagat forced when Mond+Škis on table, even with other taroks"
+    given:
+      hand: ["T1", "T18", "T3"]
+      lead_card: "T22"
+      best_card: "T22"
+      contract: berac
+      trick_cards: ["T22", "T21"]
+    expected:
+      cards: ["T1"]
+      triggered_rule: FollowTarokOverplay
+      applied_bans: ["ForcePagatWhenMondSkisInTrick"]
+
+  - name: "Klop — Pagat still banned when only Mond (no Škis) in trick"
+    given:
+      hand: ["T1", "T5", "T10"]
+      lead_card: "T21"
+      best_card: "T21"
+      contract: klop
+      trick_cards: ["T21"]
+    expected:
+      cards: ["T5", "T10"]
+      triggered_rule: FollowTarokOverplay
+      applied_bans: ["BanPagatInOverplay"]
+
 # ===================================================================
 # TRICK EVALUATION SCENARIOS
 # ===================================================================
@@ -194,3 +232,76 @@ trick_eval:
     expected:
       winner: 0  # Škis still wins (value 22 beats all taroks in beats())
       triggered_rule: SkisCapturedLastTrick
+
+  # --- PAGAT-MOND-ŠKIS TRULA TRICK RULE ---
+
+  - name: "Pagat wins when all 3 trula cards in same trick"
+    given:
+      cards:
+        - [0, "T21"]   # Mond
+        - [1, "T22"]   # Škis
+        - [2, "T1"]    # Pagat
+        - [3, "T15"]
+    expected:
+      winner: 2
+      triggered_rule: PagatWinsTrulaTrick
+
+  - name: "Pagat wins trula trick even when played first"
+    given:
+      cards:
+        - [0, "T1"]    # Pagat
+        - [1, "T21"]   # Mond
+        - [2, "T22"]   # Škis
+        - [3, "T10"]
+    expected:
+      winner: 0
+      triggered_rule: PagatWinsTrulaTrick
+
+  - name: "Standard trick when only 2 trula cards present"
+    given:
+      cards:
+        - [0, "T1"]    # Pagat
+        - [1, "T21"]   # Mond
+        - [2, "T15"]
+        - [3, "T10"]
+    expected:
+      winner: 1   # Mond (21) beats all
+      triggered_rule: StandardTrickWinner
+
+  # --- BARVNI VALAT TRICK RULE ---
+
+  - name: "Barvni valat — suit card beats tarok"
+    given:
+      cards:
+        - [0, "T20"]
+        - [1, "KH"]
+        - [2, "T15"]
+        - [3, "1H"]
+      contract: barvni_valat
+    expected:
+      winner: 1  # King of Hearts beats taroks
+      triggered_rule: BarvniValatWinner
+
+  - name: "Barvni valat — lead suit wins over off-suit"
+    given:
+      cards:
+        - [0, "KH"]
+        - [1, "KC"]
+        - [2, "QH"]
+        - [3, "T20"]
+      contract: barvni_valat
+    expected:
+      winner: 0  # King of Hearts is lead suit and highest
+      triggered_rule: BarvniValatWinner
+
+  - name: "Barvni valat — all taroks, standard tarok resolution"
+    given:
+      cards:
+        - [0, "T5"]
+        - [1, "T20"]
+        - [2, "T10"]
+        - [3, "T3"]
+      contract: barvni_valat
+    expected:
+      winner: 1  # T20 highest tarok
+      triggered_rule: BarvniValatWinner

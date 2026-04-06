@@ -94,6 +94,8 @@ class TrainingRequest(BaseModel):
     resume_from: str | None = None
     stockskis_ratio: float = 0.0
     stockskis_strength: float = 1.0
+    use_rust_engine: bool = True
+    warmup_games: int = 0
 
 
 class TrainingMetricsSchema(BaseModel):

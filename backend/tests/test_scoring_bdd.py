@@ -9,7 +9,7 @@ from tarok.entities.card import (
     tarok, suit_card, DECK,
 )
 from tarok.entities.game_state import (
-    Announcement, Contract, GameState, KontraLevel, Phase, PlayerRole, Trick,
+    Announcement, Contract, GameState, KontraLevel, Phase, PlayerRole, Team, Trick,
 )
 from tarok.entities.scoring import (
     _contract_multiplier,
@@ -237,10 +237,13 @@ def completed_random_game():
     return _play_random_game(99)
 
 
-@then("the sum of all scores should be 0")
-def zero_sum(completed_game):
+@then("the opponents should have score 0")
+def opponents_zero(completed_game):
     scores = score_game(completed_game)
-    assert sum(scores.values()) == 0, f"Not zero-sum: {scores}"
+    for p in range(4):
+        team = completed_game.get_team(p)
+        if team != Team.DECLARER_TEAM:
+            assert scores[p] == 0, f"Opponent {p} has non-zero score: {scores[p]}"
 
 
 # ---------------------------------------------------------------------------
@@ -355,6 +358,7 @@ def opponents_same(scored_state):
 @then("the declarer score should equal the negated opponent score")
 def declarer_neg_opponent(scored_state):
     scores = score_game(scored_state)
-    assert scores[0] == -scores[2], (
-        f"Declarer ({scores[0]}) != -Opponent ({-scores[2]})"
+    # Opponents should have 0 (non-zero-sum: only declarer team scores)
+    assert scores[2] == 0, (
+        f"Opponent should have 0, got {scores[2]}"
     )

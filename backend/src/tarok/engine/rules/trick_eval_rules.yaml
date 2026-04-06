@@ -10,6 +10,25 @@
 rules:
   # --- Special cases (evaluated first) ---
 
+  - name: PagatWinsTrulaTrick
+    priority: 200
+    condition: all_trula_in_trick
+    action: pagat_wins_trula_trick
+    params:
+      description: >
+        When Pagat (I), Mond (XXI), and Škis (the Fool) are all in the
+        same trick, Pagat always wins regardless of normal card ordering.
+
+  - name: BarvniValatWinner
+    priority: 150
+    condition: is_barvni_valat
+    action: barvni_valat_winner
+    params:
+      description: >
+        In barvni valat (colour valat), suit cards beat taroks.
+        Among suit cards, normal lead-suit rules apply.
+        Taroks only win if no suit cards were played.
+
   - name: SkisCapturedLastTrick
     priority: 100
     condition: skis_played_last_trick

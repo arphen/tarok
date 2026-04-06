@@ -85,6 +85,8 @@ def _serialize_experience(exp: Experience) -> dict:
         "reward": exp.reward,
         "done": exp.done,
         "oracle_state": exp.oracle_state.cpu() if exp.oracle_state is not None else None,
+        "game_id": exp.game_id,
+        "step_in_game": exp.step_in_game,
     }
 
 
@@ -99,6 +101,8 @@ def deserialize_experience(d: dict) -> Experience:
         reward=d["reward"],
         done=d["done"],
         oracle_state=d.get("oracle_state"),
+        game_id=d.get("game_id", 0),
+        step_in_game=d.get("step_in_game", 0),
     )
 
 

@@ -34,6 +34,12 @@ from tarok.adapters.ai.network_bank import NetworkBank
 from tarok.adapters.ai.stockskis_player import StockSkisPlayer
 from tarok.use_cases.game_loop import GameLoop
 
+try:
+    from tarok.adapters.ai.rust_game_loop import RustGameLoop
+    _HAS_RUST = True
+except Exception:
+    _HAS_RUST = False
+
 
 _ACTION_SIZES = {
     DecisionType.BID: BID_ACTION_SIZE,
@@ -124,6 +130,8 @@ class TrainingMetrics:
     )
     session_avg_score_history: list[float] = field(default_factory=list)
     snapshots: list[dict] = field(default_factory=list)
+    # Avg finishing place of StockŠkis opponents per session (1=best, 4=worst)
+    stockskis_place_history: list[float] = field(default_factory=list)
     # Tarok count vs bid: for each tarok count (0..12), track which contract was played
     tarok_count_bids: dict[int, dict[str, int]] = field(
         default_factory=lambda: {i: {} for i in range(13)}
@@ -146,6 +154,7 @@ class TrainingMetrics:
             "klop_rate": round(self.klop_rate, 4),
             "solo_rate": round(self.solo_rate, 4),
             "contract_stats": {k: v.to_dict() for k, v in self.contract_stats.items()},
+            "history_offset": max(0, len(self.reward_history) - 500),
             "reward_history": self.reward_history[-500:],
             "win_rate_history": self.win_rate_history[-500:],
             "loss_history": self.loss_history[-500:],
@@ -156,6 +165,7 @@ class TrainingMetrics:
                 k: v[-500:] for k, v in self.contract_win_rate_history.items()
             },
             "session_avg_score_history": self.session_avg_score_history[-500:],
+            "stockskis_place_history": self.stockskis_place_history[-500:],
             "snapshots": self.snapshots,
             "tarok_count_bids": {
                 str(k): v for k, v in self.tarok_count_bids.items()
@@ -194,6 +204,9 @@ class PPOTrainer:
         # --- StockŠkis opponents ---
         stockskis_ratio: float = 0.0,
         stockskis_strength: float = 1.0,
+        # --- Rust engine ---
+        use_rust_engine: bool = False,
+        warmup_games: int = 0,
     ):
         self.agents = agents
         self.gamma = gamma
@@ -244,6 +257,10 @@ class PPOTrainer:
         self._metrics_callback: list = []
         self._rng = random.Random()
 
+        # --- Rust engine ---
+        self.use_rust_engine = use_rust_engine and _HAS_RUST
+        self.warmup_games = warmup_games
+
     def add_metrics_callback(self, callback) -> None:
         self._metrics_callback.append(callback)
 
@@ -285,6 +302,10 @@ class PPOTrainer:
         Each session = *games_per_session* games → one PPO update.
         Metrics update after every game for live dashboard feedback.
         """
+        # --- Optional warmup phase ---
+        if self.warmup_games > 0 and self.use_rust_engine:
+            await self._run_warmup()
+
         self._running = True
         total_games = num_sessions * self.games_per_session
         self.metrics.total_episodes = total_games
@@ -312,6 +333,7 @@ class PPOTrainer:
             self.metrics.session = session_idx + 1
             all_experiences: list[Experience] = []
             session_scores: list[int] = []
+            session_stockskis_places: list[float] = []
 
             for g in range(self.games_per_session):
                 if not self._running:
@@ -343,8 +365,11 @@ class PPOTrainer:
                 for agent in self.agents:
                     agent.clear_experiences()
 
-                # Play one game
-                game = GameLoop(self.agents)
+                # Play one game (Rust engine or Python engine)
+                if self.use_rust_engine and not use_stockskis:
+                    game = RustGameLoop(self.agents)
+                else:
+                    game = GameLoop(self.agents)
                 state, scores = await game.run(dealer=(game_count + g) % 4)
 
                 # Restore agents after external-opponent game
@@ -360,6 +385,13 @@ class PPOTrainer:
                 contract_name = state.contract.name.lower() if state.contract else "klop"
                 raw_score = scores.get(0, 0)
                 declarer_p0 = state.declarer == 0
+
+                # Track StockŠkis finishing places (1=best, 4=worst)
+                if use_stockskis:
+                    sorted_players = sorted(scores, key=lambda p: scores[p], reverse=True)
+                    places = {p: rank + 1 for rank, p in enumerate(sorted_players)}
+                    avg_sk_place = sum(places[p] for p in range(1, 4)) / 3.0
+                    session_stockskis_places.append(avg_sk_place)
 
                 # Track tarok count vs contract for player 0
                 if state.initial_tarok_counts:
@@ -448,6 +480,12 @@ class PPOTrainer:
             if self.fsp_ratio > 0 and (session_idx + 1) % self.bank_save_interval == 0:
                 self.network_bank.push(self.shared_network.state_dict())
 
+            # StockŠkis avg finishing place for this session (NaN if no StockŠkis games)
+            if session_stockskis_places:
+                self.metrics.stockskis_place_history.append(
+                    round(sum(session_stockskis_places) / len(session_stockskis_places), 2)
+                )
+
             # --- Append per-session history for charts ---
             self.metrics.reward_history.append(self.metrics.avg_reward)
             self.metrics.win_rate_history.append(self.metrics.win_rate)
@@ -475,12 +513,84 @@ class PPOTrainer:
             self.metrics.snapshots.append(snap_info)
         return self.metrics
 
+    async def _run_warmup(self) -> None:
+        """Pre-train the value network from random Rust games."""
+        from tarok.adapters.ai.warmup import warmup_value_network
+
+        async def on_progress(info: dict):
+            for cb in self._metrics_callback:
+                # Reuse metrics structure to report warmup progress
+                self.metrics.episode = 0
+                self.metrics.avg_loss = info.get("chunk_loss", 0)
+                self.metrics.games_per_second = info.get("gen_speed", 0)
+                await cb(self.metrics)
+            await asyncio.sleep(0)
+
+        def sync_progress(info: dict):
+            # Schedule the async callback on the event loop
+            loop = asyncio.get_event_loop()
+            if loop.is_running():
+                asyncio.ensure_future(on_progress(info))
+
+        result = warmup_value_network(
+            network=self.shared_network,
+            num_games=self.warmup_games,
+            batch_size=2048,
+            epochs=3,
+            lr=1e-3,
+            chunk_size=10_000,
+            device=str(self.device),
+            include_oracle=self.shared_network.oracle_critic_enabled,
+            progress_callback=sync_progress,
+        )
+
+        # Save a warmup checkpoint
+        self._save_checkpoint(0, is_snapshot=True, custom_name="tarok_agent_warmup.pt")
+
     def _ppo_update(self, experiences: list[Experience]) -> dict[str, float]:
-        """Perform PPO update on collected experiences, grouped by decision type."""
+        """Perform PPO update on collected experiences, grouped by decision type.
+
+        Uses Generalized Advantage Estimation (GAE) computed per-game in
+        temporal order *before* grouping by decision type.
+        """
         if not experiences:
             return {"policy_loss": 0, "value_loss": 0, "entropy": 0, "total_loss": 0}
 
-        # Group experiences by decision type for correct head routing
+        # --- 1. Compute GAE per-game in temporal order ---
+        # Group experiences by game_id, preserving step order
+        from collections import defaultdict as _dd
+        games: dict[int, list[Experience]] = _dd(list)
+        for exp in experiences:
+            games[exp.game_id].append(exp)
+
+        gae_advantages: dict[int, float] = {}  # id(exp) -> advantage
+        gae_returns: dict[int, float] = {}     # id(exp) -> return
+
+        for game_exps in games.values():
+            # Sort by temporal step within the game
+            game_exps.sort(key=lambda e: e.step_in_game)
+            n = len(game_exps)
+
+            # Compute GAE backwards through the game
+            advantages = [0.0] * n
+            returns = [0.0] * n
+            last_gae = 0.0
+            for t in reversed(range(n)):
+                exp = game_exps[t]
+                if t == n - 1:
+                    next_value = 0.0  # terminal
+                else:
+                    next_value = game_exps[t + 1].value.item()
+                delta = exp.reward + self.gamma * next_value - exp.value.item()
+                last_gae = delta + self.gamma * self.gae_lambda * last_gae
+                advantages[t] = last_gae
+                returns[t] = last_gae + exp.value.item()
+
+            for t, exp in enumerate(game_exps):
+                gae_advantages[id(exp)] = advantages[t]
+                gae_returns[id(exp)] = returns[t]
+
+        # --- 2. Group by decision type for correct head routing ---
         grouped: dict[DecisionType, list[Experience]] = defaultdict(list)
         for exp in experiences:
             grouped[exp.decision_type].append(exp)
@@ -499,8 +609,6 @@ class PPOTrainer:
             states = torch.stack([e.state for e in dt_exps]).to(self.device)
             actions = torch.tensor([e.action for e in dt_exps], dtype=torch.long).to(self.device)
             old_log_probs = torch.stack([e.log_prob for e in dt_exps]).to(self.device)
-            rewards = torch.tensor([e.reward for e in dt_exps], dtype=torch.float32).to(self.device)
-            old_values = torch.stack([e.value for e in dt_exps]).to(self.device)
 
             # Oracle states for critic (if PTIE is active)
             has_oracle = dt_exps[0].oracle_state is not None
@@ -509,12 +617,17 @@ class PPOTrainer:
                 if has_oracle else None
             )
 
-            # Advantages
-            advantages = rewards - old_values.detach()
+            # Use pre-computed GAE advantages and returns
+            advantages = torch.tensor(
+                [gae_advantages[id(e)] for e in dt_exps], dtype=torch.float32
+            ).to(self.device)
+            returns = torch.tensor(
+                [gae_returns[id(e)] for e in dt_exps], dtype=torch.float32
+            ).to(self.device)
+
+            # Normalise advantages
             if advantages.numel() > 1:
                 advantages = (advantages - advantages.mean()) / (advantages.std() + 1e-8)
-
-            returns = rewards
 
             # Legal masks (all-ones placeholder — actions were legal at play time)
             legal_masks = torch.ones(len(dt_exps), action_size, dtype=torch.float32).to(self.device)

@@ -5,10 +5,10 @@ Feature: Scoring
     Then contract "three" should have base value 10
     And contract "two" should have base value 20
     And contract "one" should have base value 30
-    And contract "solo_three" should have base value 20
-    And contract "solo_two" should have base value 30
-    And contract "solo_one" should have base value 40
-    And contract "solo" should have base value 50
+    And contract "solo_three" should have base value 40
+    And contract "solo_two" should have base value 50
+    And contract "solo_one" should have base value 60
+    And contract "solo" should have base value 80
 
   Scenario: Winning by 1 point adds 1 to the base
     Given the declarer scored 36 card points playing "three"
@@ -18,9 +18,9 @@ Feature: Scoring
     Given the declarer scored 32 card points playing "three"
     Then the game score should be -13
 
-  Scenario: Scores are zero-sum in 2v2
+  Scenario: Only declarer team scores in 2v2
     Given a completed game with 4 random players
-    Then the sum of all scores should be 0
+    Then the opponents should have score 0
 
   Scenario: Silent trula bonus is 10
     Given the declarer team collected trula silently
@@ -61,10 +61,10 @@ Feature: Scoring
     Given the declarer scored 36 card points playing "three"
     Then the declarer and partner should have the same score
 
-  Scenario: 2v2 opponents receive identical scores
+  Scenario: 2v2 opponents receive zero scores
     Given the declarer scored 36 card points playing "three"
     Then both opponents should have the same score
 
-  Scenario: 2v2 scores are symmetric
+  Scenario: 2v2 opponents score zero
     Given the declarer scored 36 card points playing "three"
     Then the declarer score should equal the negated opponent score

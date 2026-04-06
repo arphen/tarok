@@ -49,6 +49,8 @@ class Experience:
     reward: float = 0.0
     done: bool = False
     oracle_state: torch.Tensor | None = None
+    game_id: int = 0          # which game this experience belongs to
+    step_in_game: int = 0     # temporal position within game
 
 
 class RLAgent:
@@ -79,6 +81,8 @@ class RLAgent:
         # Experience buffer for current game
         self.experiences: list[Experience] = []
         self._training = True
+        self._game_id = 0
+        self._step_counter = 0
 
     @property
     def name(self) -> str:
@@ -119,6 +123,21 @@ class RLAgent:
     # Generic decision helper
     # ------------------------------------------------------------------
 
+    def _decide_from_tensors(
+        self,
+        state_tensor: torch.Tensor,
+        legal_mask: torch.Tensor,
+        decision_type: DecisionType,
+        oracle_tensor: torch.Tensor | None = None,
+    ) -> int:
+        """Same as _decide but with pre-encoded tensors (for Rust engine)."""
+        state_tensor = state_tensor.to(self.device)
+        mask = legal_mask.to(self.device)
+        if oracle_tensor is not None:
+            oracle_tensor = oracle_tensor.to(self.device)
+
+        return self._decide_core(state_tensor, mask, decision_type, oracle_tensor, is_defender=False)
+
     def _decide(
         self,
         state: GameState,
@@ -135,6 +154,23 @@ class RLAgent:
         if self._training and self.network.oracle_critic_enabled:
             oracle_tensor = encode_oracle_state(state, player_idx, decision_type).to(self.device)
 
+        is_defender = (
+            state.declarer is not None
+            and state.declarer != player_idx
+            and not (state.partner is not None and state.partner == player_idx)
+        )
+
+        return self._decide_core(state_tensor, mask, decision_type, oracle_tensor, is_defender=is_defender)
+
+    def _decide_core(
+        self,
+        state_tensor: torch.Tensor,
+        mask: torch.Tensor,
+        decision_type: DecisionType,
+        oracle_tensor: torch.Tensor | None,
+        is_defender: bool = False,
+    ) -> int:
+        """Core decision logic shared by _decide and _decide_from_tensors."""
         # Epsilon-greedy exploration during training
         if self._training and self._rng.random() < self.explore_rate:
             legal_indices = mask.nonzero(as_tuple=True)[0].tolist()
@@ -151,15 +187,11 @@ class RLAgent:
                 value=value.squeeze(),
                 decision_type=decision_type,
                 oracle_state=oracle_tensor,
+                game_id=self._game_id,
+                step_in_game=self._step_counter,
             ))
+            self._step_counter += 1
             return action_idx
-
-        # Determine if agent is defending (for behavioral bias)
-        is_defender = (
-            state.declarer is not None
-            and state.declarer != player_idx
-            and not (state.partner is not None and state.partner == player_idx)
-        )
 
         if self.profile is not None:
             # Behavioral profile path: get raw logits, apply bias + temperature
@@ -198,7 +230,10 @@ class RLAgent:
                 value=value.detach() if isinstance(value, torch.Tensor) else torch.tensor(value),
                 decision_type=decision_type,
                 oracle_state=oracle_tensor.detach() if oracle_tensor is not None else None,
+                game_id=self._game_id,
+                step_in_game=self._step_counter,
             ))
+            self._step_counter += 1
 
         return action_idx
 
@@ -284,10 +319,13 @@ class RLAgent:
     # ------------------------------------------------------------------
 
     def finalize_game(self, reward: float) -> None:
-        """Set the reward for all experiences in this game."""
-        for exp in self.experiences:
-            exp.reward = reward
-            exp.done = True
+        """Set the terminal reward on only the last experience; others get 0."""
+        if self.experiences:
+            # Only the final step gets the game reward; intermediates stay 0
+            self.experiences[-1].reward = reward
+            self.experiences[-1].done = True
+        self._game_id += 1
+        self._step_counter = 0
 
     def clear_experiences(self) -> None:
         self.experiences.clear()

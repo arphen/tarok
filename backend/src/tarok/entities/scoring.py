@@ -77,18 +77,19 @@ def _contract_multiplier(contract: Contract) -> int:
     """Base game value per the official table (docs/basics.md).
 
     tri=10, dva=20, ena=30
-    solo tri=20, solo dva=30, solo ena=40, solo brez talona=50
+    solo tri=40, solo dva=50, solo ena=60, solo brez talona=80
     """
     return {
         Contract.KLOP: 0,
         Contract.THREE: 10,
         Contract.TWO: 20,
         Contract.ONE: 30,
-        Contract.SOLO_THREE: 20,
-        Contract.SOLO_TWO: 30,
-        Contract.SOLO_ONE: 40,
-        Contract.SOLO: 50,
+        Contract.SOLO_THREE: 40,
+        Contract.SOLO_TWO: 50,
+        Contract.SOLO_ONE: 60,
+        Contract.SOLO: 80,
         Contract.BERAC: 70,
+        Contract.BARVNI_VALAT: 125,
     }[contract]
 
 
@@ -142,15 +143,15 @@ def _score_berac(state: GameState) -> dict[int, int]:
     declarer_trick_count = sum(1 for t in state.tricks if t.winner() == declarer)
 
     if declarer_trick_count == 0:
-        # Won: declarer gets +base per opponent
+        # Won: only declarer scores
         return {
-            p: base * 3 if p == declarer else -base
+            p: base if p == declarer else 0
             for p in range(state.num_players)
         }
     else:
-        # Lost: declarer gets -base per opponent
+        # Lost: only declarer scores (negative)
         return {
-            p: -base * 3 if p == declarer else base
+            p: -base if p == declarer else 0
             for p in range(state.num_players)
         }
 
@@ -159,6 +160,30 @@ def _get_kontra(state: GameState, key: str) -> int:
     """Return the kontra multiplier for a given target ('game' or announcement name)."""
     level = state.kontra_levels.get(key, KontraLevel.NONE)
     return level.value
+
+
+def _score_barvni_valat(state: GameState) -> dict[int, int]:
+    """Score a barvni valat (colour valat) game.
+
+    Always solo (1v3). Declarer must take all 12 tricks.
+    Suit cards beat taroks in this mode. Base value = 125.
+    Win = +125 per opponent, Lose = -125 per opponent.
+    Kontra/Re/Sub applies to the base.
+    """
+    assert state.declarer is not None
+    declarer = state.declarer
+    base = _contract_multiplier(Contract.BARVNI_VALAT)  # 125
+    declarer_won_all = all(t.winner() == declarer for t in state.tricks)
+
+    if not declarer_won_all:
+        base = -base
+
+    base *= _get_kontra(state, "game")
+
+    return {
+        p: base if p == declarer else 0
+        for p in range(state.num_players)
+    }
 
 
 def score_game(state: GameState) -> dict[int, int]:
@@ -170,6 +195,9 @@ def score_game(state: GameState) -> dict[int, int]:
 
     if state.contract.is_berac:
         return _score_berac(state)
+
+    if state.contract.is_barvni_valat:
+        return _score_barvni_valat(state)
 
     assert state.declarer is not None
 
@@ -288,25 +316,14 @@ def score_game(state: GameState) -> dict[int, int]:
 
     total_declarer = base_score + bonus
 
-    # Determine if it's effectively solo (solo contract OR king in talon)
-    effectively_solo = state.contract.is_solo or state.partner is None
-
-    # Distribute scores
+    # Distribute scores — only declarer team scores, opponents get 0
     scores: dict[int, int] = {}
     for p in range(state.num_players):
         team = state.get_team(p)
-        if effectively_solo:
-            # Solo / king-in-talon: declarer gets/loses 3× against each opponent
-            if p == state.declarer:
-                scores[p] = total_declarer * 3
-            else:
-                scores[p] = -total_declarer
+        if team == Team.DECLARER_TEAM:
+            scores[p] = total_declarer
         else:
-            # 2v2: each player on a team gets the same
-            if team == Team.DECLARER_TEAM:
-                scores[p] = total_declarer
-            else:
-                scores[p] = -total_declarer
+            scores[p] = 0
 
     return scores
 
@@ -352,6 +369,26 @@ def score_game_breakdown(state: GameState) -> dict:
                 "lines": [
                     {"label": "Base value", "value": 70},
                     {"label": "Result", "detail": "Won (0 tricks)" if won else f"Lost ({declarer_tricks} tricks)"},
+                ],
+            },
+            "trick_summary": trick_summary,
+        }
+
+    if state.contract.is_barvni_valat:
+        scores = _score_barvni_valat(state)
+        trick_summary = _trick_summary(state)
+        declarer_tricks = sum(1 for t in state.tricks if t.winner() == state.declarer)
+        won = declarer_tricks == 12
+        return {
+            "scores": scores,
+            "breakdown": {
+                "contract": "Barvni Valat",
+                "mode": "solo",
+                "declarer_won": won,
+                "explanation": f"Colour valat: suits beat taroks. Declarer took {declarer_tricks}/12 tricks.",
+                "lines": [
+                    {"label": "Base value", "value": 125},
+                    {"label": "Result", "detail": "Won (all 12 tricks)" if won else f"Lost ({declarer_tricks} tricks)"},
                 ],
             },
             "trick_summary": trick_summary,
@@ -486,16 +523,10 @@ def score_game_breakdown(state: GameState) -> dict:
     scores: dict[int, int] = {}
     for p in range(state.num_players):
         team = state.get_team(p)
-        if effectively_solo:
-            if p == state.declarer:
-                scores[p] = total_declarer * 3
-            else:
-                scores[p] = -total_declarer
+        if team == Team.DECLARER_TEAM:
+            scores[p] = total_declarer
         else:
-            if team == Team.DECLARER_TEAM:
-                scores[p] = total_declarer
-            else:
-                scores[p] = -total_declarer
+            scores[p] = 0
 
     # Build breakdown lines
     lines: list[dict] = [
@@ -511,9 +542,9 @@ def score_game_breakdown(state: GameState) -> dict:
         lines.append({"label": "Total bonus", "value": total_bonus})
     lines.append({"label": "Total (declarer team)", "value": total_declarer})
     if effectively_solo:
-        lines.append({"label": "Scoring mode", "detail": f"Solo — declarer ×3, each opponent ×-1"})
+        lines.append({"label": "Scoring mode", "detail": f"Solo — only declarer scores {total_declarer:+d}"})
     else:
-        lines.append({"label": "Scoring mode", "detail": f"2v2 — each teammate gets {total_declarer:+d}, each opponent gets {-total_declarer:+d}"})
+        lines.append({"label": "Scoring mode", "detail": f"2v2 — each teammate gets {total_declarer:+d}, opponents get 0"})
 
     trick_summary = _trick_summary(state)
 
