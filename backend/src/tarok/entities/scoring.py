@@ -111,7 +111,7 @@ def _score_klop(state: GameState) -> dict[int, int]:
     Each player plays for themselves. Goal: avoid taking card points.
     - Player who captured > 35 card points: -70 (penalty for hoarding)
     - Player who took zero tricks: +70 (reward for clean play)
-    - Everyone else: 0
+    - Everyone else: minus the card points they captured
     """
     player_cards: dict[int, list[Card]] = {p: [] for p in range(state.num_players)}
     player_trick_count: dict[int, int] = {p: 0 for p in range(state.num_players)}
@@ -127,6 +127,8 @@ def _score_klop(state: GameState) -> dict[int, int]:
             scores[p] = -TOTAL_GAME_POINTS  # -70
         elif player_trick_count[p] == 0:
             scores[p] = TOTAL_GAME_POINTS  # +70
+        else:
+            scores[p] = -card_points
     return scores
 
 
@@ -324,7 +326,6 @@ def score_game(state: GameState) -> dict[int, int]:
             scores[p] = total_declarer
         else:
             scores[p] = 0
-
     return scores
 
 

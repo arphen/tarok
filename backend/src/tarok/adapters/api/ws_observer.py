@@ -130,7 +130,7 @@ class WebSocketObserver:
             "groups": [[_card_to_dict(c) for c in g] for g in groups],
         }, state)
 
-    async def on_talon_exchanged(self, state: GameState) -> None:
+    async def on_talon_exchanged(self, state: GameState, picked=None, discarded=None) -> None:
         await self._send("talon_exchanged", {}, state)
 
     async def on_card_played(self, player: int, card: Card, state: GameState) -> None:

@@ -30,6 +30,7 @@ const INITIAL_STATE: SpectatorState = {
   roles: {},
   announcements: {},
   kontra_levels: {},
+  put_down: [],
   score_breakdown: null,
   trick_summary: null,
 };
@@ -67,8 +68,16 @@ function formatSpectatorEvent(
     }
     case 'talon_revealed':
       return { id: ts, message: 'Talon revealed.', category: 'talon', timestamp: ts };
-    case 'talon_exchanged':
-      return { id: ts, message: 'Talon exchange complete.', category: 'talon', timestamp: ts };
+    case 'talon_exchanged': {
+      const picked = data.picked as { label?: string }[] | undefined;
+      const discarded = data.discarded as { label?: string }[] | undefined;
+      const pickedStr = picked?.map(c => c.label ?? '?').join(', ') ?? '';
+      const discardedStr = discarded?.map(c => c.label ?? '?').join(', ') ?? '';
+      let msg = 'Talon exchange complete.';
+      if (pickedStr) msg += ` Picked: ${pickedStr}.`;
+      if (discardedStr) msg += ` Put down: ${discardedStr}.`;
+      return { id: ts, message: msg, category: 'talon', timestamp: ts };
+    }
     case 'card_played': {
       const p = data.player as number;
       const card = data.card as { label?: string };

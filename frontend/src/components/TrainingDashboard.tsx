@@ -223,6 +223,7 @@ export default function TrainingDashboard({ onBack }: Props) {
             <div className="td-progress-fill" style={{ width: `${sessionPct}%` }} />
           </div>
           <span className="td-progress-text">
+            {metrics.run_id && <span className="td-run-id" title="Training run ID">#{metrics.run_id} · </span>}
             Session {metrics.session}/{metrics.total_sessions} · {metrics.episode.toLocaleString()} games · {metrics.games_per_second.toFixed(1)} g/s
           </span>
         </div>

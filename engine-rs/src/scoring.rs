@@ -134,6 +134,8 @@ fn score_klop(state: &GameState) -> [i32; NUM_PLAYERS] {
             scores[p] = -TOTAL_GAME_POINTS;
         } else if player_tricks_won[p] == 0 {
             scores[p] = TOTAL_GAME_POINTS;
+        } else {
+            scores[p] = -player_points[p];
         }
     }
     scores

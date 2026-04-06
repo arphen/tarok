@@ -275,6 +275,37 @@ export default function SpectatorView({ onBack, checkpoints }: SpectatorViewProp
                           </div>
                         ))}
                       </div>
+                      {state.put_down.length > 0 && (
+                        <div className="talon-put-down">
+                          <h4>Put Down</h4>
+                          <div className="put-down-cards">
+                            {state.put_down.map((card, j) => (
+                              <Card key={j} card={card} small />
+                            ))}
+                          </div>
+                        </div>
+                      )}
+                    </div>
+                  )}
+
+                  {/* Show talon and put-down info during announcements/trick play */}
+                  {(state.phase === 'announcements' || state.phase === 'trick_play') && state.put_down.length > 0 && state.talon_groups && (
+                    <div className="spectator-talon-info">
+                      <div className="talon-groups talon-groups-mini">
+                        {state.talon_groups.map((group, i) => (
+                          <div key={i} className="talon-group">
+                            {group.map((card, j) => (
+                              <Card key={j} card={card} small />
+                            ))}
+                          </div>
+                        ))}
+                      </div>
+                      <div className="talon-put-down">
+                        <span className="put-down-label">Put down:</span>
+                        {state.put_down.map((card, j) => (
+                          <Card key={j} card={card} small />
+                        ))}
+                      </div>
                     </div>
                   )}
 

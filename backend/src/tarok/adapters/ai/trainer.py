@@ -9,6 +9,7 @@ strategic bidding: when to pass (berac/klop), when to bid conservatively
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import json
 import random
 import time
@@ -103,6 +104,7 @@ _TRACKED_CONTRACTS = ["klop", "three", "two", "one", "solo_three", "solo_two", "
 
 @dataclass
 class TrainingMetrics:
+    run_id: str = ""
     episode: int = 0
     total_episodes: int = 0
     session: int = 0
@@ -140,6 +142,7 @@ class TrainingMetrics:
 
     def to_dict(self) -> dict:
         return {
+            "run_id": self.run_id,
             "episode": self.episode,
             "total_episodes": self.total_episodes,
             "session": self.session,
@@ -312,13 +315,18 @@ class PPOTrainer:
         self.metrics.total_episodes = total_games
         self.metrics.total_sessions = num_sessions
 
+        # Generate a unique run ID (short hash from timestamp + config)
+        run_seed = f"{time.time()}-{num_sessions}-{self.games_per_session}-{id(self)}"
+        self.metrics.run_id = hashlib.sha256(run_seed.encode()).hexdigest()[:8]
+        print(f"[Trainer] Run #{self.metrics.run_id} — {num_sessions} sessions × {self.games_per_session} games")
+
         recent_rewards: list[float] = []
         recent_wins: list[float] = []
         recent_bids: list[float] = []
         recent_klops: list[float] = []
         recent_solos: list[float] = []
-        # Per-game records for rolling contract stats: (contract_name, declarer_p0, raw_score)
-        recent_games: list[tuple[str, bool, int]] = []
+        # Per-game records for rolling contract stats: (contract_name, declarer_p0, raw_score, won)
+        recent_games: list[tuple[str, bool, int, bool]] = []
         start_time = time.time()
         game_count = 0
         # Running sums for O(1) rolling-window metrics
@@ -413,13 +421,23 @@ class PPOTrainer:
                 game_count += 1
                 session_scores.append(raw_score)
                 r = raw_score / 100.0
-                w = 1.0 if raw_score > 0 else 0.0
+                # Win detection for non-zero-sum scoring:
+                #  - Declarer: positive score means we made our contract
+                #  - Defender: the declarer's score is negative means they failed
+                #  - Klop: positive score (+70 for zero tricks taken)
+                if is_klop:
+                    w = 1.0 if raw_score > 0 else 0.0
+                elif declarer_p0:
+                    w = 1.0 if raw_score > 0 else 0.0
+                else:
+                    declarer_score = scores.get(state.declarer, 0) if state.declarer is not None else 0
+                    w = 1.0 if declarer_score < 0 else 0.0
                 b = 1.0 if agent0_bids else 0.0
                 k = 1.0 if is_klop else 0.0
                 s = 1.0 if is_solo else 0.0
                 recent_rewards.append(r); recent_wins.append(w)
                 recent_bids.append(b); recent_klops.append(k); recent_solos.append(s)
-                recent_games.append((contract_name, declarer_p0, raw_score))
+                recent_games.append((contract_name, declarer_p0, raw_score, w > 0))
                 _rsum += r; _wsum += w; _bsum += b; _ksum += k; _ssum += s
 
                 # Per-contract tracking (split by role) — add current game
@@ -432,7 +450,7 @@ class PPOTrainer:
                         cs.decl_total_score += raw_score
                     else:
                         cs.def_played += 1
-                        if raw_score > 0:
+                        if w > 0:
                             cs.def_won += 1
                         cs.def_total_score += raw_score
 
@@ -445,7 +463,7 @@ class PPOTrainer:
                     _ksum -= recent_klops[-window - 1]
                     _ssum -= recent_solos[-window - 1]
                     # Also evict from rolling contract stats
-                    old_cn, old_decl, old_score = recent_games[-window - 1]
+                    old_cn, old_decl, old_score, old_won = recent_games[-window - 1]
                     if old_cn in self.metrics.contract_stats:
                         old_cs = self.metrics.contract_stats[old_cn]
                         if old_decl:
@@ -455,7 +473,7 @@ class PPOTrainer:
                             old_cs.decl_total_score -= old_score
                         else:
                             old_cs.def_played -= 1
-                            if old_score > 0:
+                            if old_won:
                                 old_cs.def_won -= 1
                             old_cs.def_total_score -= old_score
 
@@ -706,6 +724,7 @@ class PPOTrainer:
 
     def _save_checkpoint(self, episode: int, is_snapshot: bool = False, custom_name: str | None = None) -> dict:
         data = {
+            "run_id": self.metrics.run_id,
             "episode": episode,
             "session": self.metrics.session,
             "model_state_dict": self.shared_network.state_dict(),
@@ -726,6 +745,7 @@ class PPOTrainer:
 
         info = {
             "filename": path.name,
+            "run_id": self.metrics.run_id,
             "episode": episode,
             "session": self.metrics.session,
             "win_rate": round(self.metrics.win_rate, 4),

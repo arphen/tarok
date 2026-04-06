@@ -74,6 +74,7 @@ def _full_state(state: GameState, player_names: list[str]) -> dict:
             (k.value if hasattr(k, "value") else str(k)): (v.value if hasattr(v, "value") else str(v))
             for k, v in (state.kontra_levels or {}).items()
         },
+        "put_down": [_card_to_dict(c) for c in state.put_down] if state.put_down else [],
     }
 
 
@@ -139,8 +140,13 @@ class SpectatorObserver:
             "groups": [[_card_to_dict(c) for c in g] for g in groups],
         }, state)
 
-    async def on_talon_exchanged(self, state: GameState) -> None:
-        await self._broadcast("talon_exchanged", {}, state)
+    async def on_talon_exchanged(self, state: GameState, picked: list | None = None, discarded: list | None = None) -> None:
+        data: dict = {}
+        if picked:
+            data["picked"] = [_card_to_dict(c) for c in picked]
+        if discarded:
+            data["discarded"] = [_card_to_dict(c) for c in discarded]
+        await self._broadcast("talon_exchanged", data, state)
 
     async def on_card_played(self, player: int, card: Card, state: GameState) -> None:
         await self._broadcast("card_played", {

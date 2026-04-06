@@ -104,7 +104,8 @@ async def start_training(req: TrainingRequest):
             logging.getLogger(__name__).exception("Training task failed")
 
     _training_task = asyncio.create_task(run_training())
-    return {"status": "started", "num_sessions": req.num_sessions, "games_per_session": req.games_per_session}
+    return {"status": "started", "num_sessions": req.num_sessions, "games_per_session": req.games_per_session,
+            "message": "Run ID will appear in metrics once training begins"}
 
 
 @app.post("/api/training/stop")

@@ -297,10 +297,16 @@ class RLAgent:
         """Choose a single announcement action (0=pass, 1-4=announce, 5-9=kontra).
 
         Called repeatedly by the game loop until the player passes.
+        During training, always pass — announcements add enormous variance
+        that destabilises early learning.  The model can learn to announce
+        once it has a solid base game.
         """
         mask = encode_announce_mask(state, player_idx)
         # If only pass is legal, just return pass without going through the network
         if mask.sum().item() <= 1.0:
+            return ANNOUNCE_PASS
+        # During training: always pass on announcements
+        if self._training:
             return ANNOUNCE_PASS
         return self._decide(state, player_idx, mask, DecisionType.ANNOUNCE)
 

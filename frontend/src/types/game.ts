@@ -221,6 +221,7 @@ export interface SpectatorState {
   roles: Record<string, string>;
   announcements: Record<string, string[]>;
   kontra_levels: Record<string, string>;
+  put_down: CardData[];
   score_breakdown: ScoreBreakdown | null;
   trick_summary: TrickSummaryEntry[] | null;
 }

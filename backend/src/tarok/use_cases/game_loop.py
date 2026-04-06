@@ -28,7 +28,7 @@ class NullObserver:
     async def on_contract_won(self, player, contract, state): pass
     async def on_king_called(self, player, king, state): pass
     async def on_talon_revealed(self, groups, state): pass
-    async def on_talon_exchanged(self, state): pass
+    async def on_talon_exchanged(self, state, picked=None, discarded=None): pass
     async def on_card_played(self, player, card, state): pass
     async def on_rule_verified(self, player, rule, state): pass
     async def on_trick_won(self, trick, winner, state): pass
@@ -106,13 +106,14 @@ class GameLoop:
             group_idx = await self._players[state.declarer].choose_talon_group(
                 state, state.declarer, groups
             )
+            picked = list(state.talon_revealed[group_idx])  # copy before mutation
             state = pick_talon_group(state, group_idx)
 
             discards = await self._players[state.declarer].choose_discard(
                 state, state.declarer, state.contract.talon_cards
             )
             state = discard_cards(state, discards)
-            await self._observer.on_talon_exchanged(state)
+            await self._observer.on_talon_exchanged(state, picked=picked, discarded=discards)
         elif state.phase == Phase.TALON_EXCHANGE:
             state.phase = Phase.ANNOUNCEMENTS
 
@@ -163,7 +164,7 @@ class GameLoop:
         from tarok.entities.card import CardType
         while state.phase == Phase.TRICK_PLAY:
             state = start_trick(state)
-            for _ in range(state.num_players):
+            for card_num in range(state.num_players):
                 player_idx = state.current_player
                 legal = state.legal_plays(player_idx)
                 card = await self._players[player_idx].choose_card(
@@ -174,8 +175,6 @@ class GameLoop:
                 if state.current_trick.cards:
                     led_card = state.current_trick.cards[0][1]
                     if led_card.card_type == CardType.SUIT and card.card_type == CardType.TAROK:
-                        # Player led with a suit, this player plays a tarok
-                        # This implies they have no cards of the led suit
                         led_suit = led_card.suit
                         await self._observer.on_rule_verified(
                             player_idx, 
@@ -183,8 +182,20 @@ class GameLoop:
                             state
                         )
 
-                state = play_card(state, player_idx, card)
-                await self._observer.on_card_played(player_idx, card, state)
+                is_last_card = card_num == state.num_players - 1
+                if is_last_card:
+                    # Before resolving the trick, add the card to the trick
+                    # so we can broadcast the full 4-card trick
+                    state.hands[player_idx].remove(card)
+                    state.current_trick.cards.append((player_idx, card))
+                    # Broadcast with all 4 cards visible on the table
+                    await self._observer.on_card_played(player_idx, card, state)
+                    # Now resolve the trick (moves to state.tricks, clears current_trick)
+                    from tarok.use_cases.play_trick import _resolve_trick
+                    _resolve_trick(state)
+                else:
+                    state = play_card(state, player_idx, card)
+                    await self._observer.on_card_played(player_idx, card, state)
 
             if state.tricks:
                 last_trick = state.tricks[-1]
