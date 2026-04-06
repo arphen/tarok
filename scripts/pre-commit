@@ -1,0 +1,63 @@
+#!/usr/bin/env bash
+# Pre-commit hook: runs backend + frontend tests and guards coverage.
+set -euo pipefail
+
+ROOT="$(git rev-parse --show-toplevel)"
+BASELINE_FILE="$ROOT/.coverage-baseline"
+
+echo "──────────────────────────────────────"
+echo "  Pre-commit checks"
+echo "──────────────────────────────────────"
+
+# ── 1. Frontend type-check ───────────────────
+echo ""
+echo "▶ Frontend type-check…"
+cd "$ROOT/frontend"
+npx tsc -b --noEmit
+echo "  ✔ Frontend OK"
+
+# ── 2. Backend tests with coverage ───────────
+echo ""
+echo "▶ Backend tests + coverage…"
+cd "$ROOT/backend"
+PYTHONPATH=src PYTHONHASHSEED=0 uv run --default-index https://pypi.org/simple \
+  python -m pytest tests/ -q \
+    -p no:randomly --hypothesis-seed=0 \
+    --cov=tarok \
+    --cov-report=term-missing:skip-covered \
+    --cov-report=json:coverage.json
+
+NEW_PCT=$(python3 -c "import json; print(round(json.load(open('coverage.json'))['totals']['percent_covered'], 2))")
+echo "  Current coverage: ${NEW_PCT}%"
+
+# ── 3. Coverage regression check ────────────
+if [ -f "$BASELINE_FILE" ]; then
+  OLD_PCT=$(cat "$BASELINE_FILE")
+  echo "  Baseline coverage: ${OLD_PCT}%"
+  python3 -c "
+import sys
+new, old = float('${NEW_PCT}'), float('${OLD_PCT}')
+TOLERANCE = 0.5  # allow minor run-to-run fluctuation (Hypothesis, etc.)
+if new < old - TOLERANCE:
+    print(f'  ❌  Coverage dropped from {old}% to {new}% (>{TOLERANCE}% regression). Commit rejected.')
+    print('  Tip: run \"make update-coverage-baseline\" after intentionally removing dead code.')
+    sys.exit(1)
+print('  ✅  Coverage did not decrease.')
+# Auto-update baseline if coverage improved
+if new > old:
+    with open('$BASELINE_FILE', 'w') as f:
+        f.write(str(new))
+    print(f'  📈  Baseline auto-updated to {new}%')
+"
+else
+  echo "  No baseline found — saving ${NEW_PCT}% as initial baseline."
+  echo "${NEW_PCT}" > "$BASELINE_FILE"
+fi
+
+# Clean up temp coverage file
+rm -f "$ROOT/backend/coverage.json"
+
+echo ""
+echo "──────────────────────────────────────"
+echo "  All checks passed ✅"
+echo "──────────────────────────────────────"

@@ -10,11 +10,12 @@ import { useGame } from './hooks/useGame';
 import type { CardData } from './types/game';
 import './App.css';
 
-type Page = 'home' | 'training' | 'play' | 'camera' | 'spectate' | 'evolve' | 'breed';
+type Page = 'home' | 'training' | 'play' | 'lobby' | 'camera' | 'spectate' | 'evolve' | 'breed';
 
 export default function App() {
   const [page, setPage] = useState<Page>('home');
-  const [checkpoints, setCheckpoints] = useState<{ filename: string; episode: number; win_rate: number }[]>([]);
+  const [checkpoints, setCheckpoints] = useState<{ filename: string; episode: number; win_rate: number; session?: number }[]>([]);
+  const [opponents, setOpponents] = useState<[string, string, string]>(['latest', 'latest', 'latest']);
   const game = useGame();
 
   useEffect(() => {
@@ -25,7 +26,7 @@ export default function App() {
   }, []);
 
   const handleStartGame = async () => {
-    await game.startNewGame();
+    await game.startNewGame(opponents);
     setPage('play');
   };
 
@@ -49,11 +50,78 @@ export default function App() {
     return <SpectatorView onBack={() => setPage('home')} checkpoints={checkpoints} />;
   }
 
+  if (page === 'lobby') {
+    const setOpponent = (idx: number, value: string) => {
+      setOpponents(prev => {
+        const next = [...prev] as [string, string, string];
+        next[idx] = value;
+        return next;
+      });
+    };
+
+    const ckptLabel = (filename: string) => {
+      const cp = checkpoints.find(c => c.filename === filename);
+      if (!cp) return filename;
+      const parts: string[] = [];
+      if (cp.session) parts.push(`S${cp.session}`);
+      if (cp.episode) parts.push(`Ep ${cp.episode}`);
+      if (cp.win_rate) parts.push(`${(cp.win_rate * 100).toFixed(0)}% win`);
+      return parts.length ? `${filename} (${parts.join(', ')})` : filename;
+    };
+
+    return (
+      <div className="app">
+        <div className="lobby-page">
+          <button className="btn-secondary btn-sm lobby-back" onClick={() => setPage('home')}>← Back</button>
+          <h2 className="lobby-title">Game Setup</h2>
+          <p className="lobby-subtitle">Choose a model for each AI opponent</p>
+
+          <div className="lobby-opponents">
+            {[0, 1, 2].map(i => (
+              <div key={i} className="lobby-opponent">
+                <label className="lobby-label">AI-{i + 1}</label>
+                <select
+                  className="lobby-select"
+                  value={opponents[i]}
+                  onChange={e => setOpponent(i, e.target.value)}
+                >
+                  <option value="latest">Latest trained model</option>
+                  <option value="random">Random (untrained)</option>
+                  {checkpoints.map(cp => (
+                    <option key={cp.filename} value={cp.filename}>
+                      {ckptLabel(cp.filename)}
+                    </option>
+                  ))}
+                </select>
+              </div>
+            ))}
+          </div>
+
+          <button className="btn-gold btn-large lobby-start" onClick={handleStartGame}>
+            <span className="btn-icon">🃏</span>
+            <span><strong>Start Game</strong></span>
+          </button>
+        </div>
+      </div>
+    );
+  }
+
   if (page === 'play') {
     return (
       <div className="app">
         <div className="app-bar">
           <button className="btn-secondary btn-sm" onClick={() => setPage('home')}>← Menu</button>
+          <label className="speed-control">
+            AI Speed
+            <input
+              type="range"
+              min="0"
+              max="3"
+              step="0.25"
+              defaultValue="1"
+              onChange={(e) => game.setDelay(Number(e.target.value))}
+            />
+          </label>
           <span className="connection-status">
             {game.connected ? '🟢 Connected' : '🔴 Disconnected'}
           </span>
@@ -99,11 +167,11 @@ export default function App() {
             </span>
           </button>
 
-          <button className="btn-primary btn-large" onClick={handleStartGame}>
+          <button className="btn-primary btn-large" onClick={() => setPage('lobby')}>
             <span className="btn-icon">🃏</span>
             <span>
               <strong>Play vs AI</strong>
-              <small>Challenge the trained agents</small>
+              <small>Choose opponents and play</small>
             </span>
           </button>
 

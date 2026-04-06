@@ -21,6 +21,7 @@ dev = [
     "pytest>=8",
     "pytest-asyncio>=0.24",
     "pytest-bdd>=8",
+    "pytest-cov>=6.0",
     "hypothesis>=6.100",
     "ruff>=0.7",
 ]
@@ -42,3 +43,8 @@ line-length = 100
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 asyncio_mode = "auto"
+
+[dependency-groups]
+dev = [
+    "httpx>=0.28.1",
+]

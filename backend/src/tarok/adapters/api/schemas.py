@@ -85,6 +85,11 @@ class BreedRequest(BaseModel):
     stockskis_strength: float = 1.0
 
 
+class NewGameRequest(BaseModel):
+    """Request to create a new human-vs-AI game with per-opponent model selection."""
+    opponents: list[str] = ["latest", "latest", "latest"]  # 3 entries: filename, "latest", or "random"
+
+
 class TrainingRequest(BaseModel):
     num_sessions: int = 100
     games_per_session: int = 100
@@ -94,7 +99,7 @@ class TrainingRequest(BaseModel):
     resume_from: str | None = None
     stockskis_ratio: float = 0.0
     stockskis_strength: float = 1.0
-    use_rust_engine: bool = True
+    use_rust_engine: bool = False
     warmup_games: int = 0
 
 

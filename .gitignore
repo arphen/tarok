@@ -33,6 +33,7 @@ wheels/
 htmlcov/
 .mypy_cache/
 .ruff_cache/
+backend/coverage.json
 
 # Node
 node_modules/

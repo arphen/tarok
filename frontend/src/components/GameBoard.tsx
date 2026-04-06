@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useState } from 'react';
 import type { GameState, CardData } from '../types/game';
 import { CONTRACT_NAMES } from '../types/game';
 import Hand from './Hand';
@@ -6,6 +6,23 @@ import TrickArea from './TrickArea';
 import BiddingPanel from './BiddingPanel';
 import Card from './Card';
 import './GameBoard.css';
+
+function cardKey(c: CardData): string {
+  return `${c.card_type}-${c.value}-${c.suit ?? 'none'}`;
+}
+
+const SOLO_CONTRACTS = new Set([-3, -2, -1, 0, -100, -101]);
+
+type TeamRole = 'declarer' | 'defender' | null;
+
+function getTeamRole(state: GameState, playerIdx: number): TeamRole {
+  if (state.contract === null || state.contract === -99) return null; // no contract or klop
+  if (state.declarer === null) return null;
+  const solo = SOLO_CONTRACTS.has(state.contract);
+  if (playerIdx === state.declarer) return 'declarer';
+  if (!solo && state.partner_revealed && state.partner === playerIdx) return 'declarer';
+  return 'defender';
+}
 
 interface GameBoardProps {
   state: GameState;
@@ -21,6 +38,27 @@ export default function GameBoard({
 }: GameBoardProps) {
   const isMyTurn = state.current_player === 0;
   const names = state.player_names.length > 0 ? state.player_names : ['You', 'AI-1', 'AI-2', 'AI-3'];
+  const [discardSelection, setDiscardSelection] = useState<CardData[]>([]);
+
+  const mustDiscard = state.must_discard;
+  const isSolo = state.contract !== null && SOLO_CONTRACTS.has(state.contract);
+  const teamOf = (idx: number) => getTeamRole(state, idx);
+
+  const toggleDiscard = (card: CardData) => {
+    setDiscardSelection(prev => {
+      const exists = prev.some(c => cardKey(c) === cardKey(card));
+      if (exists) return prev.filter(c => cardKey(c) !== cardKey(card));
+      if (prev.length >= mustDiscard) return prev;
+      return [...prev, card];
+    });
+  };
+
+  const submitDiscard = () => {
+    if (discardSelection.length === mustDiscard) {
+      onDiscard(discardSelection);
+      setDiscardSelection([]);
+    }
+  };
 
   return (
     <div className="game-board" data-testid="game-board" data-phase={state.phase}>      {/* Game info bar */}
@@ -57,12 +95,12 @@ export default function GameBoard({
       <div className="table">
         {/* Top player (P2) */}
         <div className="table-top">
-          <Hand cards={[]} faceDown cardCount={state.hand_sizes[2]} position="top" label={names[2]} />
+          <Hand cards={[]} faceDown cardCount={state.hand_sizes[2]} position="top" label={names[2]} teamRole={teamOf(2)} isSolo={isSolo} />
         </div>
 
         {/* Left player (P1) */}
         <div className="table-left">
-          <Hand cards={[]} faceDown cardCount={state.hand_sizes[1]} position="left" label={names[1]} />
+          <Hand cards={[]} faceDown cardCount={state.hand_sizes[1]} position="left" label={names[1]} teamRole={teamOf(1)} isSolo={isSolo} />
         </div>
 
         {/* Center — trick area */}
@@ -72,6 +110,8 @@ export default function GameBoard({
               trickCards={state.current_trick}
               playerNames={names}
               playerIndex={0}
+              getTeamRole={(idx) => teamOf(idx)}
+              isSolo={isSolo}
             />
           )}
 
@@ -80,16 +120,40 @@ export default function GameBoard({
             <BiddingPanel
               phase={state.phase}
               bids={state.bids}
-              legalBids={isMyTurn && state.phase === 'bidding' ? getLegalBidValues(state) : undefined}
+              legalBids={isMyTurn && state.phase === 'bidding' && state.legal_bids ? state.legal_bids : undefined}
               onBid={onBid}
               playerNames={names}
-              callableKings={isMyTurn && state.phase === 'king_calling' ? state.legal_plays : undefined}
+              callableKings={isMyTurn && state.phase === 'king_calling' && state.callable_kings ? state.callable_kings : undefined}
               onCallKing={onCallKing}
             />
           )}
 
-          {/* Talon selection */}
-          {state.phase === 'talon_exchange' && state.talon_groups && isMyTurn && (
+          {/* Talon selection / Discard */}
+          {state.phase === 'talon_exchange' && isMyTurn && mustDiscard > 0 && (
+            <div className="talon-selection">
+              <h3>Discard {mustDiscard} card{mustDiscard > 1 ? 's' : ''}</h3>
+              <p className="bidding-subtitle">Select cards from your hand to put down (no kings or taroks)</p>
+              <div className="discard-hand">
+                {state.hand.filter(c => c.card_type !== 'tarok' && !(c.card_type === 'suit' && c.value === 8)).map((card, j) => {
+                  const selected = discardSelection.some(c => cardKey(c) === cardKey(card));
+                  return (
+                    <div key={j} className={`discard-card ${selected ? 'discard-selected' : ''}`} onClick={() => toggleDiscard(card)}>
+                      <Card card={card} small highlighted={selected} />
+                    </div>
+                  );
+                })}
+              </div>
+              <button
+                className="btn-gold"
+                data-testid="discard-confirm"
+                disabled={discardSelection.length !== mustDiscard}
+                onClick={submitDiscard}
+              >
+                Confirm Discard ({discardSelection.length}/{mustDiscard})
+              </button>
+            </div>
+          )}
+          {state.phase === 'talon_exchange' && state.talon_groups && isMyTurn && mustDiscard === 0 && (
             <div className="talon-selection">
               <h3>Choose a talon group</h3>
               <div className="talon-groups">
@@ -109,12 +173,16 @@ export default function GameBoard({
             <div className="score-display" data-testid="score-display">
               <h3>Game Over!</h3>
               <div className="score-list">
-                {Object.entries(state.scores).map(([pid, score]) => (
-                  <div key={pid} className={`score-entry ${Number(score) > 0 ? 'score-positive' : 'score-negative'}`}>
+                {Object.entries(state.scores).map(([pid, score]) => {
+                  const role = teamOf(Number(pid));
+                  const teamCls = role === 'declarer' ? (isSolo ? 'team-solo' : 'team-declarer') : role === 'defender' ? 'team-defender' : '';
+                  return (
+                  <div key={pid} className={`score-entry ${Number(score) > 0 ? 'score-positive' : 'score-negative'} ${teamCls}`}>
                     <span>{names[Number(pid)]}</span>
                     <span className="score-value">{Number(score) > 0 ? '+' : ''}{score}</span>
                   </div>
-                ))}
+                  );
+                })}
               </div>
             </div>
           )}
@@ -122,7 +190,7 @@ export default function GameBoard({
 
         {/* Right player (P3) */}
         <div className="table-right">
-          <Hand cards={[]} faceDown cardCount={state.hand_sizes[3]} position="right" label={names[3]} />
+          <Hand cards={[]} faceDown cardCount={state.hand_sizes[3]} position="right" label={names[3]} teamRole={teamOf(3)} isSolo={isSolo} />
         </div>
 
         {/* Bottom player (human, P0) */}
@@ -133,6 +201,8 @@ export default function GameBoard({
             onCardClick={isMyTurn && state.phase === 'trick_play' ? onPlayCard : undefined}
             position="bottom"
             label={names[0]}
+            teamRole={teamOf(0)}
+            isSolo={isSolo}
           />
         </div>
       </div>
@@ -147,26 +217,4 @@ export default function GameBoard({
   );
 }
 
-function getLegalBidValues(state: GameState): (number | null)[] {
-  // Derived from the bids so far
-  const highestBid = state.bids.reduce((max, b) => {
-    if (b.contract !== null && (max === null || bidStrength(b.contract) > bidStrength(max))) {
-      return b.contract;
-    }
-    return max;
-  }, null as number | null);
 
-  const options: (number | null)[] = [null]; // pass
-  const allContracts = [3, 2, 1, 0];
-  for (const c of allContracts) {
-    if (highestBid === null || bidStrength(c) > bidStrength(highestBid)) {
-      options.push(c);
-    }
-  }
-  return options;
-}
-
-function bidStrength(contract: number): number {
-  const strengths: Record<number, number> = { 3: 1, 2: 2, 1: 3, '-3': 4, '-2': 5, '-1': 6, 0: 7 };
-  return strengths[contract] ?? 0;
-}

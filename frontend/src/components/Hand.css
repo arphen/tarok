@@ -57,3 +57,31 @@
 .hand-bottom {
   order: 0;
 }
+
+/* ---- Team colors ---- */
+.hand-label.team-declarer {
+  color: var(--team-declarer);
+}
+
+.hand-label.team-solo {
+  color: var(--team-solo);
+}
+
+.hand-label.team-defender {
+  color: var(--team-defender);
+}
+
+.hand.team-declarer .card:not(.card-back) {
+  border-color: var(--team-declarer);
+  box-shadow: 0 0 6px rgba(74, 158, 255, 0.3);
+}
+
+.hand.team-solo .card:not(.card-back) {
+  border-color: var(--team-solo);
+  box-shadow: 0 0 6px rgba(212, 168, 67, 0.3);
+}
+
+.hand.team-defender .card:not(.card-back) {
+  border-color: var(--team-defender);
+  box-shadow: 0 0 6px rgba(233, 69, 96, 0.3);
+}

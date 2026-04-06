@@ -21,6 +21,20 @@
   color: var(--text-secondary);
 }
 
+.speed-control {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+  color: var(--text-secondary);
+}
+
+.speed-control input[type="range"] {
+  width: 100px;
+  accent-color: var(--gold);
+  cursor: pointer;
+}
+
 .event-log {
   position: fixed;
   bottom: 0;
@@ -201,4 +215,78 @@
   font-size: 12px;
   color: var(--text-secondary);
   line-height: 1.4;
+}
+
+/* ---- Lobby / Game Setup ---- */
+.lobby-page {
+  max-width: 520px;
+  margin: 0 auto;
+  padding: 60px 24px;
+  text-align: center;
+}
+
+.lobby-back {
+  position: absolute;
+  top: 20px;
+  left: 20px;
+}
+
+.lobby-title {
+  font-size: 32px;
+  background: linear-gradient(135deg, #ffd700, #d4a843);
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  background-clip: text;
+  margin-bottom: 8px;
+}
+
+.lobby-subtitle {
+  color: var(--text-secondary);
+  font-size: 14px;
+  margin-bottom: 36px;
+}
+
+.lobby-opponents {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  margin-bottom: 36px;
+}
+
+.lobby-opponent {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  background: rgba(0, 0, 0, 0.3);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 12px;
+  padding: 16px 20px;
+}
+
+.lobby-label {
+  font-size: 15px;
+  font-weight: 600;
+  min-width: 50px;
+  text-align: left;
+  color: var(--accent-gold);
+}
+
+.lobby-select {
+  flex: 1;
+  background: #232529;
+  color: #fff;
+  border: 1px solid #444;
+  padding: 10px 12px;
+  border-radius: 8px;
+  font-size: 13px;
+  cursor: pointer;
+}
+
+.lobby-select:focus {
+  outline: none;
+  border-color: var(--accent-gold);
+}
+
+.lobby-start {
+  justify-content: center;
 }

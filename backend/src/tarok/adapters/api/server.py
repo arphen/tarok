@@ -18,6 +18,7 @@ from tarok.adapters.api.human_player import HumanPlayer
 from tarok.adapters.api.spectator_observer import SpectatorObserver
 from tarok.adapters.api.ws_observer import WebSocketObserver
 from tarok.adapters.api.schemas import (
+    NewGameRequest,
     TrainingRequest,
     TrainingMetricsSchema,
     EvoRequest,
@@ -95,8 +96,12 @@ async def start_training(req: TrainingRequest):
 
     async def run_training():
         global _latest_metrics
-        result = await _trainer.train(req.num_sessions)
-        _latest_metrics = result
+        try:
+            result = await _trainer.train(req.num_sessions)
+            _latest_metrics = result
+        except Exception:
+            import logging
+            logging.getLogger(__name__).exception("Training task failed")
 
     _training_task = asyncio.create_task(run_training())
     return {"status": "started", "num_sessions": req.num_sessions, "games_per_session": req.games_per_session}
@@ -129,8 +134,27 @@ async def list_checkpoints():
     ckpt_dir = Path("checkpoints")
     breed_dir = Path("checkpoints/breeding_results")
     
+    result = []
+    # Always include "latest" if the file exists
+    latest_path = ckpt_dir / "tarok_agent_latest.pt"
+    if latest_path.exists():
+        import torch as _torch
+        try:
+            meta = _torch.load(latest_path, map_location="cpu", weights_only=False)
+            result.append({
+                "filename": "tarok_agent_latest.pt",
+                "episode": meta.get("episode", 0),
+                "session": meta.get("session", 0),
+                "win_rate": meta.get("metrics", {}).get("win_rate", 0),
+                "avg_reward": meta.get("metrics", {}).get("avg_reward", 0),
+                "model_name": meta.get("model_name", None),
+                "is_bred": False,
+            })
+        except Exception:
+            result.append({"filename": "tarok_agent_latest.pt", "episode": 0, "is_bred": False})
+
     if not ckpt_dir.exists():
-        return {"checkpoints": []}
+        return {"checkpoints": result}
     files = [f for f in ckpt_dir.glob("tarok_agent_*.pt") if f.name != "tarok_agent_latest.pt"]
     if breed_dir.exists():
         files.extend([f for f in breed_dir.glob("bred_model_*.pt")])
@@ -163,24 +187,39 @@ async def list_checkpoints():
 
 # ---- Game endpoints ----
 
+def _load_opponent(choice: str, index: int) -> RLAgent:
+    """Load a single AI opponent from a checkpoint choice."""
+    name = f"AI-{index + 1}"
+    if choice == "random":
+        agent = RLAgent(name=name)
+        agent.set_training(False)
+        return agent
+
+    if choice == "latest":
+        path = Path("checkpoints/tarok_agent_latest.pt")
+    else:
+        path = Path("checkpoints") / choice
+
+    if path.exists():
+        agent = RLAgent.from_checkpoint(path, name=name)
+    else:
+        agent = RLAgent(name=name)
+    agent.set_training(False)
+    return agent
+
+
 @app.post("/api/game/new")
-async def new_game():
-    """Create a new human-vs-AI game."""
+async def new_game(req: NewGameRequest | None = None):
+    """Create a new human-vs-AI game with optional per-opponent model selection."""
     game_id = f"game-{len(_active_games)}"
+    opponents = (req.opponents if req else ["latest"] * 3)[:3]
+    while len(opponents) < 3:
+        opponents.append("latest")
 
     human = HumanPlayer(name="You")
-
-    # Load trained agent if available
     agents: list = [human]
-    checkpoint_path = Path("checkpoints/tarok_agent_latest.pt")
-
-    for i in range(3):
-        if checkpoint_path.exists():
-            agent = RLAgent.from_checkpoint(checkpoint_path, name=f"AI-{i+1}")
-        else:
-            agent = RLAgent(name=f"AI-{i+1}")
-        agent.set_training(False)
-        agents.append(agent)
+    for i, choice in enumerate(opponents):
+        agents.append(_load_opponent(choice, i))
 
     _active_games[game_id] = {
         "human": human,
@@ -249,6 +288,10 @@ async def game_websocket(ws: WebSocket, game_id: str):
                     Suit(c["suit"]) if c.get("suit") else None,
                 )
                 human.submit_action(card)
+
+            elif action_type == "set_delay":
+                delay = data.get("delay", 1.0)
+                observer.ai_delay = max(0.0, min(float(delay), 5.0))
 
     except WebSocketDisconnect:
         game_task.cancel()

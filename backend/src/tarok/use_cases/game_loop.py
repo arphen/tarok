@@ -66,7 +66,8 @@ class GameLoop:
             player_idx = state.current_bidder
             legal = state.legal_bids(player_idx)
             bid = await self._players[player_idx].choose_bid(state, player_idx, legal)
-            assert bid is None or bid in legal
+            if bid is not None and bid not in legal:
+                bid = None  # fall back to pass if bid is illegal
             state = place_bid(state, player_idx, bid)
             await self._observer.on_bid(player_idx, bid, state)
             rounds += 1
@@ -189,6 +190,16 @@ class GameLoop:
                 last_trick = state.tricks[-1]
                 winner = last_trick.winner()
                 await self._observer.on_trick_won(last_trick, winner, state)
+
+                # Berač early termination: declarer wins a trick → instant loss
+                if (
+                    state.contract
+                    and state.contract.is_berac
+                    and state.declarer is not None
+                    and winner == state.declarer
+                ):
+                    state.phase = Phase.SCORING
+                    break
 
         # === SCORING ===
         scores = score_game(state)

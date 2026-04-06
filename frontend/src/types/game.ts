@@ -24,6 +24,9 @@ export interface GameState {
   current_player: number;
   scores: Record<string, number> | null;
   legal_plays: CardData[];
+  legal_bids: (number | null)[] | null;
+  callable_kings: CardData[] | null;
+  must_discard: number;
   player_names: string[];
 }
 
@@ -93,6 +96,8 @@ export const CONTRACT_NAMES: Record<number, string> = {
   '-2': 'Solo Two',
   '-1': 'Solo One',
   0: 'Solo',
+  '-100': 'Berač',
+  '-101': 'Barvni Valat',
 };
 
 export const SUIT_SYMBOLS: Record<string, string> = {

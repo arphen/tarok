@@ -74,6 +74,31 @@
   border: 2px solid #c8b890;
 }
 
+/* ---- Fallback: no image available — white card with text ---- */
+.card-fallback {
+  background: #fff !important;
+  border: 2px solid #bbb !important;
+  color: #222 !important;
+}
+
+.card-fallback.card-red {
+  color: #c41e3a !important;
+}
+
+.card-fallback .tarok-number,
+.card-fallback .card-numeral {
+  color: #333;
+  opacity: 1;
+}
+
+.card-fallback .tarok-star {
+  color: #d4a843 !important;
+}
+
+.card-fallback .card-points {
+  color: #999 !important;
+}
+
 .card-red {
   color: #c41e3a;
 }

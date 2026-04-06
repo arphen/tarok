@@ -36,7 +36,8 @@ from tarok.use_cases.game_loop import GameLoop
 
 try:
     from tarok.adapters.ai.rust_game_loop import RustGameLoop
-    _HAS_RUST = True
+    import tarok_engine as _te_check
+    _HAS_RUST = _te_check is not None
 except Exception:
     _HAS_RUST = False
 

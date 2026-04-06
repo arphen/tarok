@@ -10,7 +10,7 @@ export default defineConfig({
   },
   webServer: [
     {
-      command: 'cd ../backend && uv run --default-index https://pypi.org/simple uvicorn tarok.adapters.api.server:app --host 0.0.0.0 --port 8000',
+      command: 'cd ../backend && PYTHONPATH=src uv run --default-index https://pypi.org/simple uvicorn tarok.adapters.api.server:app --host 0.0.0.0 --port 8000',
       port: 8000,
       reuseExistingServer: true,
       timeout: 30_000,

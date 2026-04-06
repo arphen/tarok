@@ -10,6 +10,11 @@
   --green-felt-dark: #1e3d1a;
   --card-shadow: 0 4px 12px rgba(0, 0, 0, 0.4);
   --card-hover: 0 8px 24px rgba(0, 0, 0, 0.6);
+
+  /* Team colors */
+  --team-declarer: #4a9eff;
+  --team-solo: #d4a843;
+  --team-defender: #e94560;
 }
 
 * {

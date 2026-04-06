@@ -140,6 +140,18 @@
   font-size: 18px;
 }
 
+.score-entry.team-declarer {
+  border-left: 3px solid var(--team-declarer);
+}
+
+.score-entry.team-solo {
+  border-left: 3px solid var(--team-solo);
+}
+
+.score-entry.team-defender {
+  border-left: 3px solid var(--team-defender);
+}
+
 /* ---- Turn indicator ---- */
 .turn-indicator {
   padding: 8px 20px;

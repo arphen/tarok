@@ -46,18 +46,20 @@ export default function Card({ card, onClick, disabled, highlighted, faceDown, s
   const isRed = card.suit === 'hearts' || card.suit === 'diamonds';
   const trula = isTrula(card);
 
+  const imageUrl = getCardImageUrl(card);
+  const hasFallback = !imageUrl;
+
   const classes = [
     'card',
     isTarok ? 'card-tarok' : 'card-suit',
     isRed ? 'card-red' : 'card-black',
     trula ? 'card-trula' : '',
+    hasFallback ? 'card-fallback' : '',
     highlighted ? 'card-highlighted' : '',
     disabled ? 'card-disabled' : '',
     onClick && !disabled ? 'card-clickable' : '',
     small ? 'card-small' : '',
   ].filter(Boolean).join(' ');
-
-  const imageUrl = getCardImageUrl(card);
 
   return (
     <div className={classes} onClick={!disabled && onClick ? onClick : undefined} data-testid={`card-${card.card_type}-${card.value}-${card.suit ?? 'none'}`}>

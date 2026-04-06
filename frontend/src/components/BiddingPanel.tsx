@@ -17,7 +17,11 @@ const BID_OPTIONS = [
   { value: 3, label: 'Three', description: 'Pick 3 talon cards (2v2)' },
   { value: 2, label: 'Two', description: 'Pick 2 talon cards (2v2)' },
   { value: 1, label: 'One', description: 'Pick 1 talon card (2v2)' },
+  { value: -3, label: 'Solo Three', description: 'Solo, pick 3 talon cards' },
+  { value: -2, label: 'Solo Two', description: 'Solo, pick 2 talon cards' },
+  { value: -1, label: 'Solo One', description: 'Solo, pick 1 talon card' },
   { value: 0, label: 'Solo', description: 'No talon, play alone (1v3)' },
+  { value: -100, label: 'Berač', description: 'Win 0 tricks, solo' },
 ];
 
 export default function BiddingPanel({

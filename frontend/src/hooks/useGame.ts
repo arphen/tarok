@@ -26,6 +26,9 @@ const INITIAL_STATE: GameState = {
   current_player: 0,
   scores: null,
   legal_plays: [],
+  legal_bids: null,
+  callable_kings: null,
+  must_discard: 0,
   player_names: [],
 };
 
@@ -132,9 +135,14 @@ export function useGame() {
     wsRef.current = ws;
   }, [addEvent, addLogEntry]);
 
-  const startNewGame = useCallback(async () => {
+  const startNewGame = useCallback(async (opponents?: string[]) => {
     try {
-      const res = await fetch('/api/game/new', { method: 'POST' });
+      const body = opponents ? { opponents } : undefined;
+      const res = await fetch('/api/game/new', {
+        method: 'POST',
+        headers: body ? { 'Content-Type': 'application/json' } : {},
+        body: body ? JSON.stringify(body) : undefined,
+      });
       const data = await res.json();
       setGameId(data.game_id);
       connect(data.game_id);
@@ -169,6 +177,10 @@ export function useGame() {
     sendAction({ action: 'discard', cards });
   }, [sendAction]);
 
+  const setDelay = useCallback((delay: number) => {
+    sendAction({ action: 'set_delay', delay });
+  }, [sendAction]);
+
   useEffect(() => {
     return () => {
       wsRef.current?.close();
@@ -187,5 +199,6 @@ export function useGame() {
     callKing,
     chooseTalon,
     discard,
+    setDelay,
   };
 }
