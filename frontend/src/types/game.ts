@@ -70,6 +70,7 @@ export interface TrainingMetrics {
   klop_rate: number;
   solo_rate: number;
   contract_stats: Record<string, ContractStat>;
+  history_offset: number;
   reward_history: number[];
   win_rate_history: number[];
   loss_history: number[];
@@ -78,6 +79,7 @@ export interface TrainingMetrics {
   solo_rate_history: number[];
   contract_win_rate_history: Record<string, number[]>;
   session_avg_score_history: number[];
+  stockskis_place_history: number[];
   snapshots: SnapshotInfo[];
   tarok_count_bids?: Record<string, Record<string, number>>;
 }

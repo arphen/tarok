@@ -316,6 +316,8 @@ class PPOTrainer:
         recent_bids: list[float] = []
         recent_klops: list[float] = []
         recent_solos: list[float] = []
+        # Per-game records for rolling contract stats: (contract_name, declarer_p0, raw_score)
+        recent_games: list[tuple[str, bool, int]] = []
         start_time = time.time()
         game_count = 0
         # Running sums for O(1) rolling-window metrics
@@ -416,18 +418,10 @@ class PPOTrainer:
                 s = 1.0 if is_solo else 0.0
                 recent_rewards.append(r); recent_wins.append(w)
                 recent_bids.append(b); recent_klops.append(k); recent_solos.append(s)
+                recent_games.append((contract_name, declarer_p0, raw_score))
                 _rsum += r; _wsum += w; _bsum += b; _ksum += k; _ssum += s
 
-                # Evict oldest entry once we exceed the window
-                window = self.games_per_session * 10
-                if len(recent_rewards) > window:
-                    _rsum -= recent_rewards[-window - 1]
-                    _wsum -= recent_wins[-window - 1]
-                    _bsum -= recent_bids[-window - 1]
-                    _ksum -= recent_klops[-window - 1]
-                    _ssum -= recent_solos[-window - 1]
-
-                # Per-contract tracking (split by role)
+                # Per-contract tracking (split by role) — add current game
                 if contract_name in self.metrics.contract_stats:
                     cs = self.metrics.contract_stats[contract_name]
                     if declarer_p0:
@@ -440,6 +434,29 @@ class PPOTrainer:
                         if raw_score > 0:
                             cs.def_won += 1
                         cs.def_total_score += raw_score
+
+                # Evict oldest entry once we exceed the window
+                window = self.games_per_session * 10
+                if len(recent_rewards) > window:
+                    _rsum -= recent_rewards[-window - 1]
+                    _wsum -= recent_wins[-window - 1]
+                    _bsum -= recent_bids[-window - 1]
+                    _ksum -= recent_klops[-window - 1]
+                    _ssum -= recent_solos[-window - 1]
+                    # Also evict from rolling contract stats
+                    old_cn, old_decl, old_score = recent_games[-window - 1]
+                    if old_cn in self.metrics.contract_stats:
+                        old_cs = self.metrics.contract_stats[old_cn]
+                        if old_decl:
+                            old_cs.decl_played -= 1
+                            if old_score > 0:
+                                old_cs.decl_won -= 1
+                            old_cs.decl_total_score -= old_score
+                        else:
+                            old_cs.def_played -= 1
+                            if old_score > 0:
+                                old_cs.def_won -= 1
+                            old_cs.def_total_score -= old_score
 
                 # Update live metrics (O(1) — no recomputation)
                 self.metrics.episode = game_count

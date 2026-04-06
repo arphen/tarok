@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useMemo } from 'react';
 import {
   LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip,
   ResponsiveContainer, Legend, BarChart, Bar, Cell,
@@ -31,6 +31,8 @@ export default function TrainingDashboard({ onBack }: Props) {
   const [availableSnapshots, setAvailableSnapshots] = useState<{filename: string, session: number, episode: number}[]>([]);
   const [tab, setTab] = useState<'overview' | 'contracts' | 'loss' | 'snapshots' | 'tarok_bids'>('overview');
   const [smoothing, setSmoothing] = useState(0.8);
+  const [useRustEngine, setUseRustEngine] = useState(true);
+  const [warmupGames, setWarmupGames] = useState(0);
 
   const poll = useCallback(async () => {
     try {
@@ -50,7 +52,7 @@ export default function TrainingDashboard({ onBack }: Props) {
 
   useEffect(() => {
     poll();
-    const id = setInterval(poll, 800);
+    const id = setInterval(poll, 2000);
     return () => clearInterval(id);
   }, [poll]);
 
@@ -66,6 +68,8 @@ export default function TrainingDashboard({ onBack }: Props) {
         resume_from: resume && !isLatest ? resumeFrom : undefined,
         stockskis_ratio: stockskisRatio,
         stockskis_strength: stockskisStrength,
+        use_rust_engine: useRustEngine,
+        warmup_games: warmupGames,
       }),
     });
     setIsTraining(true);
@@ -76,8 +80,8 @@ export default function TrainingDashboard({ onBack }: Props) {
     setIsTraining(false);
   };
 
-  // Chart data
-  const applySmoothing = (data: any[], keys: string[]) => {
+  // Chart data — memoised to avoid re-deriving every render
+  const applySmoothing = useCallback((data: any[], keys: string[]) => {
     if (data.length === 0 || smoothing === 0) return data;
     const result = [{ ...data[0] }];
     for (let i = 1; i < data.length; i++) {
@@ -91,18 +95,21 @@ export default function TrainingDashboard({ onBack }: Props) {
       result.push(curr);
     }
     return result;
-  };
+  }, [smoothing]);
 
-  const rewardData = applySmoothing(metrics?.reward_history.map((v, i) => ({ s: i + 1, reward: v })) ?? [], ['reward']);
-  const winRateData = applySmoothing(metrics?.win_rate_history.map((v, i) => ({ s: i + 1, winRate: +(v * 100).toFixed(1) })) ?? [], ['winRate']);
-  const lossData = applySmoothing(metrics?.loss_history.map((v, i) => ({ s: i + 1, loss: v })) ?? [], ['loss']);
-  const sessionScoreData = applySmoothing(metrics?.session_avg_score_history?.map((v, i) => ({ s: i + 1, avgScore: v })) ?? [], ['avgScore']);
-  const bidKlopData = applySmoothing(metrics?.bid_rate_history?.map((v, i) => ({
-    s: i + 1,
+  const historyOffset = metrics?.history_offset ?? 0;
+
+  const rewardData = useMemo(() => applySmoothing(metrics?.reward_history.map((v, i) => ({ s: historyOffset + i + 1, reward: v })) ?? [], ['reward']), [metrics?.reward_history, historyOffset, applySmoothing]);
+  const winRateData = useMemo(() => applySmoothing(metrics?.win_rate_history.map((v, i) => ({ s: historyOffset + i + 1, winRate: +(v * 100).toFixed(1) })) ?? [], ['winRate']), [metrics?.win_rate_history, historyOffset, applySmoothing]);
+  const lossData = useMemo(() => applySmoothing(metrics?.loss_history.map((v, i) => ({ s: historyOffset + i + 1, loss: v })) ?? [], ['loss']), [metrics?.loss_history, historyOffset, applySmoothing]);
+  const sessionScoreData = useMemo(() => applySmoothing(metrics?.session_avg_score_history?.map((v, i) => ({ s: historyOffset + i + 1, avgScore: v })) ?? [], ['avgScore']), [metrics?.session_avg_score_history, historyOffset, applySmoothing]);
+  const stockskisPlaceData = useMemo(() => applySmoothing(metrics?.stockskis_place_history?.map((v, i) => ({ s: historyOffset + i + 1, place: v })) ?? [], ['place']), [metrics?.stockskis_place_history, historyOffset, applySmoothing]);
+  const bidKlopData = useMemo(() => applySmoothing(metrics?.bid_rate_history?.map((v, i) => ({
+    s: historyOffset + i + 1,
     bid: +((metrics.bid_rate_history[i] ?? 0) * 100).toFixed(1),
     klop: +((metrics.klop_rate_history?.[i] ?? 0) * 100).toFixed(1),
     solo: +((metrics.solo_rate_history?.[i] ?? 0) * 100).toFixed(1),
-  })) ?? [], ['bid', 'klop', 'solo']);
+  })) ?? [], ['bid', 'klop', 'solo']), [metrics?.bid_rate_history, metrics?.klop_rate_history, metrics?.solo_rate_history, historyOffset, applySmoothing]);
 
   // Contract bar data (declarer stats only — the meaningful metric)
   const contractBarData = metrics?.contract_stats ? Object.entries(metrics.contract_stats)
@@ -116,15 +123,15 @@ export default function TrainingDashboard({ onBack }: Props) {
     })) : [];
 
   // Contract win-rate over time
-  const contractWinData = applySmoothing(metrics?.contract_win_rate_history
+  const contractWinData = useMemo(() => applySmoothing(metrics?.contract_win_rate_history
     ? (metrics.win_rate_history || []).map((_, i) => {
-        const row: Record<string, number> = { s: i + 1 };
+        const row: Record<string, number> = { s: historyOffset + i + 1 };
         for (const [cname, arr] of Object.entries(metrics.contract_win_rate_history)) {
           if (arr[i] !== undefined) row[cname] = +(arr[i] * 100).toFixed(1);
         }
         return row;
       })
-    : [], Object.keys(metrics?.contract_win_rate_history || {}));
+    : [], Object.keys(metrics?.contract_win_rate_history || {})), [metrics?.contract_win_rate_history, metrics?.win_rate_history, historyOffset, applySmoothing]);
 
   const sessionPct = metrics && metrics.total_sessions > 0
     ? (metrics.session / metrics.total_sessions) * 100
@@ -166,6 +173,15 @@ export default function TrainingDashboard({ onBack }: Props) {
           <span>Smoothing {Math.round(smoothing * 100)}%</span>
           <input type="range" value={smoothing} onChange={e => setSmoothing(Number(e.target.value))}
             min={0} max={0.99} step={0.01} />
+        </label>
+        <label className="td-check" style={{ margin: 0 }}>
+          <input type="checkbox" checked={useRustEngine} onChange={e => setUseRustEngine(e.target.checked)} disabled={isTraining} />
+          <span>Rust Engine</span>
+        </label>
+        <label className="td-field min-width-80">
+          <span>Warmup Games</span>
+          <input type="number" value={warmupGames} onChange={e => setWarmupGames(Number(e.target.value))}
+            disabled={isTraining} min={0} step={100000} placeholder="0" />
         </label>
         <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
           <label className="td-check" style={{ margin: 0 }}>
@@ -246,7 +262,7 @@ export default function TrainingDashboard({ onBack }: Props) {
               <ResponsiveContainer width="100%" height={260}>
                 <LineChart data={winRateData}>
                   <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.08)" />
-                  <XAxis dataKey="s" stroke="#666" fontSize={11} type="number" domain={[1, metrics?.total_sessions || Math.max(sessions, 1)]} />
+                  <XAxis dataKey="s" stroke="#666" fontSize={11} type="number" domain={['dataMin', 'dataMax']} />
                   <YAxis stroke="#666" fontSize={11} domain={[0, 100]} unit="%" />
                   <Tooltip {...tooltipStyle} />
                   <Line type="monotone" dataKey="winRate" stroke="#4caf50" strokeWidth={2} dot={false} name="Win %" />
@@ -258,7 +274,7 @@ export default function TrainingDashboard({ onBack }: Props) {
               <ResponsiveContainer width="100%" height={260}>
                 <LineChart data={rewardData}>
                   <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.08)" />
-                  <XAxis dataKey="s" stroke="#666" fontSize={11} type="number" domain={[1, metrics?.total_sessions || Math.max(sessions, 1)]} />
+                  <XAxis dataKey="s" stroke="#666" fontSize={11} type="number" domain={['dataMin', 'dataMax']} />
                   <YAxis stroke="#666" fontSize={11} />
                   <Tooltip {...tooltipStyle} />
                   <Line type="monotone" dataKey="reward" stroke="#d4a843" strokeWidth={2} dot={false} name="Reward" />
@@ -270,7 +286,7 @@ export default function TrainingDashboard({ onBack }: Props) {
               <ResponsiveContainer width="100%" height={260}>
                 <LineChart data={sessionScoreData}>
                   <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.08)" />
-                  <XAxis dataKey="s" stroke="#666" fontSize={11} type="number" domain={[1, metrics?.total_sessions || Math.max(sessions, 1)]} />
+                  <XAxis dataKey="s" stroke="#666" fontSize={11} type="number" domain={['dataMin', 'dataMax']} />
                   <YAxis stroke="#666" fontSize={11} />
                   <Tooltip {...tooltipStyle} />
                   <Line type="monotone" dataKey="avgScore" stroke="#ff9800" strokeWidth={2} dot={false} name="Avg Score" />
@@ -282,7 +298,7 @@ export default function TrainingDashboard({ onBack }: Props) {
               <ResponsiveContainer width="100%" height={260}>
                 <LineChart data={bidKlopData}>
                   <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.08)" />
-                  <XAxis dataKey="s" stroke="#666" fontSize={11} type="number" domain={[1, metrics?.total_sessions || Math.max(sessions, 1)]} />
+                  <XAxis dataKey="s" stroke="#666" fontSize={11} type="number" domain={['dataMin', 'dataMax']} />
                   <YAxis stroke="#666" fontSize={11} domain={[0, 100]} unit="%" />
                   <Tooltip {...tooltipStyle} />
                   <Legend />
@@ -292,6 +308,20 @@ export default function TrainingDashboard({ onBack }: Props) {
                 </LineChart>
               </ResponsiveContainer>
             </ChartCard>
+
+            {stockskisPlaceData.length > 0 && (
+              <ChartCard title="StockŠkis Avg Finishing Place">
+                <ResponsiveContainer width="100%" height={260}>
+                  <LineChart data={stockskisPlaceData}>
+                    <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.08)" />
+                    <XAxis dataKey="s" stroke="#666" fontSize={11} type="number" domain={['dataMin', 'dataMax']} />
+                    <YAxis stroke="#666" fontSize={11} domain={[1, 4]} reversed />
+                    <Tooltip {...tooltipStyle} />
+                    <Line type="monotone" dataKey="place" stroke="#9c27b0" strokeWidth={2} dot={false} name="Avg Place" />
+                  </LineChart>
+                </ResponsiveContainer>
+              </ChartCard>
+            )}
           </div>
         )}
 
@@ -301,12 +331,13 @@ export default function TrainingDashboard({ onBack }: Props) {
               <ResponsiveContainer width="100%" height={280}>
                 <BarChart data={contractBarData} layout="vertical">
                   <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.08)" />
-                  <XAxis type="number" stroke="#666" fontSize={11} />
+                  <XAxis xAxisId="count" type="number" stroke="#666" fontSize={11} orientation="bottom" />
+                  <XAxis xAxisId="pct" type="number" stroke="#4caf50" fontSize={11} orientation="top" domain={[0, 100]} unit="%" />
                   <YAxis type="category" dataKey="name" stroke="#666" fontSize={12} width={70} />
                   <Tooltip {...tooltipStyle} />
                   <Legend />
-                  <Bar dataKey="played" name="Declared" fill="#4a9eff" />
-                  <Bar dataKey="winRate" name="Win %" fill="#4caf50" />
+                  <Bar xAxisId="count" dataKey="played" name="Declared" fill="#4a9eff" />
+                  <Bar xAxisId="pct" dataKey="winRate" name="Win %" fill="#4caf50" />
                 </BarChart>
               </ResponsiveContainer>
             </ChartCard>
@@ -331,7 +362,7 @@ export default function TrainingDashboard({ onBack }: Props) {
               <ResponsiveContainer width="100%" height={300}>
                 <LineChart data={contractWinData}>
                   <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.08)" />
-                  <XAxis dataKey="s" stroke="#666" fontSize={11} type="number" domain={[1, metrics?.total_sessions || Math.max(sessions, 1)]} />
+                  <XAxis dataKey="s" stroke="#666" fontSize={11} type="number" domain={['dataMin', 'dataMax']} />
                   <YAxis stroke="#666" fontSize={11} domain={[0, 100]} unit="%" />
                   <Tooltip {...tooltipStyle} />
                   <Legend />
@@ -395,7 +426,7 @@ export default function TrainingDashboard({ onBack }: Props) {
               <ResponsiveContainer width="100%" height={260}>
                 <LineChart data={lossData}>
                   <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.08)" />
-                  <XAxis dataKey="s" stroke="#666" fontSize={11} type="number" domain={[1, metrics?.total_sessions || Math.max(sessions, 1)]} />
+                  <XAxis dataKey="s" stroke="#666" fontSize={11} type="number" domain={['dataMin', 'dataMax']} />
                   <YAxis stroke="#666" fontSize={11} />
                   <Tooltip {...tooltipStyle} />
                   <Line type="monotone" dataKey="loss" stroke="#e94560" strokeWidth={2} dot={false} name="Loss" />
