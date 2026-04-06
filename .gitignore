@@ -58,4 +58,4 @@ backend/checkpoints/evo_results/*.json
 backend/checkpoints/evo_tmp/
 backend/checkpoints/breeding_results/
 test-results/
-frontend/test-results/engine-rs/target/
+engine-rs/target/
