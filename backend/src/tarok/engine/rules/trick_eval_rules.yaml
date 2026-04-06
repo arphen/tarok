@@ -1,0 +1,32 @@
+# Trick Evaluation Rules — Priority-based match & transform
+#
+# Rules are evaluated highest-priority first. The first rule whose
+# "condition" returns true captures the trick and applies its "action"
+# (transform) to determine (winner, points).
+#
+# condition: name of a registered TrickConditionFn
+# action:    name of a registered TrickTransformFn
+
+rules:
+  # --- Special cases (evaluated first) ---
+
+  - name: SkisCapturedLastTrick
+    priority: 100
+    condition: skis_played_last_trick
+    action: skis_captured
+    params:
+      description: >
+        In the last trick, Škis cannot escape — it is captured by the
+        trick winner and its 5 points count for that player.
+
+  # --- Default fallback ---
+
+  - name: StandardTrickWinner
+    priority: 0
+    condition: always
+    action: standard_winner
+    params:
+      description: >
+        Normal trick resolution. Highest card of the lead suit wins,
+        unless a tarok was played (taroks always beat suit cards;
+        higher tarok beats lower tarok).

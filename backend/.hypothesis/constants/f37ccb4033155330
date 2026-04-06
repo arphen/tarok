@@ -1,0 +1,4 @@
+# file: /Users/swozny/work/tarok/backend/src/tarok/entities/game_state.py
+# hypothesis_version: 6.151.10
+
+[-100, 'EmptyHand', 'KontraLevel | None', 'announcements', 'berac', 'bidding', 'bids', 'called_king', 'contract', 'current_trick', 'dealing', 'declarer', 'declarer_team', 'finished', 'hand', 'hand_size', 'king_calling', 'kings', 'klop', 'my_role', 'one', 'opponent', 'opponent_team', 'pagat_ultimo', 'partner', 'partner_revealed', 'phase', 'played_cards', 'scoring', 'solo', 'solo_one', 'solo_three', 'solo_two', 'talon_exchange', 'talon_size', 'three', 'trick_play', 'tricks_played', 'trula', 'two', 'valat']

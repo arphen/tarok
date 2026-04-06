@@ -1,0 +1,115 @@
+"""Pydantic schemas for the API adapter."""
+
+from __future__ import annotations
+
+from pydantic import BaseModel
+
+
+class CardSchema(BaseModel):
+    card_type: str  # "tarok" or "suit"
+    value: int
+    suit: str | None = None
+    label: str
+    points: int
+
+
+class TrickSchema(BaseModel):
+    cards: list[tuple[int, CardSchema]]
+    lead_player: int
+    winner: int | None = None
+
+
+class GameStateSchema(BaseModel):
+    phase: str
+    hand: list[CardSchema]
+    hand_sizes: list[int]
+    talon_groups: list[list[CardSchema]] | None = None
+    bids: list[dict]
+    contract: str | None = None
+    declarer: int | None = None
+    called_king: CardSchema | None = None
+    partner_revealed: bool = False
+    partner: int | None = None
+    current_trick: list[tuple[int, CardSchema]]
+    tricks_played: int = 0
+    current_player: int = 0
+    scores: dict[str, int] | None = None
+    legal_plays: list[CardSchema] = []
+    player_names: list[str] = []
+
+
+class PlayCardRequest(BaseModel):
+    card_type: str
+    value: int
+    suit: str | None = None
+
+
+class BidRequest(BaseModel):
+    contract: int | None  # Contract value or None for pass
+
+
+class CallKingRequest(BaseModel):
+    suit: str
+
+
+class TalonChoiceRequest(BaseModel):
+    group_index: int
+
+
+class DiscardRequest(BaseModel):
+    cards: list[PlayCardRequest]
+
+
+class EvoRequest(BaseModel):
+    population_size: int = 12
+    num_generations: int = 10
+    eval_sessions: int = 20
+    games_per_session: int = 10
+    oracle: bool = False
+
+
+class BreedRequest(BaseModel):
+    warmup_sessions: int = 50
+    warmup_games_per_session: int = 20
+    population_size: int = 12
+    num_generations: int = 5
+    num_cycles: int = 3
+    eval_games: int = 100
+    refine_sessions: int = 30
+    refine_games_per_session: int = 20
+    oracle: bool = False
+    resume: bool = False
+    resume_from: str | None = None
+    model_name: str | None = None
+    stockskis_eval: bool = False
+    stockskis_strength: float = 1.0
+
+
+class TrainingRequest(BaseModel):
+    num_sessions: int = 100
+    games_per_session: int = 100
+    learning_rate: float = 3e-4
+    hidden_size: int = 256
+    resume: bool = False
+    resume_from: str | None = None
+    stockskis_ratio: float = 0.0
+    stockskis_strength: float = 1.0
+
+
+class TrainingMetricsSchema(BaseModel):
+    episode: int = 0
+    total_episodes: int = 0
+    session: int = 0
+    avg_reward: float = 0.0
+    avg_loss: float = 0.0
+    win_rate: float = 0.0
+    entropy: float = 0.0
+    value_loss: float = 0.0
+    policy_loss: float = 0.0
+    games_per_second: float = 0.0
+    bid_rate: float = 0.0
+    klop_rate: float = 0.0
+    solo_rate: float = 0.0
+    reward_history: list[float] = []
+    win_rate_history: list[float] = []
+    loss_history: list[float] = []

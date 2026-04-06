@@ -1,0 +1,59 @@
+.hand {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+}
+
+.hand-label {
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--text-secondary);
+  text-transform: uppercase;
+  letter-spacing: 1px;
+}
+
+.hand-cards {
+  display: flex;
+  gap: 0;
+}
+
+.hand-horizontal {
+  flex-direction: row;
+}
+
+.hand-horizontal .card {
+  margin-left: -20px;
+}
+
+.hand-horizontal .card:first-child {
+  margin-left: 0;
+}
+
+.hand-vertical {
+  flex-direction: column;
+}
+
+.hand-vertical .card {
+  margin-top: -60px;
+}
+
+.hand-vertical .card:first-child {
+  margin-top: 0;
+}
+
+.hand-top {
+  order: 0;
+}
+
+.hand-left {
+  order: 0;
+}
+
+.hand-right {
+  order: 0;
+}
+
+.hand-bottom {
+  order: 0;
+}

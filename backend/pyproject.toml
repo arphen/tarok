@@ -1,0 +1,44 @@
+[project]
+name = "tarok"
+version = "0.1.0"
+description = "Slovenian Tarok game engine with self-play RL agents"
+requires-python = ">=3.12"
+dependencies = [
+    "fastapi>=0.115",
+    "uvicorn[standard]>=0.30",
+    "websockets>=13",
+    "pydantic>=2.9",
+    "torch>=2.4",
+    "numpy>=2.0",
+    "tensorboard>=2.18",
+    "deap>=1.4",
+    "shortuuid>=1.0.13",
+    "pyyaml>=6.0.3",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8",
+    "pytest-asyncio>=0.24",
+    "pytest-bdd>=8",
+    "hypothesis>=6.100",
+    "ruff>=0.7",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[[tool.uv.index]]
+url = "https://pypi.org/simple"
+default = true
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/tarok"]
+
+[tool.ruff]
+line-length = 100
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+asyncio_mode = "auto"

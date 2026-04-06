@@ -1,0 +1,64 @@
+.trick-area {
+  position: relative;
+  width: 280px;
+  height: 220px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.trick-empty {
+  color: rgba(255, 255, 255, 0.2);
+  font-style: italic;
+  font-size: 14px;
+}
+
+.trick-card {
+  position: absolute;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+  animation: card-appear 0.3s ease-out;
+}
+
+@keyframes card-appear {
+  from {
+    opacity: 0;
+    transform: scale(0.8);
+  }
+  to {
+    opacity: 1;
+    transform: scale(1);
+  }
+}
+
+.trick-card-bottom {
+  bottom: 0;
+  left: 50%;
+  transform: translateX(-50%);
+}
+
+.trick-card-top {
+  top: 0;
+  left: 50%;
+  transform: translateX(-50%);
+}
+
+.trick-card-left {
+  left: 0;
+  top: 50%;
+  transform: translateY(-50%);
+}
+
+.trick-card-right {
+  right: 0;
+  top: 50%;
+  transform: translateY(-50%);
+}
+
+.trick-player-name {
+  font-size: 10px;
+  color: var(--text-secondary);
+  font-weight: 500;
+}

@@ -1,0 +1,573 @@
+/* ---- Spectator setup ---- */
+.spectator-view {
+  min-height: 100vh;
+  display: flex;
+  flex-direction: column;
+}
+
+.spectator-title {
+  font-family: 'Playfair Display', serif;
+  font-size: 16px;
+  color: var(--accent-gold);
+}
+
+.spectator-setup {
+  max-width: 800px;
+  margin: 0 auto;
+  padding: 40px 24px;
+  text-align: center;
+}
+
+.spectator-setup h2 {
+  font-size: 32px;
+  color: var(--accent-gold);
+  margin-bottom: 8px;
+}
+
+.setup-subtitle {
+  color: var(--text-secondary);
+  margin-bottom: 32px;
+}
+
+.agent-config-grid {
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  gap: 16px;
+  margin-bottom: 24px;
+  text-align: left;
+}
+
+.agent-config-card {
+  background: rgba(0, 0, 0, 0.3);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 12px;
+  padding: 16px;
+}
+
+.agent-config-header {
+  margin-bottom: 12px;
+}
+
+.agent-seat {
+  font-size: 12px;
+  text-transform: uppercase;
+  letter-spacing: 1px;
+  color: var(--accent-gold);
+  font-weight: 600;
+}
+
+.config-field {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin-bottom: 10px;
+}
+
+.config-field span:first-child {
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  color: var(--text-secondary);
+}
+
+.config-field input,
+.config-field select {
+  background: rgba(0, 0, 0, 0.3);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 6px;
+  padding: 8px 10px;
+  color: var(--text-primary);
+  font-size: 13px;
+  font-family: 'Inter', sans-serif;
+}
+
+.config-field input:focus,
+.config-field select:focus {
+  outline: none;
+  border-color: var(--accent-gold);
+}
+
+.config-field select option {
+  background: var(--bg-primary);
+}
+
+.delay-config {
+  margin-bottom: 24px;
+}
+
+.config-field-inline {
+  flex-direction: row;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+}
+
+.config-field-inline input {
+  width: 80px;
+  text-align: center;
+}
+
+.config-unit {
+  font-size: 13px !important;
+  text-transform: none !important;
+  color: var(--text-secondary) !important;
+}
+
+/* ---- Spectator layout ---- */
+.spectator-layout {
+  display: flex;
+  flex: 1;
+  min-height: 0;
+  height: calc(100vh - 50px);
+}
+
+.spectator-board {
+  flex: 1;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 16px;
+  padding: 16px;
+}
+
+.spectator-table {
+  grid-template-columns: 160px 1fr 160px;
+}
+
+/* ---- Spectator sidebar ---- */
+.spectator-sidebar {
+  width: 320px;
+  min-width: 320px;
+  display: flex;
+  flex-direction: column;
+  background: rgba(0, 0, 0, 0.4);
+  border-left: 1px solid rgba(255, 255, 255, 0.08);
+  overflow: hidden;
+}
+
+/* ---- Trick history ---- */
+.trick-history {
+  border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+  max-height: 40%;
+  display: flex;
+  flex-direction: column;
+}
+
+.trick-history-header {
+  padding: 12px 16px 8px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+}
+
+.trick-history-header h4 {
+  font-size: 12px;
+  text-transform: uppercase;
+  letter-spacing: 1.5px;
+  color: var(--accent-gold);
+}
+
+.trick-history-list {
+  overflow-y: auto;
+  padding: 4px 0;
+}
+
+.trick-history-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  padding: 6px 16px;
+  background: none;
+  border: none;
+  border-radius: 0;
+  border-left: 3px solid transparent;
+  color: var(--text-secondary);
+  font-size: 12px;
+  cursor: pointer;
+  text-align: left;
+  transition: background 0.15s;
+}
+
+.trick-history-item:hover {
+  background: rgba(255, 255, 255, 0.04);
+  transform: none;
+}
+
+.trick-history-item.active {
+  background: rgba(212, 168, 67, 0.1);
+  border-left-color: var(--accent-gold);
+  color: var(--text-primary);
+}
+
+.trick-num {
+  font-weight: 600;
+  min-width: 24px;
+  color: var(--text-secondary);
+}
+
+.trick-cards-mini {
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.trick-winner-badge {
+  font-size: 11px;
+  padding: 2px 6px;
+  border-radius: 4px;
+  background: rgba(76, 175, 80, 0.2);
+  color: #81c784;
+  white-space: nowrap;
+}
+
+/* ---- Spectator log ---- */
+.spectator-log {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.spectator-log-header {
+  padding: 12px 16px 8px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+}
+
+.spectator-log-header h4 {
+  font-size: 12px;
+  text-transform: uppercase;
+  letter-spacing: 1.5px;
+  color: var(--accent-gold);
+}
+
+.spectator-log-entries {
+  flex: 1;
+  overflow-y: auto;
+  padding: 4px 0;
+}
+
+.spectator-log-empty {
+  padding: 24px 16px;
+  text-align: center;
+  color: var(--text-secondary);
+  font-size: 13px;
+  font-style: italic;
+}
+
+.spectator-log-entry {
+  display: flex;
+  gap: 8px;
+  padding: 5px 16px;
+  font-size: 12px;
+  line-height: 1.4;
+  color: var(--text-secondary);
+  border-left: 3px solid transparent;
+}
+
+.spectator-log-entry:hover {
+  background: rgba(255, 255, 255, 0.03);
+}
+
+.spectator-log-entry.log-bid { border-left-color: #6a9eff; }
+.spectator-log-entry.log-king { border-left-color: var(--accent-gold); color: var(--accent-gold); }
+.spectator-log-entry.log-play { border-left-color: rgba(255, 255, 255, 0.2); }
+.spectator-log-entry.log-trick { border-left-color: #4caf50; color: #81c784; }
+.spectator-log-entry.log-score { border-left-color: var(--accent); color: var(--text-primary); font-weight: 600; }
+.spectator-log-entry.log-talon { border-left-color: #9c6dcc; }
+.spectator-log-entry.log-announce { border-left-color: #ff9800; }
+
+/* ---- Trick replay ---- */
+.trick-replay {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 12px;
+}
+
+.trick-replay-header {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  font-weight: 600;
+  color: var(--accent-gold);
+}
+
+.trick-replay-winner {
+  font-size: 13px;
+  color: #81c784;
+  font-weight: 600;
+}
+
+/* ---- Spectator bidding ---- */
+.spectator-bidding {
+  text-align: center;
+}
+
+.spectator-bidding h3 {
+  color: var(--accent-gold);
+  margin-bottom: 12px;
+}
+
+.bid-history {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin-bottom: 12px;
+}
+
+.bid-entry {
+  display: flex;
+  justify-content: center;
+  gap: 8px;
+  font-size: 14px;
+}
+
+.bid-player {
+  color: var(--text-secondary);
+  min-width: 80px;
+  text-align: right;
+}
+
+.bid-value {
+  font-weight: 600;
+  min-width: 80px;
+  text-align: left;
+}
+
+.spectator-waiting {
+  color: var(--text-secondary);
+  font-size: 13px;
+  font-style: italic;
+}
+
+.spectator-waiting-center {
+  text-align: center;
+}
+
+.spectator-waiting-center h3 {
+  color: var(--accent-gold);
+  margin-bottom: 8px;
+}
+
+.spectator-waiting-center p {
+  color: var(--text-secondary);
+}
+
+.spectator-talon {
+  text-align: center;
+}
+
+.spectator-talon h3 {
+  color: var(--accent-gold);
+  margin-bottom: 12px;
+}
+
+/* Scrollbar styling for sidebar */
+.trick-history-list::-webkit-scrollbar,
+.spectator-log-entries::-webkit-scrollbar {
+  width: 4px;
+}
+
+.trick-history-list::-webkit-scrollbar-track,
+.spectator-log-entries::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.trick-history-list::-webkit-scrollbar-thumb,
+.spectator-log-entries::-webkit-scrollbar-thumb {
+  background: rgba(255, 255, 255, 0.15);
+  border-radius: 4px;
+}
+
+/* ---- Responsive ---- */
+@media (max-width: 900px) {
+  .agent-config-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .spectator-sidebar {
+    width: 260px;
+    min-width: 260px;
+  }
+
+  .spectator-table {
+    grid-template-columns: 100px 1fr 100px;
+  }
+}
+
+.spectator-playback {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  align-items: center;
+  background-color: var(--glass-bg);
+  padding: 10px;
+  border-radius: 8px;
+  margin-top: auto;
+  margin-bottom: 20px;
+  width: 100%;
+}
+
+.playback-controls {
+  display: flex;
+  gap: 10px;
+}
+
+.playback-timeline {
+  display: flex;
+  align-items: center;
+  width: 100%;
+  gap: 10px;
+}
+
+.timeline-slider {
+  flex: 1;
+}
+
+.timeline-text {
+  min-width: 60px;
+  text-align: right;
+  font-family: monospace;
+}
+
+/* ---- Score display (full version with tables) ---- */
+.score-display-full {
+  max-height: 70vh;
+  overflow-y: auto;
+  text-align: left;
+  min-width: 500px;
+}
+
+.score-display-full h3 {
+  text-align: center;
+}
+
+.score-display-full h4 {
+  color: var(--accent-gold);
+  font-size: 15px;
+  margin: 16px 0 8px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+  padding-bottom: 4px;
+}
+
+/* Results table */
+.results-table {
+  width: 100%;
+  border-collapse: collapse;
+  margin-bottom: 8px;
+}
+
+.results-table th {
+  text-align: left;
+  color: var(--text-secondary);
+  font-size: 12px;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  padding: 6px 12px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+}
+
+.results-table td {
+  padding: 6px 12px;
+  font-size: 14px;
+}
+
+.results-table tr.score-positive td {
+  background: rgba(76, 175, 80, 0.12);
+  color: #81c784;
+}
+
+.results-table tr.score-negative td {
+  background: rgba(244, 67, 54, 0.12);
+  color: #e57373;
+}
+
+.results-table .score-value {
+  font-weight: 700;
+  font-size: 16px;
+  text-align: right;
+}
+
+/* Score breakdown */
+.score-breakdown {
+  margin-top: 4px;
+}
+
+.breakdown-explanation {
+  color: var(--text-secondary);
+  font-size: 13px;
+  margin-bottom: 8px;
+}
+
+.breakdown-table {
+  width: 100%;
+  border-collapse: collapse;
+}
+
+.breakdown-table td {
+  padding: 4px 12px;
+  font-size: 13px;
+}
+
+.breakdown-label {
+  color: var(--text-secondary);
+}
+
+.breakdown-value {
+  text-align: right;
+  font-family: monospace;
+}
+
+.val-pos { color: #81c784; }
+.val-neg { color: #e57373; }
+.val-detail { color: var(--text-secondary); font-style: italic; }
+
+/* Trick results table */
+.trick-results {
+  margin-top: 4px;
+}
+
+.trick-results-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 12px;
+}
+
+.trick-results-table th {
+  text-align: left;
+  color: var(--text-secondary);
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  padding: 4px 8px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+}
+
+.trick-results-table td {
+  padding: 3px 8px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.04);
+}
+
+.trick-results-table tr.trick-decl td {
+  background: rgba(76, 175, 80, 0.06);
+}
+
+.trick-results-table tr.trick-opp td {
+  background: rgba(244, 67, 54, 0.06);
+}
+
+.trick-cards-cell {
+  font-size: 11px;
+  color: var(--text-secondary);
+}
+
+.winning-card {
+  color: var(--accent-gold);
+  font-weight: 600;
+}
+
+.trick-winner-cell {
+  font-weight: 600;
+}
+

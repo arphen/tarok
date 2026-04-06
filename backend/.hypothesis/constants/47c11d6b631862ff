@@ -1,0 +1,4 @@
+# file: /Users/swozny/work/tarok/backend/src/tarok/adapters/ai/breeding.py
+# hypothesis_version: 6.151.10
+
+[0.0, 0.05, 0.2, 0.3, 0.4, 0.5, 1.0, 2.0, 100.0, 100, 256, 'BreedFitness', 'BreedIndividual', 'Variant', 'avg', 'avg_reward', 'behavioral_profile', 'best_fitness', 'best_profile', 'bid_rate', 'breeding', 'breeding_result', 'checkpoints', 'cpu', 'cycle', 'cycle_summaries', 'done', 'elapsed_seconds', 'evaluating', 'evaluating_index', 'evaluating_total', 'fitness', 'gen', 'gen_stats', 'generation', 'genes', 'hall_of_fame', 'idle', 'index', 'individual', 'mate', 'max', 'min', 'model_name', 'model_state_dict', 'mutate', 'phase', 'population', 'profile', 'progress', 'refine_avg_reward', 'refine_session', 'refine_win_rate', 'refining', 'select', 'solo_rate', 'std', 'top_5', 'total_cycles', 'total_generations', 'w', 'warmup', 'warmup_session', 'win_rate']
