@@ -1,4 +1,0 @@
-# file: /Users/swozny/work/tarok/backend/src/tarok/adapters/ai/trainer.py
-# hypothesis_version: 6.151.10
-
-[0.0, 1e-08, 1e-06, 0.0003, 0.01, 0.2, 0.3, 0.5, 0.95, 0.99, 1.0, 100.0, -500, 'avg_loss', 'avg_reward', 'berac', 'bid_rate', 'bid_rate_history', 'checkpoints', 'contract_stats', 'cpu', 'decl_avg_score', 'decl_played', 'decl_win_rate', 'decl_won', 'def_avg_score', 'def_played', 'def_win_rate', 'def_won', 'entropy', 'episode', 'filename', 'games_per_second', 'klop', 'klop_rate', 'klop_rate_history', 'loss_history', 'metrics', 'model_state_dict', 'one', 'optimizer_state_dict', 'played', 'policy_loss', 'reward_history', 'session', 'snapshots', 'solo', 'solo_one', 'solo_rate', 'solo_rate_history', 'solo_three', 'solo_two', 'tarok_count_bids', 'three', 'total_episodes', 'total_loss', 'total_sessions', 'two', 'value_loss', 'win_rate', 'win_rate_history']

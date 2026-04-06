@@ -3,7 +3,9 @@
 *.log
 *.sqlite
 .env
-
+.hypothesis/
+checkpoints/
+.venv/
 # Python
 __pycache__/
 *.py[cod]

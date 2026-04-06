@@ -1,4 +1,0 @@
-# file: /Users/swozny/work/tarok/backend/src/tarok/ports/__init__.py
-# hypothesis_version: 6.151.10
-
-['GameObserverPort', 'GameRepoPort', 'PlayerPort']

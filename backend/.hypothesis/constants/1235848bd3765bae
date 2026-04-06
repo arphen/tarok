@@ -1,4 +1,0 @@
-# file: /Users/swozny/work/tarok/backend/src/tarok/entities/__init__.py
-# hypothesis_version: 6.151.10
-
-['Announcement', 'Card', 'CardType', 'Contract', 'DECK', 'GameState', 'Phase', 'PlayerRole', 'Suit', 'SuitRank', 'Team', 'Trick', 'compute_card_points', 'score_game', 'suit_card', 'tarok']

@@ -1,4 +1,0 @@
-# file: /Users/swozny/work/tarok/backend/src/tarok/entities/card.py
-# hypothesis_version: 6.151.10
-
-['1', '10', '2', '3', '4', '7', '8', '9', 'C', 'I', 'II', 'III', 'IV', 'IX', 'J', 'K', 'Q', 'V', 'VI', 'VII', 'VIII', 'X', 'XI', 'XII', 'XIII', 'XIV', 'XIX', 'XV', 'XVI', 'XVII', 'XVIII', 'XX', 'XXI', 'clubs', 'diamonds', 'hearts', 'spades', 'suit', 'tarok', 'Škis', '♠', '♣', '♥', '♦']

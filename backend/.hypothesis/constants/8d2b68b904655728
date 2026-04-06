@@ -1,4 +1,0 @@
-# file: /Users/swozny/work/tarok/backend/src/tarok/engine/conditions.py
-# hypothesis_version: 6.151.10
-
-['always', 'berac', 'follow_suit', 'follow_suit_overplay', 'follow_tarok', 'has_lead_suit', 'has_taroks', 'is_leading', 'klop', 'lead_is_tarok', 'overplay_required', 'play_anything', 'skis_captured', 'skis_played', 'standard_winner', 'trump_in', 'trump_in_overplay']

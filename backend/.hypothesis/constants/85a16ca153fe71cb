@@ -1,4 +1,0 @@
-# file: /Users/swozny/work/tarok/backend/src/tarok/adapters/ai/agent.py
-# hypothesis_version: 6.151.10
-
-[0.0, 0.02, 0.1, 0.995, 1.0, 256, '-inf', 'RL-Agent', 'cpu']

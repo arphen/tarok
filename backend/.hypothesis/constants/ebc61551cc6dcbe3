@@ -1,4 +1,0 @@
-# file: /Users/swozny/work/tarok/backend/src/tarok/entities/scoring.py
-# hypothesis_version: 6.151.10
-
-[250, 500, '2v2', 'Base value', 'Berac', 'Contract base value', 'Kings (announced)', 'Kings (silent)', 'Kings (silent, opp)', 'Klop', 'Klop scoring', 'Kontra', 'Mort-kontra', 'Re', 'Result', 'Scoring mode', 'Sub-kontra', 'Total bonus', 'Trula (announced)', 'Trula (silent)', 'Trula (silent, opp)', 'Valat (announced)', 'Valat (silent)', 'Valat (silent, opp)', 'Won (0 tricks)', 'breakdown', 'card_points', 'cards', 'contract', 'declarer_points', 'declarer_won', 'detail', 'explanation', 'game', 'klop', 'label', 'lead_player', 'lines', 'mode', 'opponent_points', 'player', 'points', 'scores', 'solo', 'trick_num', 'trick_summary', 'value', 'winner']
