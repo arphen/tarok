@@ -433,6 +433,47 @@ impl PyGameState {
         }
         totals
     }
+
+    // -- StockŠkis V5 decision functions (exposed for Python V5 player) --
+
+    /// V5 bidding: returns the chosen contract as Option<u8>, or None for pass.
+    fn v5_choose_bid(&self, player: u8) -> Option<u8> {
+        let hand = self.state.hands[player as usize];
+        let highest = self.state.bids.iter()
+            .filter_map(|b| b.contract)
+            .max_by_key(|c| c.strength());
+        crate::stockskis_v5::evaluate_bid_v5(hand, highest).map(|c| c as u8)
+    }
+
+    /// V5 king calling: returns the card index to call.
+    fn v5_choose_king(&self, player: u8) -> Option<u8> {
+        let hand = self.state.hands[player as usize];
+        crate::stockskis_v5::choose_king_v5(hand).map(|c| c.0)
+    }
+
+    /// V5 talon group selection: returns the group index (0 or 1, or 0-5).
+    fn v5_choose_talon_group(&self, player: u8, groups: Vec<Vec<u8>>) -> usize {
+        let hand = self.state.hands[player as usize];
+        let groups_cards: Vec<Vec<Card>> = groups.iter()
+            .map(|g| g.iter().map(|&idx| Card(idx)).collect())
+            .collect();
+        crate::stockskis_v5::choose_talon_group_v5(
+            &groups_cards, hand, self.state.called_king
+        )
+    }
+
+    /// V5 discard selection: returns card indices to discard.
+    fn v5_choose_discards(&self, player: u8, must_discard: usize) -> Vec<u8> {
+        let hand = self.state.hands[player as usize];
+        crate::stockskis_v5::choose_discards_v5(hand, must_discard, self.state.called_king)
+            .iter().map(|c| c.0).collect()
+    }
+
+    /// V5 card play: returns the card index to play.
+    fn v5_choose_card(&self, player: u8) -> u8 {
+        let hand = self.state.hands[player as usize];
+        crate::stockskis_v5::choose_card_v5(hand, &self.state, player).0
+    }
 }
 
 /// Play a single random game (for benchmarking throughput).
@@ -668,6 +709,7 @@ pub fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(py_eval_vs_bots, m)?)?;
     m.add_function(wrap_pyfunction!(py_generate_expert_data_v2v3, m)?)?;
     m.add_function(wrap_pyfunction!(py_generate_expert_data_v2v3v5, m)?)?;
+    m.add_function(wrap_pyfunction!(py_generate_expert_data_v5, m)?)?;
 
     Ok(())
 }
@@ -757,6 +799,40 @@ fn py_generate_expert_data_v2v3(py: Python<'_>, num_games: usize, include_oracle
 #[pyo3(signature = (num_games, include_oracle=false))]
 fn py_generate_expert_data_v2v3v5(py: Python<'_>, num_games: usize, include_oracle: bool) -> PyResult<PyObject> {
     let batch = crate::expert_games_v2v3v5::generate_expert_batch_v2v3v5(num_games, include_oracle);
+    let n_exp = batch.rewards.len();
+
+    let dict = pyo3::types::PyDict::new(py);
+
+    let states = numpy::PyArray2::<f32>::from_vec2(
+        py,
+        &batch.states.chunks(batch.state_size).map(|c| c.to_vec()).collect::<Vec<_>>(),
+    ).map_err(|e| pyo3::exceptions::PyValueError::new_err(format!("states: {e}")))?;
+    dict.set_item("states", states)?;
+
+    if include_oracle && !batch.oracle_states.is_empty() {
+        let oracle = numpy::PyArray2::<f32>::from_vec2(
+            py,
+            &batch.oracle_states.chunks(batch.oracle_state_size).map(|c| c.to_vec()).collect::<Vec<_>>(),
+        ).map_err(|e| pyo3::exceptions::PyValueError::new_err(format!("oracle: {e}")))?;
+        dict.set_item("oracle_states", oracle)?;
+    } else {
+        dict.set_item("oracle_states", py.None())?;
+    }
+
+    dict.set_item("decision_types", numpy::PyArray1::<u8>::from_vec(py, batch.decision_types))?;
+    dict.set_item("actions", numpy::PyArray1::<u16>::from_vec(py, batch.actions))?;
+    dict.set_item("rewards", numpy::PyArray1::<f32>::from_vec(py, batch.rewards))?;
+    dict.set_item("legal_masks", numpy::PyArray1::<u8>::from_vec(py, batch.legal_masks))?;
+    dict.set_item("num_experiences", n_exp)?;
+
+    Ok(dict.into())
+}
+
+/// Generate expert data from v5-only bot games.
+#[pyfunction]
+#[pyo3(signature = (num_games, include_oracle=false))]
+fn py_generate_expert_data_v5(py: Python<'_>, num_games: usize, include_oracle: bool) -> PyResult<PyObject> {
+    let batch = crate::expert_games_v5::generate_expert_batch_v5(num_games, include_oracle);
     let n_exp = batch.rewards.len();
 
     let dict = pyo3::types::PyDict::new(py);
