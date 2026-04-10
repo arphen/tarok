@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import asyncio
 import copy
+import functools
 import hashlib
 import json
 import math
@@ -308,10 +309,13 @@ def _train_member_in_process(
     num_sessions: int,
     games_per_session: int,
     start_game_index: int,
+    member_index: int = 0,
+    progress_queue: Any = None,
 ) -> dict[str, Any]:
     """Run in a subprocess: self-play + PPO for one population member.
 
     Returns updated network/optimizer state_dicts and training metrics.
+    Sends periodic progress updates via *progress_queue* if provided.
     """
     from tarok.adapters.ai.agent import RLAgent
     from tarok.adapters.ai.trainer import PPOTrainer
@@ -354,6 +358,7 @@ def _train_member_in_process(
     total_scores = 0.0
     games_played = 0
     all_experiences: list = []
+    t_start = _time.perf_counter()
 
     loop = asyncio.new_event_loop()
     try:
@@ -365,18 +370,53 @@ def _train_member_in_process(
             )
             all_experiences.extend(exps)
             all_experiences.extend(sk_exps)
+            session_wins = 0.0
+            session_scores = 0.0
             for stat in stats + sk_stats:
                 raw_score = stat["raw_score"]
                 total_scores += raw_score
+                session_scores += raw_score
                 total_rewards += raw_score / 100.0
                 total_wins += 1.0 if raw_score > 0 else 0.0
+                session_wins += 1.0 if raw_score > 0 else 0.0
                 games_played += 1
             trainer.metrics.session += 1
+
+            # Report progress after each session
+            if progress_queue is not None:
+                elapsed = _time.perf_counter() - t_start
+                n_session_games = len(stats) + len(sk_stats)
+                progress_queue.put({
+                    "type": "session",
+                    "member": member_index,
+                    "session": session_offset + 1,
+                    "total_sessions": num_sessions,
+                    "games": games_played,
+                    "games_per_sec": games_played / max(elapsed, 0.01),
+                    "win_rate": total_wins / max(games_played, 1),
+                    "avg_score": total_scores / max(games_played, 1),
+                })
     finally:
         loop.close()
 
+    # Report PPO phase
+    if progress_queue is not None:
+        progress_queue.put({
+            "type": "ppo_start",
+            "member": member_index,
+            "experiences": len(all_experiences),
+        })
+
     loss_info = trainer._ppo_update(all_experiences) if all_experiences else {}
     n = max(games_played, 1)
+
+    if progress_queue is not None:
+        progress_queue.put({
+            "type": "done",
+            "member": member_index,
+            "games": games_played,
+            "elapsed": _time.perf_counter() - t_start,
+        })
 
     return {
         "network_state": trainer.shared_network.state_dict(),
@@ -1215,23 +1255,77 @@ async def _run_pbt_self_play_session(
             _lab.pbt_member_total = len(members)
             _sync_population_state(members)
 
-            # Parallel training: submit all members to process pool
+            # Parallel training with live progress reporting
             pool = _get_train_pool()
             loop = asyncio.get_event_loop()
+            manager = mp.Manager()
+            progress_queue = manager.Queue()
+            gen_start = time.perf_counter()
+
             train_futures = [
                 loop.run_in_executor(
-                    pool, _train_member_in_process,
-                    m["trainer"].shared_network.state_dict(),
-                    m["trainer"].optimizer.state_dict(),
-                    dict(m["hparams"]),
-                    hidden_size,
-                    sessions_this_generation,
-                    games_per_session,
-                    global_game_index + m["index"] * sessions_this_generation * games_per_session,
+                    pool,
+                    functools.partial(
+                        _train_member_in_process,
+                        m["trainer"].shared_network.state_dict(),
+                        m["trainer"].optimizer.state_dict(),
+                        dict(m["hparams"]),
+                        hidden_size,
+                        sessions_this_generation,
+                        games_per_session,
+                        global_game_index + m["index"] * sessions_this_generation * games_per_session,
+                        member_index=m["index"],
+                        progress_queue=progress_queue,
+                    ),
                 )
                 for m in members
             ]
-            train_results = await asyncio.gather(*train_futures)
+
+            # Poll progress queue while waiting for all workers to finish
+            pending = set(range(len(members)))
+            member_games: dict[int, int] = {m["index"]: 0 for m in members}
+            member_gps: dict[int, float] = {m["index"]: 0.0 for m in members}
+            done_futures: set[int] = set()
+
+            while pending:
+                # Drain all available progress messages
+                while not progress_queue.empty():
+                    try:
+                        msg = progress_queue.get_nowait()
+                    except Exception:
+                        break
+                    idx = msg.get("member", 0)
+                    if msg["type"] == "session":
+                        member_games[idx] = msg["games"]
+                        member_gps[idx] = msg["games_per_sec"]
+                        _lab.self_play_games = sum(
+                            m.get("games", 0) for m in members
+                        ) + sum(member_games.values())
+                        _lab.sp_games_per_second = sum(member_gps.values())
+                        _lab.sp_win_rate = msg["win_rate"]
+                        _lab.sp_avg_score = msg["avg_score"]
+                        # Update member status
+                        if idx < len(members):
+                            members[idx]["status"] = f"training ({msg['session']}/{msg['total_sessions']})"
+                        _sync_population_state(members)
+                    elif msg["type"] == "ppo_start":
+                        if idx < len(members):
+                            members[idx]["status"] = "ppo_update"
+                        _sync_population_state(members)
+                    elif msg["type"] == "done":
+                        done_futures.add(idx)
+
+                # Check which futures have completed
+                newly_done = set()
+                for i, fut in enumerate(train_futures):
+                    if i in pending and fut.done():
+                        newly_done.add(i)
+                pending -= newly_done
+
+                if pending:
+                    await asyncio.sleep(0.25)
+
+            train_results = [f.result() for f in train_futures]
 
             for member, result in zip(members, train_results):
                 member["trainer"].shared_network.load_state_dict(result["network_state"])
