@@ -1195,6 +1195,170 @@ async def _background_pbt_eval(
         traceback.print_exc()
 
 
+# ---------------------------------------------------------------------------
+# Island-model PBT — each island is its own OS process with
+# zero IPC.  Coordination via Hall of Fame on the file system.
+# ---------------------------------------------------------------------------
+
+_island_processes: list[mp.Process] = []
+_island_stop_event: mp.Event | None = None
+
+
+async def _run_island_pbt_session(
+    num_sessions: int,
+    games_per_session: int,
+    eval_games: int,
+    eval_interval: int,
+    learning_rate: float,
+    population_size: int,
+    mutation_scale: float,
+):
+    """Island-model PBT: N fully independent training loops,
+    coordinating only via the Hall of Fame directory."""
+    global _lab, _island_processes, _island_stop_event
+
+    from tarok.adapters.ai.island_worker import (
+        island_worker,
+        read_all_island_stats,
+        clear_island_stats,
+        _default_hparams,
+        _load_best_from_hof,
+    )
+
+    try:
+        _lab.phase = "self_play"
+        _lab.active_program = "self_play_pbt"
+        _lab.pbt_enabled = True
+        _lab.pbt_population_size = population_size
+
+        hidden_size = _lab.hidden_size
+        checkpoints_dir = str(CHECKPOINTS_DIR)
+
+        # Compute total games target
+        target_games = num_sessions * games_per_session * eval_interval
+
+        # Seed weights from current lab network (if any)
+        seed_state = None
+        if _lab.network is not None:
+            seed_state = {k: v.cpu().clone() for k, v in _lab.network.state_dict().items()}
+
+        # Clear old stats files
+        clear_island_stats(CHECKPOINTS_DIR)
+
+        # Create shared stop event
+        ctx = mp.get_context("spawn")
+        _island_stop_event = ctx.Event()
+
+        # Base hparams — each island will mutate
+        base_hp = _default_hparams(lr=learning_rate)
+
+        # Spawn island processes
+        _island_processes = []
+        for i in range(population_size):
+            p = ctx.Process(
+                target=island_worker,
+                kwargs=dict(
+                    island_id=i,
+                    stop_event=_island_stop_event,
+                    checkpoints_dir=checkpoints_dir,
+                    hidden_size=hidden_size,
+                    games_per_session=games_per_session,
+                    eval_games=eval_games,
+                    eval_interval=eval_interval,
+                    seed_state_dict=seed_state,
+                    hparams=dict(base_hp),
+                    mutation_scale=mutation_scale,
+                ),
+                daemon=True,
+            )
+            p.start()
+            _island_processes.append(p)
+
+        _lab.pbt_population = [
+            {"index": i, "label": f"Island {i}", "status": "running",
+             "fitness": 0, "games": 0, "hparams": {}}
+            for i in range(population_size)
+        ]
+
+        # Poll island stats files for dashboard updates
+        t_start = time.perf_counter()
+        while _lab.running:
+            stats = read_all_island_stats(CHECKPOINTS_DIR)
+            total_games = sum(s.get("total_games", 0) for s in stats)
+            total_gps = sum(s.get("games_per_sec", 0) for s in stats)
+
+            _lab.self_play_games = total_games
+            _lab.sp_games_per_second = round(total_gps, 1)
+
+            # Update per-island population display
+            for s in stats:
+                idx = s.get("island_id", 0)
+                if idx < len(_lab.pbt_population):
+                    _lab.pbt_population[idx].update({
+                        "status": s.get("status", "running"),
+                        "fitness": s.get("best_fitness", 0),
+                        "games": s.get("total_games", 0),
+                        "win_rate": s.get("win_rate", 0),
+                        "vs_v1": s.get("vs_v1", 0),
+                        "vs_v3": s.get("vs_v3", 0),
+                        "games_per_sec": s.get("games_per_sec", 0),
+                        "generation": s.get("generation", 0),
+                        "hparams": s.get("hparams", {}),
+                    })
+
+            # Best across all islands
+            if stats:
+                best = max(stats, key=lambda s: s.get("best_fitness", 0))
+                _lab.sp_win_rate = best.get("win_rate", 0)
+                _lab.sp_avg_score = best.get("avg_score", 0)
+                _lab.current_loss = best.get("loss", 0)
+                _lab.pbt_generation = max(s.get("generation", 0) for s in stats)
+
+            # Check if target reached
+            if target_games > 0 and total_games >= target_games:
+                break
+
+            # Check if all processes have died
+            alive = [p for p in _island_processes if p.is_alive()]
+            if not alive:
+                break
+
+            await asyncio.sleep(0.5)
+
+        # Signal stop
+        if _island_stop_event is not None:
+            _island_stop_event.set()
+
+        # Wait for processes to finish (up to 10 seconds)
+        for p in _island_processes:
+            p.join(timeout=10)
+            if p.is_alive():
+                p.terminate()
+
+        # Load best model from HoF back into lab state
+        hof_data = _load_best_from_hof(HOF_DIR)
+        if hof_data is not None and _lab.network is not None:
+            _lab.network.load_state_dict(hof_data["model_state_dict"])
+            _lab.model_hash = _model_hash(_lab.network)
+
+        _lab.phase = "done"
+
+    except Exception as e:
+        _lab.phase = "idle"
+        _lab.error = str(e)
+        import traceback
+        traceback.print_exc()
+    finally:
+        _lab.running = False
+        if _island_stop_event is not None:
+            _island_stop_event.set()
+        for p in _island_processes:
+            if p.is_alive():
+                p.terminate()
+        _island_processes = []
+        _island_stop_event = None
+
+
 async def _run_pbt_self_play_session(
     num_sessions: int,
     games_per_session: int,
@@ -1942,17 +2106,13 @@ async def start_self_play(
 
     if _lab.pbt_enabled:
         _lab_task = asyncio.create_task(
-            _run_pbt_self_play_session(
+            _run_island_pbt_session(
                 num_sessions=num_sessions,
                 games_per_session=games_per_session,
                 eval_games=eval_games,
                 eval_interval=eval_interval,
                 learning_rate=learning_rate,
-                stockskis_ratio=stockskis_ratio,
-                fsp_ratio=fsp_ratio,
                 population_size=population_size,
-                exploit_top_ratio=exploit_top_ratio,
-                exploit_bottom_ratio=exploit_bottom_ratio,
                 mutation_scale=mutation_scale,
             )
         )
@@ -1972,8 +2132,10 @@ async def start_self_play(
 
 def stop_lab():
     """Stop training."""
-    global _lab, _lab_task
+    global _lab, _lab_task, _island_stop_event, _island_processes
     _lab.running = False
+    if _island_stop_event is not None:
+        _island_stop_event.set()
     if _lab_task and not _lab_task.done():
         _lab_task.cancel()
     _lab.phase = "idle"
