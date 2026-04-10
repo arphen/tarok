@@ -106,7 +106,7 @@ function formatSpectatorEvent(
 
 export interface AgentConfig {
   name: string;
-  type: 'rl' | 'random' | 'lookahead';
+  type: string;
   checkpoint?: string;
 }
 

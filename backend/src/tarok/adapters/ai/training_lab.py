@@ -2,7 +2,7 @@
 
 Provides endpoints for:
 1. Creating a fresh neural network with a generated persona
-2. Evaluating it against v1/v2/v3 heuristic bots (real games)
+2. Evaluating it against v1/v2/v3/v3.2 heuristic bots (real games)
 3. Generating expert data from v2/v3 bots (imitation learning)
 4. Self-play PPO training with all existing improvements
 5. Saving snapshots to Hall of Fame for model selection / FSP
@@ -53,6 +53,7 @@ from tarok.adapters.ai.imitation import imitation_pretrain
 from tarok.adapters.ai.stockskis_player import StockSkisPlayer
 from tarok.adapters.ai.stockskis_v2 import StockSkisPlayerV2
 from tarok.adapters.ai.stockskis_v3 import StockSkisPlayerV3
+from tarok.adapters.ai.stockskis_v3_2 import StockSkisPlayerV3_2
 from tarok.adapters.ai.stockskis_v4 import StockSkisPlayerV4
 from tarok.adapters.api.spectator_observer import SpectatorObserver
 from tarok.use_cases.game_loop import GameLoop
@@ -140,6 +141,7 @@ def save_to_hof(network: TarokNet, persona: dict, eval_history: list[dict], phas
             "vs_v1": latest_eval.get("vs_v1", 0),
             "vs_v2": latest_eval.get("vs_v2", 0),
             "vs_v3": latest_eval.get("vs_v3", 0),
+            "vs_v3.2": latest_eval.get("vs_v3.2", 0),
             "avg_score_v1": latest_eval.get("avg_score_v1", 0),
         },
         "saved_at": time.time(),
@@ -161,6 +163,7 @@ def save_to_hof(network: TarokNet, persona: dict, eval_history: list[dict], phas
         "vs_v1": latest_eval.get("vs_v1", 0),
         "vs_v2": latest_eval.get("vs_v2", 0),
         "vs_v3": latest_eval.get("vs_v3", 0),
+        "vs_v3.2": latest_eval.get("vs_v3.2", 0),
         "saved_at": data["saved_at"],
     })
     manifest_path.write_text(json.dumps(manifest, indent=2))
@@ -638,6 +641,8 @@ def _make_opponents(version: str) -> list:
         return [StockSkisPlayerV2(name=f"V2-{i}") for i in range(3)]
     elif version == "v3":
         return [StockSkisPlayerV3(name=f"V3-{i}") for i in range(3)]
+    elif version == "v3.2":
+        return [StockSkisPlayerV3_2(name=f"V3.2-{i}") for i in range(3)]
     elif version == "v4":
         return [StockSkisPlayerV4(name=f"V4-{i}") for i in range(3)]
     else:
@@ -1344,6 +1349,7 @@ async def _run_island_pbt_session(
                         "batch_win_rate": s.get("session_win_rate", 0),
                         "vs_v1": s.get("vs_v1", 0),
                         "vs_v3": s.get("vs_v3", 0),
+                        "vs_v3.2": s.get("vs_v3.2", 0),
                         "loss": s.get("loss", 0),
                         "games_per_sec": s.get("games_per_sec", 0),
                         "generation": s.get("generation", 0),

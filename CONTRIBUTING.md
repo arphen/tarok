@@ -25,9 +25,11 @@ make stop       # kills both
 | 2 | Python 3.12+ | Yes |
 | 3 | Node.js | Yes |
 | 4 | [uv](https://docs.astral.sh/uv/) (Python package manager) | Yes |
-| 5 | Backend Python deps (including dev/test) | — |
-| 6 | Frontend npm deps | — |
-| 7 | Git pre-commit hook | — |
+| 5 | [Rust](https://www.rust-lang.org/) (via rustup) | Yes |
+| 6 | Backend Python deps (including dev/test) | — |
+| 7 | Frontend npm deps | — |
+| 8 | Rust engine (`tarok_engine` PyO3 extension) | — |
+| 9 | Git pre-commit hook | — |
 
 ### If you already have the tools
 

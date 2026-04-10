@@ -150,11 +150,36 @@ Or use the in-browser Training Dashboard (click "Train AI" on the home page).
 | `make test-frontend-unit` | Frontend Vitest unit tests |
 | `make test-e2e` | Playwright E2E |
 | `make test-coverage` | Backend coverage report |
+| `make build-engine` | Compile Rust engine (PyO3) into the Python venv |
 | `make build` | Production frontend build |
 | `make train` | Train RL agents |
 | `make evolve` | Hyperparameter evolution |
 | `make breed` | Behavioral breeding |
 | `make clean` | Remove caches, venvs, node_modules |
+
+## Rust Engine (optional but recommended)
+
+The `engine-rs/` directory contains a PyO3-based Rust extension (`tarok_engine`)
+that accelerates game simulation 10–100× over the pure-Python implementation.
+It's used for training, batch game running, and the imitation learning pipeline.
+
+```bash
+# One-time: install Rust (if not already present)
+curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
+
+# Build and install into the backend venv
+make build-engine
+```
+
+`make setup` handles both steps automatically. If the extension is not installed,
+the backend falls back to the pure-Python game loop — training will be slower but
+still functional.
+
+To verify the extension is installed:
+
+```bash
+cd backend && PYTHONPATH=src uv run python -c "import tarok_engine; print('OK')"
+```
 
 ## License
 

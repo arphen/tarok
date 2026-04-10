@@ -85,6 +85,50 @@
   color: #c41e3a !important;
 }
 
+/* ---- Face card fallback (Jack/Knight/Queen/King) ---- */
+.card-face {
+  border: 2px solid #b8960c !important;
+  background: linear-gradient(170deg, #fffef5 0%, #f5ecd0 50%, #ede0b8 100%) !important;
+}
+
+.card-face.card-red {
+  color: #c41e3a !important;
+}
+
+.card-face.card-black {
+  color: #1a1a1a !important;
+}
+
+.face-card-center {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 2px;
+}
+
+.face-card-emblem {
+  font-size: 28px;
+  line-height: 1;
+  filter: drop-shadow(0 1px 2px rgba(0, 0, 0, 0.15));
+}
+
+.card-small .face-card-emblem {
+  font-size: 20px;
+}
+
+.face-card-title {
+  font-size: 8px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  color: #8b7a2e;
+  opacity: 0.8;
+}
+
+.card-small .face-card-title {
+  font-size: 6px;
+}
+
 .card-fallback .tarok-number,
 .card-fallback .card-numeral {
   color: #333;
