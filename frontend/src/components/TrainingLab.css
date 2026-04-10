@@ -115,6 +115,25 @@
   font-size: 14px;
 }
 
+.lab-checkbox-group {
+  display: flex;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.lab-checkbox {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 13px;
+  cursor: pointer;
+}
+
+.lab-checkbox input[type="checkbox"] {
+  accent-color: #d4a843;
+  cursor: pointer;
+}
+
 .lab-field-wide {
   flex: 1 1 320px;
 }
