@@ -361,6 +361,8 @@ export function useSpectator() {
     }
   }, [gameFinished, state.scores]);
 
+  const currentEventName = currentItem?.eventName ?? null;
+
   return {
     state,
     gameId,
@@ -369,6 +371,7 @@ export function useSpectator() {
     mode,
     replayName,
     logEntries,
+    currentEventName,
     startGame,
     loadReplay,
     disconnect,
