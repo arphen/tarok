@@ -282,7 +282,7 @@ def _eval_member_in_process(
 ) -> dict:
     """Run in a subprocess: evaluate one network snapshot against selected bots."""
     if eval_bots is None:
-        eval_bots = ["v1", "v2", "v3"]
+        eval_bots = ["v1", "v2", "v3", "v5"]
     net = TarokNet(hidden_size=hidden_size)
     net.load_state_dict(state_dict)
     net.eval()
@@ -664,6 +664,29 @@ def _evaluate_vs_bots_sync(
 
     wins = 0
     total_diff = 0
+    total_points = 0
+    total_place = 0.0
+    total_bids = 0
+    decl_games = 0
+    decl_wins = 0
+    decl_points = 0
+    def_games = 0
+    def_wins = 0
+    def_points = 0
+    contract_breakdown: dict[str, dict[str, float]] = {
+        name: {
+            "games": 0,
+            "wins": 0,
+            "points": 0.0,
+            "decl_games": 0,
+            "decl_wins": 0,
+            "decl_points": 0.0,
+            "def_games": 0,
+            "def_wins": 0,
+            "def_points": 0.0,
+        }
+        for name in ["klop", "three", "two", "one", "solo_three", "solo_two", "solo_one", "solo", "berac"]
+    }
 
     loop = asyncio.new_event_loop()
     try:
@@ -675,6 +698,16 @@ def _evaluate_vs_bots_sync(
             raw_score = scores.get(0, 0)
             opp_avg = sum(scores.get(i, 0) for i in range(1, 4)) / 3
             total_diff += raw_score - opp_avg
+            total_points += raw_score
+
+            # Placement (1=best, 4=worst) for evaluation richness.
+            sorted_players = sorted(scores, key=lambda p: scores[p], reverse=True)
+            places = {p: rank + 1 for rank, p in enumerate(sorted_players)}
+            total_place += float(places.get(0, 4))
+
+            # Bid participation as a behaviour signal.
+            p0_bids = [b for b in _state.bids if b.player == 0 and b.contract is not None]
+            total_bids += 1 if p0_bids else 0
 
             is_klop = _state.contract is not None and _state.contract.is_klop
             if is_klop:
@@ -687,15 +720,85 @@ def _evaluate_vs_bots_sync(
 
             if won:
                 wins += 1
+
+            declarer_p0 = _state.declarer == 0
+            if declarer_p0:
+                decl_games += 1
+                decl_points += raw_score
+                if won:
+                    decl_wins += 1
+            else:
+                def_games += 1
+                def_points += raw_score
+                if won:
+                    def_wins += 1
+
+            contract_name = _state.contract.name.lower() if _state.contract is not None else "klop"
+            if contract_name in contract_breakdown:
+                c = contract_breakdown[contract_name]
+                c["games"] += 1
+                c["points"] += float(raw_score)
+                if won:
+                    c["wins"] += 1
+                if declarer_p0:
+                    c["decl_games"] += 1
+                    c["decl_points"] += float(raw_score)
+                    if won:
+                        c["decl_wins"] += 1
+                else:
+                    c["def_games"] += 1
+                    c["def_points"] += float(raw_score)
+                    if won:
+                        c["def_wins"] += 1
+
             agent.clear_experiences()
     finally:
         loop.close()
 
     win_rate = wins / max(num_games, 1)
     avg_score = total_diff / max(num_games, 1)
+    avg_points = total_points / max(num_games, 1)
+    avg_place = total_place / max(num_games, 1)
+    bid_rate = total_bids / max(num_games, 1)
+    decl_win_rate = decl_wins / max(decl_games, 1)
+    def_win_rate = def_wins / max(def_games, 1)
+    decl_avg_points = decl_points / max(decl_games, 1)
+    def_avg_points = def_points / max(def_games, 1)
+
+    # Composite eval signal prioritizing win rate, then points, then placement.
+    score_term = max(-1.0, min(1.0, avg_points / 120.0))
+    place_term = max(0.0, min(1.0, (4.0 - avg_place) / 3.0))
+    eval_signal = 0.55 * win_rate + 0.30 * ((score_term + 1.0) / 2.0) + 0.15 * place_term
+
+    contract_stats_out: dict[str, dict[str, float]] = {}
+    for cname, c in contract_breakdown.items():
+        games = int(c["games"])
+        decl_games_c = int(c["decl_games"])
+        def_games_c = int(c["def_games"])
+        contract_stats_out[cname] = {
+            "games": games,
+            "win_rate": round(float(c["wins"]) / max(games, 1), 4),
+            "avg_points": round(float(c["points"]) / max(games, 1), 2),
+            "decl_games": decl_games_c,
+            "decl_win_rate": round(float(c["decl_wins"]) / max(decl_games_c, 1), 4),
+            "decl_avg_points": round(float(c["decl_points"]) / max(decl_games_c, 1), 2),
+            "def_games": def_games_c,
+            "def_win_rate": round(float(c["def_wins"]) / max(def_games_c, 1), 4),
+            "def_avg_points": round(float(c["def_points"]) / max(def_games_c, 1), 2),
+        }
+
     return {
         "win_rate": round(win_rate, 4),
         "avg_score": round(avg_score, 2),
+        "avg_points": round(avg_points, 2),
+        "avg_place": round(avg_place, 2),
+        "bid_rate": round(bid_rate, 4),
+        "decl_win_rate": round(decl_win_rate, 4),
+        "def_win_rate": round(def_win_rate, 4),
+        "decl_avg_points": round(decl_avg_points, 2),
+        "def_avg_points": round(def_avg_points, 2),
+        "eval_signal": round(eval_signal, 4),
+        "contract_stats": contract_stats_out,
         "games": num_games,
     }
 
@@ -745,6 +848,16 @@ def _eval_results_to_history_entry(
     for v, r in results.items():
         entry[f"vs_{v}"] = r["win_rate"]
         entry[f"avg_score_{v}"] = r["avg_score"]
+        entry[f"avg_points_{v}"] = r.get("avg_points", 0.0)
+        entry[f"avg_place_{v}"] = r.get("avg_place", 0.0)
+        entry[f"bid_rate_{v}"] = r.get("bid_rate", 0.0)
+        entry[f"decl_win_rate_{v}"] = r.get("decl_win_rate", 0.0)
+        entry[f"def_win_rate_{v}"] = r.get("def_win_rate", 0.0)
+        entry[f"decl_avg_points_{v}"] = r.get("decl_avg_points", 0.0)
+        entry[f"def_avg_points_{v}"] = r.get("def_avg_points", 0.0)
+        entry[f"eval_signal_{v}"] = r.get("eval_signal", 0.0)
+        if v == "v5":
+            entry["contract_stats_v5"] = r.get("contract_stats", {})
     return entry
 
 
@@ -1097,7 +1210,7 @@ async def _run_population_member(
 
 async def _evaluate_population_member(member: dict[str, Any], eval_games: int, eval_bots: list[str] | None = None) -> dict[str, float]:
     if eval_bots is None:
-        eval_bots = ["v1", "v2", "v3"]
+        eval_bots = ["v1", "v2", "v3", "v5"]
     network = member["trainer"].shared_network
     results = await _evaluate_vs_selected_bots(network, eval_games, eval_bots)
 
@@ -1145,7 +1258,7 @@ async def _background_pbt_eval(
     and _lab.pbt_generation_history for the dashboard.
     """
     if eval_bots is None:
-        eval_bots = ["v1", "v2", "v3"]
+        eval_bots = ["v1", "v2", "v3", "v5"]
     global _lab
     try:
         pool = _get_eval_pool()
@@ -2105,7 +2218,7 @@ async def start_lab_training(
     global _lab, _lab_task
 
     if eval_bots is None:
-        eval_bots = ["v1", "v2", "v3"]
+        eval_bots = ["v1", "v2", "v3", "v5"]
 
     if _lab.network is None:
         create_lab_network()
@@ -2149,14 +2262,14 @@ async def start_self_play(
     global _lab, _lab_task
 
     if eval_bots is None:
-        eval_bots = ["v1", "v2", "v3"]
+        eval_bots = ["v1", "v2", "v3", "v5"]
 
     if _lab.network is None:
         create_lab_network()
 
     _lab.running = True
     _lab.error = None
-    _lab.pbt_enabled = pbt_enabled or population_size > 1
+    _lab.pbt_enabled = pbt_enabled
     _lab.pbt_generation = 0
     _lab.pbt_total_generations = 0
     _lab.pbt_population_size = population_size if _lab.pbt_enabled else 0

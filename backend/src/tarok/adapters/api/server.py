@@ -7,15 +7,13 @@ import base64
 import time
 from contextlib import asynccontextmanager
 from pathlib import Path
-import importlib
-import re
 
 from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 
 from tarok.adapters.ai.agent import RLAgent
-from tarok.adapters.ai.lookahead_agent import LookaheadAgent
+from tarok.adapters.ai.bot_registry import get_registry
 from tarok.adapters.ai.random_agent import RandomPlayer
 from tarok.adapters.ai.trainer import PPOTrainer, TrainingMetrics
 from tarok.adapters.api.human_player import HumanPlayer
@@ -262,16 +260,19 @@ async def list_checkpoints():
 
 # ---- Game endpoints ----
 
-def _load_opponent(choice: str, index: int) -> RLAgent:
-    """Load a single AI opponent from a checkpoint choice."""
-    if choice == "random":
-        agent = RLAgent(name=f"AI-{index + 1}")
-        agent.set_training(False)
-        return agent
+def _load_opponent(choice: str, index: int):
+    """Load a single AI opponent from a choice string.
 
-    if choice == "lookahead":
-        return LookaheadAgent(n_simulations=50, name=name)
+    Supports registry bots (random, stockskis_v1..v5, lookahead, etc.)
+    and checkpoint filenames for RL agents.
+    """
+    registry = get_registry()
 
+    # Check registry first (stockskis_v1..v5, random, lookahead, etc.)
+    if registry.has(choice):
+        return registry.create(choice, name=f"AI-{index + 1}")
+
+    # RL checkpoint path
     if choice == "latest":
         path = Path("checkpoints/tarok_agent_latest.pt")
     else:
@@ -453,28 +454,12 @@ class SpectateRequest(BaseModel):
     delay: float = 1.5  # seconds between moves
 
 
-_STOCKSKIS_FILE_RE = re.compile(r"^stockskis_v(\d+)\.py$")
-
-
 def _available_stockskis_versions() -> list[int]:
-    ai_dir = Path(__file__).resolve().parents[1] / "ai"
-    versions: list[int] = []
-    try:
-        for f in ai_dir.iterdir():
-            m = _STOCKSKIS_FILE_RE.match(f.name)
-            if m:
-                versions.append(int(m.group(1)))
-    except Exception:
-        return []
-    return sorted(set(versions))
+    return get_registry().stockskis_versions
 
 
 def _build_stockskis_player(version: int, name: str):
-    mod = importlib.import_module(f"tarok.adapters.ai.stockskis_v{version}")
-    cls = getattr(mod, f"StockSkisPlayerV{version}", None)
-    if cls is None:
-        raise ValueError(f"StockSkisPlayerV{version} not found")
-    return cls(name=name)
+    return get_registry().create(f"stockskis_v{version}", name=name)
 
 
 def _build_spectate_agent(cfg: dict, idx: int):
@@ -483,25 +468,18 @@ def _build_spectate_agent(cfg: dict, idx: int):
     agent_name = str(cfg.get("name", f"Agent-{idx}"))
     checkpoint = cfg.get("checkpoint")
 
-    if agent_type == "random":
-        return RandomPlayer(name=agent_name)
+    registry = get_registry()
 
-    # StockŠkis heuristics (dynamic versions)
+    # Check registry first (random, stockskis_v*, lookahead, etc.)
+    if registry.has(agent_type):
+        return registry.create(agent_type, name=agent_name)
+
+    # Bare "stockskis" → latest version
     if agent_type == "stockskis":
-        versions = _available_stockskis_versions()
+        versions = registry.stockskis_versions
         if not versions:
             raise HTTPException(status_code=400, detail="No StockŠkis versions available on server")
-        return _build_stockskis_player(max(versions), name=agent_name)
-
-    m = re.match(r"^stockskis_v(\d+)$", agent_type)
-    if m:
-        version = int(m.group(1))
-        try:
-            return _build_stockskis_player(version, name=agent_name)
-        except ModuleNotFoundError as exc:
-            raise HTTPException(status_code=400, detail=f"Unknown StockŠkis version: v{version}") from exc
-        except ValueError as exc:
-            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        return registry.create(f"stockskis_v{max(versions)}", name=agent_name)
 
     # RL agent
     ckpt_path = Path("checkpoints") / checkpoint if checkpoint else Path("checkpoints/tarok_agent_latest.pt")
@@ -522,6 +500,28 @@ async def list_stockskis_versions():
         "latest": (f"v{max(versions)}" if versions else None),
         "types": ([f"stockskis_v{v}" for v in versions] if versions else []),
     }
+
+
+@app.get("/api/agents")
+async def list_agents():
+    """List all available agent types for opponent selection.
+
+    Returns categorised entries so the frontend can group them in the lobby
+    dropdown (heuristic bots, baseline, search, neural checkpoints).
+    """
+    registry = get_registry()
+    bots = registry.list_bots()
+
+    # Also include "latest" as a virtual entry for the NN checkpoint
+    bots.append({
+        "id": "latest",
+        "name": "Latest trained model",
+        "description": "Most recent PPO-trained neural network checkpoint",
+        "category": "neural",
+        "version": None,
+    })
+
+    return {"agents": bots}
 
 
 @app.post("/api/spectate/new")
@@ -614,33 +614,42 @@ class TournamentMatchRequest(BaseModel):
 
 def _build_agent(cfg: dict, idx: int):
     """Instantiate a single agent from a config dict."""
-    agent_type = cfg.get("type", "rl")
+    agent_type = str(cfg.get("type", "rl")).strip().lower()
     agent_name = cfg.get("name", f"Agent-{idx}")
     checkpoint = cfg.get("checkpoint")
 
-    if agent_type == "random":
-        return RandomPlayer(name=agent_name)
-    elif agent_type == "lookahead":
-        return LookaheadAgent(n_simulations=50, name=agent_name)
+    registry = get_registry()
+
+    # Check registry first (random, stockskis_v*, lookahead, etc.)
+    if registry.has(agent_type):
+        return registry.create(agent_type, name=agent_name)
+
+    # Bare "stockskis" → latest version
+    if agent_type == "stockskis":
+        versions = registry.stockskis_versions
+        if versions:
+            return registry.create(f"stockskis_v{max(versions)}", name=agent_name)
+
+    # RL agent (checkpoint)
+    ckpt_path = None
+    if checkpoint:
+        candidate = Path("checkpoints") / checkpoint
+        root_candidate = Path("../checkpoints") / checkpoint
+        if candidate.exists():
+            ckpt_path = candidate
+        elif root_candidate.exists():
+            ckpt_path = root_candidate
     else:
-        ckpt_path = None
-        if checkpoint:
-            candidate = Path("checkpoints") / checkpoint
-            root_candidate = Path("../checkpoints") / checkpoint
-            if candidate.exists():
-                ckpt_path = candidate
-            elif root_candidate.exists():
-                ckpt_path = root_candidate
-        else:
-            default = Path("checkpoints/tarok_agent_latest.pt")
-            if default.exists():
-                ckpt_path = default
-        if ckpt_path:
-            agent = RLAgent.from_checkpoint(ckpt_path, name=agent_name)
-        else:
-            agent = RLAgent(name=agent_name)
-        agent.set_training(False)
-        return agent
+        default = Path("checkpoints/tarok_agent_latest.pt")
+        if default.exists():
+            ckpt_path = default
+
+    if ckpt_path:
+        agent = RLAgent.from_checkpoint(ckpt_path, name=agent_name)
+    else:
+        agent = RLAgent(name=agent_name)
+    agent.set_training(False)
+    return agent
 
 
 @app.post("/api/tournament/match")
@@ -1428,7 +1437,7 @@ async def lab_start(req: dict = {}):
     await start_lab_training(
         expert_games=req.get("expert_games", 500_000),
         expert_source=req.get("expert_source", "v2v3v5"),
-        eval_bots=req.get("eval_bots", ["v1", "v2", "v3"]),
+        eval_bots=req.get("eval_bots", ["v1", "v2", "v3", "v5"]),
         training_epochs=req.get("training_epochs", 3),
         eval_games=req.get("eval_games", 500),
         num_rounds=req.get("num_rounds", 10),
@@ -1455,7 +1464,7 @@ async def lab_self_play(req: dict = {}):
         num_sessions=req.get("num_sessions", 50),
         games_per_session=req.get("games_per_session", 20),
         eval_games=req.get("eval_games", 100),
-        eval_bots=req.get("eval_bots", ["v1", "v2", "v3"]),
+        eval_bots=req.get("eval_bots", ["v1", "v2", "v3", "v5"]),
         eval_interval=req.get("eval_interval", 5),
         learning_rate=req.get("learning_rate", 3e-4),
         stockskis_ratio=req.get("stockskis_ratio", 0.0),

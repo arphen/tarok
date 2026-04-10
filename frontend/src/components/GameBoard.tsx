@@ -43,8 +43,30 @@ export default function GameBoard({
   const [discardSelection, setDiscardSelection] = useState<CardData[]>([]);
 
   const mustDiscard = state.must_discard;
+  const suitDiscardables = state.hand.filter(c => c.card_type !== 'tarok' && !(c.card_type === 'suit' && c.value === 8));
+  const canUseTarokDiscards = suitDiscardables.length < mustDiscard;
+  const discardCandidates = canUseTarokDiscards
+    ? state.hand.filter(c => !(c.card_type === 'suit' && c.value === 8))
+    : suitDiscardables;
   const isSolo = state.contract !== null && SOLO_CONTRACTS.has(state.contract);
   const teamOf = (idx: number) => getTeamRole(state, idx);
+
+  const isDiscardSelectionValid = (selection: CardData[]) => {
+    if (selection.length !== mustDiscard) return false;
+    if (selection.some(c => c.card_type === 'suit' && c.value === 8)) return false;
+
+    const selectedSuitDiscardables = selection.filter(
+      c => c.card_type !== 'tarok' && !(c.card_type === 'suit' && c.value === 8),
+    );
+    const selectedTaroks = selection.filter(c => c.card_type === 'tarok');
+
+    // Backend rule: if any tarok is discarded, all discardable suit cards must also be discarded.
+    if (selectedTaroks.length > 0 && selectedSuitDiscardables.length < suitDiscardables.length) {
+      return false;
+    }
+
+    return true;
+  };
 
   const toggleDiscard = (card: CardData) => {
     setDiscardSelection(prev => {
@@ -56,7 +78,7 @@ export default function GameBoard({
   };
 
   const submitDiscard = () => {
-    if (discardSelection.length === mustDiscard) {
+    if (isDiscardSelectionValid(discardSelection)) {
       onDiscard(discardSelection);
       setDiscardSelection([]);
     }
@@ -141,9 +163,13 @@ export default function GameBoard({
           {state.phase === 'talon_exchange' && isMyTurn && mustDiscard > 0 && (
             <div className="talon-selection">
               <h3>Discard {mustDiscard} card{mustDiscard > 1 ? 's' : ''}</h3>
-              <p className="bidding-subtitle">Select cards from your hand to put down (no kings or taroks)</p>
+              <p className="bidding-subtitle">
+                {canUseTarokDiscards
+                  ? 'Select cards to put down (no kings). If discarding taroks, include all discardable suit cards.'
+                  : 'Select cards from your hand to put down (no kings or taroks)'}
+              </p>
               <div className="discard-hand">
-                {state.hand.filter(c => c.card_type !== 'tarok' && !(c.card_type === 'suit' && c.value === 8)).map((card, j) => {
+                {discardCandidates.map((card, j) => {
                   const selected = discardSelection.some(c => cardKey(c) === cardKey(card));
                   return (
                     <div key={j} className={`discard-card ${selected ? 'discard-selected' : ''}`} onClick={() => toggleDiscard(card)}>
@@ -155,7 +181,7 @@ export default function GameBoard({
               <button
                 className="btn-gold"
                 data-testid="discard-confirm"
-                disabled={discardSelection.length !== mustDiscard}
+                disabled={!isDiscardSelectionValid(discardSelection)}
                 onClick={submitDiscard}
               >
                 Confirm Discard ({discardSelection.length}/{mustDiscard})
