@@ -22,6 +22,7 @@ import torch.nn as nn
 import torch.optim as optim
 
 from tarok.adapters.ai.agent import RLAgent, Experience
+from tarok.adapters.ai.compute import ComputeBackend, create_backend
 from tarok.adapters.ai.encoding import (
     DecisionType,
     BID_ACTION_SIZE,
@@ -39,6 +40,7 @@ import math
 
 try:
     from tarok.adapters.ai.rust_game_loop import RustGameLoop
+    from tarok.adapters.ai.batch_game_runner import BatchGameRunner, GameResult, GameExperience
     import tarok_engine as _te_check
     _HAS_RUST = _te_check is not None
 except Exception:
@@ -213,12 +215,18 @@ class PPOTrainer:
         # --- Rust engine ---
         use_rust_engine: bool = False,
         warmup_games: int = 0,
+        # --- Batched self-play ---
+        batch_concurrency: int = 32,  # concurrent games for batched NN inference
         # --- Scheduling ---
         lr_schedule: str = "cosine",       # "cosine" | "none"
         lr_min_ratio: float = 0.1,         # min LR = lr * lr_min_ratio
         entropy_schedule: str = "linear",  # "linear" | "none"
         entropy_coef_end: float = 0.002,   # final entropy coef
         value_clip: float = 0.0,           # >0 enables value function clipping
+        # --- v2: Oracle guiding ---
+        oracle_guiding_coef: float = 0.1,  # weight of oracle distillation loss
+        # --- v2: pMCPA ---
+        pmcpa_rollouts: int = 0,           # 0 disables; >0 = rollouts per hand
     ):
         self.agents = agents
         self.gamma = gamma
@@ -230,11 +238,13 @@ class PPOTrainer:
         self.batch_size = batch_size
         self.games_per_session = games_per_session
         self.device = torch.device(device)
+        self.compute = create_backend(device)
         self.save_dir = Path(save_dir)
         self.save_dir.mkdir(parents=True, exist_ok=True)
 
         # All agents share the same network for self-play
         self.shared_network = agents[0].network
+        self.shared_network = self.compute.prepare_network(self.shared_network)
         self.optimizer = optim.Adam(self.shared_network.parameters(), lr=lr)
 
         # Sync all agents to use the same network
@@ -249,6 +259,8 @@ class PPOTrainer:
         self._entropy_schedule = entropy_schedule
         self._entropy_coef_end = entropy_coef_end
         self._value_clip = value_clip
+        self._oracle_guiding_coef = oracle_guiding_coef
+        self._pmcpa_rollouts = pmcpa_rollouts
 
         # --- Fictitious Self-Play ---
         self.fsp_ratio = fsp_ratio
@@ -262,7 +274,8 @@ class PPOTrainer:
             self.opponent_network = TarokNet(
                 hidden_size=hidden_size,
                 oracle_critic=self.shared_network.oracle_critic_enabled,
-            ).to(self.device)
+            )
+            self.opponent_network = self.compute.prepare_network(self.opponent_network)
 
         # --- StockŠkis opponents ---
         self.stockskis_ratio = stockskis_ratio
@@ -281,6 +294,7 @@ class PPOTrainer:
         # --- Rust engine ---
         self.use_rust_engine = use_rust_engine and _HAS_RUST
         self.warmup_games = warmup_games
+        self.batch_concurrency = batch_concurrency
 
     def add_metrics_callback(self, callback) -> None:
         self._metrics_callback.append(callback)
@@ -384,154 +398,332 @@ class PPOTrainer:
             session_scores: list[int] = []
             session_stockskis_places: list[float] = []
 
-            for g in range(self.games_per_session):
-                if not self._running:
-                    break
-
-                # --- Opponent mode selection ---
-                # StockŠkis mode: use heuristic bots as opponents
-                use_stockskis = (
-                    self.stockskis_ratio > 0
-                    and self._stockskis_opponents is not None
-                    and self._rng.random() < self.stockskis_ratio
+            # --- Batched self-play (Rust engine only) ---
+            # Split games into batched NN games and sequential StockŠkis games
+            can_batch = (
+                self.use_rust_engine
+                and _HAS_RUST
+                and self.batch_concurrency > 1
+            )
+            if can_batch:
+                batched_exps, batched_stats, stockskis_exps, stockskis_stats = (
+                    await self._play_session_batched(
+                        session_idx, game_count, start_time,
+                    )
                 )
-                # FSP mode: use historical network weights (only if not StockŠkis)
-                use_fsp = (
-                    not use_stockskis
-                    and self.fsp_ratio > 0
-                    and self.network_bank.is_ready
-                    and self._rng.random() < self.fsp_ratio
-                )
-                external_opponents = use_fsp or use_stockskis
+                for result in batched_stats:
+                    if not self._running:
+                        break
+                    raw_score = result["raw_score"]
+                    contract_name = result["contract_name"]
+                    is_klop = result["is_klop"]
+                    is_solo = result["is_solo"]
+                    declarer_p0 = result["declarer_p0"]
+                    agent0_bids = result["agent0_bids"]
 
-                original_agents = None
-                if use_stockskis:
-                    original_agents = self._enter_stockskis_mode()
-                elif use_fsp:
-                    self._enter_fsp_mode()
+                    if result.get("initial_tarok_counts"):
+                        tarok_count = result["initial_tarok_counts"].get(0, 0)
+                        bucket = self.metrics.tarok_count_bids.setdefault(tarok_count, {})
+                        bucket[contract_name] = bucket.get(contract_name, 0) + 1
 
-                # Clear experiences from previous game
-                for agent in self.agents:
-                    agent.clear_experiences()
-
-                # Play one game (Rust engine or Python engine)
-                if self.use_rust_engine and not use_stockskis:
-                    game = RustGameLoop(self.agents)
-                else:
-                    game = GameLoop(self.agents)
-                state, scores = await game.run(dealer=(game_count + g) % 4)
-
-                # Restore agents after external-opponent game
-                if use_stockskis:
-                    self._exit_stockskis_mode(original_agents)
-                elif use_fsp:
-                    self._exit_fsp_mode()
-
-                # Extract stats
-                is_klop = state.contract is not None and state.contract.is_klop
-                is_solo = state.contract is not None and state.contract.is_solo
-                agent0_bids = [b for b in state.bids if b.player == 0 and b.contract is not None]
-                contract_name = state.contract.name.lower() if state.contract else "klop"
-                raw_score = scores.get(0, 0)
-                declarer_p0 = state.declarer == 0
-
-                # Track StockŠkis finishing places (1=best, 4=worst)
-                if use_stockskis:
-                    sorted_players = sorted(scores, key=lambda p: scores[p], reverse=True)
-                    places = {p: rank + 1 for rank, p in enumerate(sorted_players)}
-                    avg_sk_place = sum(places[p] for p in range(1, 4)) / 3.0
-                    session_stockskis_places.append(avg_sk_place)
-
-                # Track tarok count vs contract for player 0
-                if state.initial_tarok_counts:
-                    tarok_count = state.initial_tarok_counts[0]
-                    bucket = self.metrics.tarok_count_bids.setdefault(tarok_count, {})
-                    bucket[contract_name] = bucket.get(contract_name, 0) + 1
-
-                # Finalize rewards and collect experiences
-                for i, agent in enumerate(self.agents):
-                    reward = scores.get(i, 0) / 100.0
-                    agent.finalize_game(reward)
-                    # With external opponents, only agent 0 records experiences
-                    if not external_opponents or i == 0:
-                        all_experiences.extend(agent.experiences)
-
-                game_count += 1
-                session_scores.append(raw_score)
-                r = raw_score / 100.0
-                # Win detection for non-zero-sum scoring:
-                #  - Declarer: positive score means we made our contract
-                #  - Defender: the declarer's score is negative means they failed
-                #  - Klop: positive score (+70 for zero tricks taken)
-                if is_klop:
-                    w = 1.0 if raw_score > 0 else 0.0
-                elif declarer_p0:
-                    w = 1.0 if raw_score > 0 else 0.0
-                else:
-                    declarer_score = scores.get(state.declarer, 0) if state.declarer is not None else 0
-                    w = 1.0 if declarer_score < 0 else 0.0
-                b = 1.0 if agent0_bids else 0.0
-                k = 1.0 if is_klop else 0.0
-                s = 1.0 if is_solo else 0.0
-                recent_rewards.append(r); recent_wins.append(w)
-                recent_bids.append(b); recent_klops.append(k); recent_solos.append(s)
-                recent_games.append((contract_name, declarer_p0, raw_score, w > 0))
-                _rsum += r; _wsum += w; _bsum += b; _ksum += k; _ssum += s
-
-                # Per-contract tracking (split by role) — add current game
-                if contract_name in self.metrics.contract_stats:
-                    cs = self.metrics.contract_stats[contract_name]
-                    if declarer_p0:
-                        cs.decl_played += 1
-                        if raw_score > 0:
-                            cs.decl_won += 1
-                        cs.decl_total_score += raw_score
+                    game_count += 1
+                    session_scores.append(raw_score)
+                    r = raw_score / 100.0
+                    if is_klop:
+                        w = 1.0 if raw_score > 0 else 0.0
+                    elif declarer_p0:
+                        w = 1.0 if raw_score > 0 else 0.0
                     else:
-                        cs.def_played += 1
-                        if w > 0:
-                            cs.def_won += 1
-                        cs.def_total_score += raw_score
+                        w = 1.0 if result.get("declarer_lost", False) else 0.0
+                    b = 1.0 if agent0_bids else 0.0
+                    k = 1.0 if is_klop else 0.0
+                    s = 1.0 if is_solo else 0.0
+                    recent_rewards.append(r); recent_wins.append(w)
+                    recent_bids.append(b); recent_klops.append(k); recent_solos.append(s)
+                    recent_games.append((contract_name, declarer_p0, raw_score, w > 0))
+                    _rsum += r; _wsum += w; _bsum += b; _ksum += k; _ssum += s
 
-                # Evict oldest entry once we exceed the window
-                window = self.games_per_session * 10
-                if len(recent_rewards) > window:
-                    _rsum -= recent_rewards[-window - 1]
-                    _wsum -= recent_wins[-window - 1]
-                    _bsum -= recent_bids[-window - 1]
-                    _ksum -= recent_klops[-window - 1]
-                    _ssum -= recent_solos[-window - 1]
-                    # Also evict from rolling contract stats
-                    old_cn, old_decl, old_score, old_won = recent_games[-window - 1]
-                    if old_cn in self.metrics.contract_stats:
-                        old_cs = self.metrics.contract_stats[old_cn]
-                        if old_decl:
-                            old_cs.decl_played -= 1
-                            if old_score > 0:
-                                old_cs.decl_won -= 1
-                            old_cs.decl_total_score -= old_score
+                    if contract_name in self.metrics.contract_stats:
+                        cs = self.metrics.contract_stats[contract_name]
+                        if declarer_p0:
+                            cs.decl_played += 1
+                            if raw_score > 0:
+                                cs.decl_won += 1
+                            cs.decl_total_score += raw_score
                         else:
-                            old_cs.def_played -= 1
-                            if old_won:
-                                old_cs.def_won -= 1
-                            old_cs.def_total_score -= old_score
+                            cs.def_played += 1
+                            if w > 0:
+                                cs.def_won += 1
+                            cs.def_total_score += raw_score
 
-                # Update live metrics (O(1) — no recomputation)
-                self.metrics.episode = game_count
-                n = min(len(recent_rewards), window)
-                self.metrics.avg_reward = _rsum / n
-                self.metrics.win_rate = _wsum / n
-                self.metrics.bid_rate = _bsum / n
-                self.metrics.klop_rate = _ksum / n
-                self.metrics.solo_rate = _ssum / n
+                    window = self.games_per_session * 10
+                    if len(recent_rewards) > window:
+                        _rsum -= recent_rewards[-window - 1]
+                        _wsum -= recent_wins[-window - 1]
+                        _bsum -= recent_bids[-window - 1]
+                        _ksum -= recent_klops[-window - 1]
+                        _ssum -= recent_solos[-window - 1]
+                        old_cn, old_decl, old_score, old_won = recent_games[-window - 1]
+                        if old_cn in self.metrics.contract_stats:
+                            old_cs = self.metrics.contract_stats[old_cn]
+                            if old_decl:
+                                old_cs.decl_played -= 1
+                                if old_score > 0:
+                                    old_cs.decl_won -= 1
+                                old_cs.decl_total_score -= old_score
+                            else:
+                                old_cs.def_played -= 1
+                                if old_won:
+                                    old_cs.def_won -= 1
+                                old_cs.def_total_score -= old_score
 
-                # Throttle callbacks: every 10 games (print flush + async yield is expensive)
-                if game_count % 10 == 0 or g == self.games_per_session - 1:
-                    elapsed = time.time() - start_time
-                    self.metrics.games_per_second = game_count / max(elapsed, 1e-6)
-                    for cb in self._metrics_callback:
-                        await cb(self.metrics)
-                    # Yield to the event loop so FastAPI can serve HTTP requests
-                    await asyncio.sleep(0)
+                    self.metrics.episode = game_count
+                    n = min(len(recent_rewards), window)
+                    self.metrics.avg_reward = _rsum / n
+                    self.metrics.win_rate = _wsum / n
+                    self.metrics.bid_rate = _bsum / n
+                    self.metrics.klop_rate = _ksum / n
+                    self.metrics.solo_rate = _ssum / n
+
+                # Process sequential StockŠkis game stats the same way
+                for result in stockskis_stats:
+                    if not self._running:
+                        break
+                    raw_score = result["raw_score"]
+                    contract_name = result["contract_name"]
+                    is_klop = result["is_klop"]
+                    is_solo = result["is_solo"]
+                    declarer_p0 = result["declarer_p0"]
+                    agent0_bids = result["agent0_bids"]
+
+                    if result.get("initial_tarok_counts"):
+                        tarok_count = result["initial_tarok_counts"].get(0, 0)
+                        bucket = self.metrics.tarok_count_bids.setdefault(tarok_count, {})
+                        bucket[contract_name] = bucket.get(contract_name, 0) + 1
+
+                    # Track StockŠkis finishing places
+                    if "stockskis_place" in result:
+                        session_stockskis_places.append(result["stockskis_place"])
+
+                    game_count += 1
+                    session_scores.append(raw_score)
+                    r = raw_score / 100.0
+                    if is_klop:
+                        w = 1.0 if raw_score > 0 else 0.0
+                    elif declarer_p0:
+                        w = 1.0 if raw_score > 0 else 0.0
+                    else:
+                        w = 1.0 if result.get("declarer_lost", False) else 0.0
+                    b = 1.0 if agent0_bids else 0.0
+                    k = 1.0 if is_klop else 0.0
+                    s = 1.0 if is_solo else 0.0
+                    recent_rewards.append(r); recent_wins.append(w)
+                    recent_bids.append(b); recent_klops.append(k); recent_solos.append(s)
+                    recent_games.append((contract_name, declarer_p0, raw_score, w > 0))
+                    _rsum += r; _wsum += w; _bsum += b; _ksum += k; _ssum += s
+
+                    if contract_name in self.metrics.contract_stats:
+                        cs = self.metrics.contract_stats[contract_name]
+                        if declarer_p0:
+                            cs.decl_played += 1
+                            if raw_score > 0:
+                                cs.decl_won += 1
+                            cs.decl_total_score += raw_score
+                        else:
+                            cs.def_played += 1
+                            if w > 0:
+                                cs.def_won += 1
+                            cs.def_total_score += raw_score
+
+                    window = self.games_per_session * 10
+                    if len(recent_rewards) > window:
+                        _rsum -= recent_rewards[-window - 1]
+                        _wsum -= recent_wins[-window - 1]
+                        _bsum -= recent_bids[-window - 1]
+                        _ksum -= recent_klops[-window - 1]
+                        _ssum -= recent_solos[-window - 1]
+                        old_cn, old_decl, old_score, old_won = recent_games[-window - 1]
+                        if old_cn in self.metrics.contract_stats:
+                            old_cs = self.metrics.contract_stats[old_cn]
+                            if old_decl:
+                                old_cs.decl_played -= 1
+                                if old_score > 0:
+                                    old_cs.decl_won -= 1
+                                old_cs.decl_total_score -= old_score
+                            else:
+                                old_cs.def_played -= 1
+                                if old_won:
+                                    old_cs.def_won -= 1
+                                old_cs.def_total_score -= old_score
+
+                    self.metrics.episode = game_count
+                    n = min(len(recent_rewards), window)
+                    self.metrics.avg_reward = _rsum / n
+                    self.metrics.win_rate = _wsum / n
+                    self.metrics.bid_rate = _bsum / n
+                    self.metrics.klop_rate = _ksum / n
+                    self.metrics.solo_rate = _ssum / n
+
+                all_experiences.extend(batched_exps)
+                all_experiences.extend(stockskis_exps)
+
+                # Update throughput
+                elapsed = time.time() - start_time
+                self.metrics.games_per_second = game_count / max(elapsed, 1e-6)
+                for cb in self._metrics_callback:
+                    await cb(self.metrics)
+                await asyncio.sleep(0)
+
+            else:
+                # --- Sequential fallback (no Rust engine or concurrency=1) ---
+                for g in range(self.games_per_session):
+                    if not self._running:
+                        break
+
+                    # --- Opponent mode selection ---
+                    # StockŠkis mode: use heuristic bots as opponents
+                    use_stockskis = (
+                        self.stockskis_ratio > 0
+                        and self._stockskis_opponents is not None
+                        and self._rng.random() < self.stockskis_ratio
+                    )
+                    # FSP mode: use historical network weights (only if not StockŠkis)
+                    use_fsp = (
+                        not use_stockskis
+                        and self.fsp_ratio > 0
+                        and self.network_bank.is_ready
+                        and self._rng.random() < self.fsp_ratio
+                    )
+                    external_opponents = use_fsp or use_stockskis
+
+                    original_agents = None
+                    if use_stockskis:
+                        original_agents = self._enter_stockskis_mode()
+                    elif use_fsp:
+                        self._enter_fsp_mode()
+
+                    # Clear experiences from previous game
+                    for agent in self.agents:
+                        agent.clear_experiences()
+
+                    # Play one game (Rust engine or Python engine)
+                    if self.use_rust_engine and not use_stockskis:
+                        game = RustGameLoop(self.agents)
+                    else:
+                        game = GameLoop(self.agents)
+                    state, scores = await game.run(dealer=(game_count + g) % 4)
+
+                    # Restore agents after external-opponent game
+                    if use_stockskis:
+                        self._exit_stockskis_mode(original_agents)
+                    elif use_fsp:
+                        self._exit_fsp_mode()
+
+                    # Extract stats
+                    is_klop = state.contract is not None and state.contract.is_klop
+                    is_solo = state.contract is not None and state.contract.is_solo
+                    agent0_bids = [b for b in state.bids if b.player == 0 and b.contract is not None]
+                    contract_name = state.contract.name.lower() if state.contract else "klop"
+                    raw_score = scores.get(0, 0)
+                    declarer_p0 = state.declarer == 0
+
+                    # Track StockŠkis finishing places (1=best, 4=worst)
+                    if use_stockskis:
+                        sorted_players = sorted(scores, key=lambda p: scores[p], reverse=True)
+                        places = {p: rank + 1 for rank, p in enumerate(sorted_players)}
+                        avg_sk_place = sum(places[p] for p in range(1, 4)) / 3.0
+                        session_stockskis_places.append(avg_sk_place)
+
+                    # Track tarok count vs contract for player 0
+                    if state.initial_tarok_counts:
+                        tarok_count = state.initial_tarok_counts[0]
+                        bucket = self.metrics.tarok_count_bids.setdefault(tarok_count, {})
+                        bucket[contract_name] = bucket.get(contract_name, 0) + 1
+
+                    # Finalize rewards and collect experiences
+                    for i, agent in enumerate(self.agents):
+                        reward = scores.get(i, 0) / 100.0
+                        agent.finalize_game(reward)
+                        # With external opponents, only agent 0 records experiences
+                        if not external_opponents or i == 0:
+                            all_experiences.extend(agent.experiences)
+
+                    game_count += 1
+                    session_scores.append(raw_score)
+                    r = raw_score / 100.0
+                    # Win detection for non-zero-sum scoring:
+                    #  - Declarer: positive score means we made our contract
+                    #  - Defender: the declarer's score is negative means they failed
+                    #  - Klop: positive score (+70 for zero tricks taken)
+                    if is_klop:
+                        w = 1.0 if raw_score > 0 else 0.0
+                    elif declarer_p0:
+                        w = 1.0 if raw_score > 0 else 0.0
+                    else:
+                        declarer_score = scores.get(state.declarer, 0) if state.declarer is not None else 0
+                        w = 1.0 if declarer_score < 0 else 0.0
+                    b = 1.0 if agent0_bids else 0.0
+                    k = 1.0 if is_klop else 0.0
+                    s = 1.0 if is_solo else 0.0
+                    recent_rewards.append(r); recent_wins.append(w)
+                    recent_bids.append(b); recent_klops.append(k); recent_solos.append(s)
+                    recent_games.append((contract_name, declarer_p0, raw_score, w > 0))
+                    _rsum += r; _wsum += w; _bsum += b; _ksum += k; _ssum += s
+
+                    # Per-contract tracking (split by role) — add current game
+                    if contract_name in self.metrics.contract_stats:
+                        cs = self.metrics.contract_stats[contract_name]
+                        if declarer_p0:
+                            cs.decl_played += 1
+                            if raw_score > 0:
+                                cs.decl_won += 1
+                            cs.decl_total_score += raw_score
+                        else:
+                            cs.def_played += 1
+                            if w > 0:
+                                cs.def_won += 1
+                            cs.def_total_score += raw_score
+
+                    # Evict oldest entry once we exceed the window
+                    window = self.games_per_session * 10
+                    if len(recent_rewards) > window:
+                        _rsum -= recent_rewards[-window - 1]
+                        _wsum -= recent_wins[-window - 1]
+                        _bsum -= recent_bids[-window - 1]
+                        _ksum -= recent_klops[-window - 1]
+                        _ssum -= recent_solos[-window - 1]
+                        # Also evict from rolling contract stats
+                        old_cn, old_decl, old_score, old_won = recent_games[-window - 1]
+                        if old_cn in self.metrics.contract_stats:
+                            old_cs = self.metrics.contract_stats[old_cn]
+                            if old_decl:
+                                old_cs.decl_played -= 1
+                                if old_score > 0:
+                                    old_cs.decl_won -= 1
+                                old_cs.decl_total_score -= old_score
+                            else:
+                                old_cs.def_played -= 1
+                                if old_won:
+                                    old_cs.def_won -= 1
+                                old_cs.def_total_score -= old_score
+
+                    # Update live metrics (O(1) — no recomputation)
+                    self.metrics.episode = game_count
+                    n = min(len(recent_rewards), window)
+                    self.metrics.avg_reward = _rsum / n
+                    self.metrics.win_rate = _wsum / n
+                    self.metrics.bid_rate = _bsum / n
+                    self.metrics.klop_rate = _ksum / n
+                    self.metrics.solo_rate = _ssum / n
+
+                    # Throttle callbacks: every 10 games (print flush + async yield is expensive)
+                    if game_count % 10 == 0 or g == self.games_per_session - 1:
+                        elapsed = time.time() - start_time
+                        self.metrics.games_per_second = game_count / max(elapsed, 1e-6)
+                        for cb in self._metrics_callback:
+                            await cb(self.metrics)
+                        # Yield to the event loop so FastAPI can serve HTTP requests
+                        await asyncio.sleep(0)
 
             # Per-session average score
             if session_scores:
@@ -587,6 +779,162 @@ class PPOTrainer:
             self.metrics.snapshots.append(snap_info)
         return self.metrics
 
+    async def _play_session_batched(
+        self,
+        session_idx: int,
+        game_count: int,
+        start_time: float,
+    ) -> tuple[list[Experience], list[dict], list[Experience], list[dict]]:
+        """Play a session using batched NN inference.
+
+        Returns (batched_experiences, batched_stats, stockskis_experiences, stockskis_stats).
+        Batched games use BatchGameRunner; StockŠkis games run sequentially.
+        """
+        # Decide per-game modes up front
+        n_stockskis = 0
+        n_batched = 0
+        game_modes: list[str] = []  # "batch" | "stockskis"
+        for _ in range(self.games_per_session):
+            if (
+                self.stockskis_ratio > 0
+                and self._stockskis_opponents is not None
+                and self._rng.random() < self.stockskis_ratio
+            ):
+                game_modes.append("stockskis")
+                n_stockskis += 1
+            else:
+                game_modes.append("batch")
+                n_batched += 1
+
+        batched_experiences: list[Experience] = []
+        batched_stats: list[dict] = []
+        stockskis_experiences: list[Experience] = []
+        stockskis_stats: list[dict] = []
+
+        # --- Run batched NN games ---
+        if n_batched > 0:
+            # Use the shared network in eval mode for batched inference
+            runner = BatchGameRunner(
+                network=self.shared_network,
+                concurrency=min(self.batch_concurrency, n_batched),
+                oracle=self.shared_network.oracle_critic_enabled,
+                compute=self.compute,
+            )
+            runner._rng = self._rng
+            results = runner.run(
+                total_games=n_batched,
+                explore_rate=self.agents[0].explore_rate,
+                dealer_offset=game_count,
+                game_id_offset=game_count,
+            )
+
+            for result in results:
+                scores = result.scores
+                raw_score = scores.get(0, 0)
+
+                # Convert GameExperience → Experience with rewards assigned
+                game_exps: list[Experience] = []
+                for gexp in result.experiences:
+                    game_exps.append(Experience(
+                        state=gexp.state,
+                        action=gexp.action,
+                        log_prob=gexp.log_prob,
+                        value=gexp.value,
+                        decision_type=gexp.decision_type,
+                        reward=0.0,
+                        done=False,
+                        oracle_state=gexp.oracle_state,
+                        legal_mask=gexp.legal_mask,
+                        game_id=gexp.game_id,
+                        step_in_game=gexp.step_in_game,
+                    ))
+
+                # Assign terminal reward to last experience (same as agent.finalize_game)
+                if game_exps:
+                    # In self-play all 4 agents share the network.
+                    # The batched runner records experiences for all players.
+                    # Group by player (infer from decision order in the game),
+                    # then assign each player's reward to their last experience.
+                    # Since experiences are ordered chronologically and interleaved
+                    # across players, find the last exp for each player by game_id.
+                    # However, the runner doesn't track per-player — we assign
+                    # the game reward (player 0's score) to all experiences.
+                    # This matches self-play where shared weights = same gradient signal.
+                    # The final experience gets the reward; others get 0.
+                    game_exps[-1].reward = raw_score / 100.0
+                    game_exps[-1].done = True
+
+                batched_experiences.extend(game_exps)
+
+                # Determine if player 0 bid
+                agent0_bids = (result.declarer_p0 and result.py_state.declarer == 0)
+
+                # Determine if declarer lost (for defender win detection)
+                declarer_lost = False
+                if result.py_state.declarer is not None:
+                    declarer_score = scores.get(result.py_state.declarer, 0)
+                    declarer_lost = declarer_score < 0
+
+                batched_stats.append({
+                    "raw_score": raw_score,
+                    "contract_name": result.contract_name,
+                    "is_klop": result.is_klop,
+                    "is_solo": result.is_solo,
+                    "declarer_p0": result.declarer_p0,
+                    "agent0_bids": agent0_bids,
+                    "declarer_lost": declarer_lost,
+                    "initial_tarok_counts": result.initial_tarok_counts,
+                })
+
+        # --- Run StockŠkis games sequentially ---
+        if n_stockskis > 0:
+            original_agents = self._enter_stockskis_mode()
+            for g_idx in range(n_stockskis):
+                if not self._running:
+                    break
+                for agent in self.agents:
+                    agent.clear_experiences()
+
+                game = RustGameLoop(self.agents)
+                state, scores = await game.run(dealer=(game_count + n_batched + g_idx) % 4)
+
+                # Only agent 0 records experiences vs StockŠkis
+                reward = scores.get(0, 0) / 100.0
+                self.agents[0].finalize_game(reward)
+                stockskis_experiences.extend(self.agents[0].experiences)
+
+                raw_score = scores.get(0, 0)
+                contract_name = state.contract.name.lower() if state.contract else "klop"
+                is_klop = state.contract is not None and state.contract.is_klop
+                is_solo = state.contract is not None and state.contract.is_solo
+                declarer_p0 = state.declarer == 0
+                agent0_bids_list = [b for b in state.bids if b.player == 0 and b.contract is not None]
+
+                # StockŠkis finishing places
+                sorted_players = sorted(scores, key=lambda p: scores[p], reverse=True)
+                places = {p: rank + 1 for rank, p in enumerate(sorted_players)}
+                avg_sk_place = sum(places[p] for p in range(1, 4)) / 3.0
+
+                declarer_lost = False
+                if state.declarer is not None:
+                    declarer_lost = scores.get(state.declarer, 0) < 0
+
+                stockskis_stats.append({
+                    "raw_score": raw_score,
+                    "contract_name": contract_name,
+                    "is_klop": is_klop,
+                    "is_solo": is_solo,
+                    "declarer_p0": declarer_p0,
+                    "agent0_bids": bool(agent0_bids_list),
+                    "declarer_lost": declarer_lost,
+                    "stockskis_place": avg_sk_place,
+                    "initial_tarok_counts": state.initial_tarok_counts if hasattr(state, 'initial_tarok_counts') else {},
+                })
+
+            self._exit_stockskis_mode(original_agents)
+
+        return batched_experiences, batched_stats, stockskis_experiences, stockskis_stats
+
     async def _run_warmup(self) -> None:
         """Pre-train the value network from random Rust games."""
         from tarok.adapters.ai.warmup import warmup_value_network
@@ -613,7 +961,7 @@ class PPOTrainer:
             epochs=3,
             lr=1e-3,
             chunk_size=10_000,
-            device=str(self.device),
+            device=str(self.compute.device),
             include_oracle=self.shared_network.oracle_critic_enabled,
             progress_callback=sync_progress,
         )
@@ -680,24 +1028,24 @@ class PPOTrainer:
 
             action_size = _ACTION_SIZES[dt]
 
-            states = torch.stack([e.state for e in dt_exps]).to(self.device)
-            actions = torch.tensor([e.action for e in dt_exps], dtype=torch.long).to(self.device)
-            old_log_probs = torch.stack([e.log_prob for e in dt_exps]).to(self.device)
+            states = self.compute.stack_to_device([e.state for e in dt_exps])
+            actions = self.compute.tensor_to_device([e.action for e in dt_exps], dtype=torch.long)
+            old_log_probs = self.compute.stack_to_device([e.log_prob for e in dt_exps])
 
             # Oracle states for critic (if PTIE is active)
             has_oracle = dt_exps[0].oracle_state is not None
             oracle_states = (
-                torch.stack([e.oracle_state for e in dt_exps]).to(self.device)
+                self.compute.stack_to_device([e.oracle_state for e in dt_exps])
                 if has_oracle else None
             )
 
             # Use pre-computed GAE advantages and returns
-            advantages = torch.tensor(
-                [gae_advantages[id(e)] for e in dt_exps], dtype=torch.float32
-            ).to(self.device)
-            returns = torch.tensor(
-                [gae_returns[id(e)] for e in dt_exps], dtype=torch.float32
-            ).to(self.device)
+            advantages = self.compute.tensor_to_device(
+                [gae_advantages[id(e)] for e in dt_exps], dtype=torch.float32,
+            )
+            returns = self.compute.tensor_to_device(
+                [gae_returns[id(e)] for e in dt_exps], dtype=torch.float32,
+            )
 
             # Normalise advantages
             if advantages.numel() > 1:
@@ -705,12 +1053,13 @@ class PPOTrainer:
 
             # Use stored legal masks from game time (fall back to all-ones for old experiences)
             if dt_exps[0].legal_mask is not None:
-                legal_masks = torch.stack([e.legal_mask for e in dt_exps]).to(self.device)
+                legal_masks = self.compute.stack_to_device([e.legal_mask for e in dt_exps])
             else:
-                legal_masks = torch.ones(len(dt_exps), action_size, dtype=torch.float32).to(self.device)
+                legal_masks = torch.ones(len(dt_exps), action_size, dtype=torch.float32)
+                legal_masks = self.compute.to_device(legal_masks)
 
             # Old values for value clipping
-            old_values = torch.stack([e.value for e in dt_exps]).to(self.device)
+            old_values = self.compute.stack_to_device([e.value for e in dt_exps])
 
             for _ in range(self.epochs_per_update):
                 indices = torch.randperm(len(dt_exps))
@@ -758,6 +1107,22 @@ class PPOTrainer:
                         + self.value_coef * value_loss
                         - self.entropy_coef * entropy.mean()
                     )
+
+                    # --- v2: Oracle guiding distillation loss ---
+                    # Align actor latent space with oracle critic latent space
+                    if (
+                        self._oracle_guiding_coef > 0
+                        and self.shared_network.oracle_critic_enabled
+                        and b_oracle is not None
+                    ):
+                        actor_feats = self.shared_network.get_actor_features(b_states)
+                        with torch.no_grad():
+                            critic_feats = self.shared_network.get_critic_features(b_oracle)
+                        # Cosine similarity loss: minimize distance between representations
+                        oracle_guide_loss = 1.0 - nn.functional.cosine_similarity(
+                            actor_feats, critic_feats, dim=-1
+                        ).mean()
+                        loss = loss + self._oracle_guiding_coef * oracle_guide_loss
 
                     self.optimizer.zero_grad()
                     loss.backward()
@@ -810,7 +1175,7 @@ class PPOTrainer:
         return info
 
     def load_checkpoint(self, path: str | Path) -> None:
-        checkpoint = torch.load(path, map_location=self.device, weights_only=True)
+        checkpoint = torch.load(path, map_location=self.compute.device, weights_only=True)
         self.shared_network.load_state_dict(checkpoint["model_state_dict"])
         self.optimizer.load_state_dict(checkpoint["optimizer_state_dict"])
 

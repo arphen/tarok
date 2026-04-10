@@ -38,13 +38,11 @@ def _detect_device() -> str:
 
 
 def _detect_self_play_device() -> str:
-    """Pick a stable device for self-play training.
-
-    MPS currently segfaults in the async self-play loop, so only CUDA is used
-    for lab self-play acceleration for now.
-    """
+    """Pick the best available device for self-play training."""
     if torch.cuda.is_available():
         return "cuda"
+    if hasattr(torch.backends, "mps") and torch.backends.mps.is_available():
+        return "mps"
     return "cpu"
 from tarok.adapters.ai.agent import RLAgent
 from tarok.adapters.ai.imitation import imitation_pretrain
@@ -708,7 +706,7 @@ def _build_pbt_population(
             stockskis_strength=1.0,
             fsp_ratio=float(base_hparams["fsp_ratio"]),
             bank_size=20,
-            use_rust_engine=False,
+            use_rust_engine=True,
             save_dir=str(CHECKPOINTS_DIR / "pbt_tmp" / f"member_{index}"),
             value_clip=0.2,
         )
@@ -758,61 +756,87 @@ async def _run_population_member(
     games_played = 0
     policy_losses: list[float] = []
 
+    can_batch = (
+        trainer.use_rust_engine
+        and trainer.batch_concurrency > 1
+    )
+
     for session_offset in range(num_sessions):
         if not _lab.running:
             break
 
-        all_experiences = []
+        all_experiences: list = []
 
-        for game_offset in range(games_per_session):
-            if not _lab.running:
-                break
-
-            use_stockskis = (
-                trainer.stockskis_ratio > 0
-                and trainer._stockskis_opponents is not None
-                and trainer._rng.random() < trainer.stockskis_ratio
+        if can_batch:
+            # --- Batched path: use trainer's optimised batched session ---
+            import time as _time
+            batched_exps, batched_stats, sk_exps, sk_stats = (
+                await trainer._play_session_batched(
+                    session_offset,
+                    start_game_index + games_played,
+                    _time.time(),
+                )
             )
-            use_fsp = (
-                not use_stockskis
-                and trainer.fsp_ratio > 0
-                and trainer.network_bank.is_ready
-                and trainer._rng.random() < trainer.fsp_ratio
-            )
-            external_opponents = use_stockskis or use_fsp
+            all_experiences.extend(batched_exps)
+            all_experiences.extend(sk_exps)
 
-            original_agents = None
-            if use_stockskis:
-                original_agents = trainer._enter_stockskis_mode()
-            elif use_fsp:
-                trainer._enter_fsp_mode()
+            for stat in batched_stats + sk_stats:
+                raw_score = stat["raw_score"]
+                total_scores += raw_score
+                total_rewards += raw_score / 100.0
+                total_wins += 1.0 if raw_score > 0 else 0.0
+                games_played += 1
+        else:
+            # --- Sequential fallback (no Rust engine) ---
+            for game_offset in range(games_per_session):
+                if not _lab.running:
+                    break
 
-            for agent in agents:
-                agent.set_training(True)
-                agent.clear_experiences()
+                use_stockskis = (
+                    trainer.stockskis_ratio > 0
+                    and trainer._stockskis_opponents is not None
+                    and trainer._rng.random() < trainer.stockskis_ratio
+                )
+                use_fsp = (
+                    not use_stockskis
+                    and trainer.fsp_ratio > 0
+                    and trainer.network_bank.is_ready
+                    and trainer._rng.random() < trainer.fsp_ratio
+                )
+                external_opponents = use_stockskis or use_fsp
 
-            game = GameLoop(trainer.agents)
-            state, scores = await game.run(dealer=(start_game_index + games_played) % 4)
+                original_agents = None
+                if use_stockskis:
+                    original_agents = trainer._enter_stockskis_mode()
+                elif use_fsp:
+                    trainer._enter_fsp_mode()
 
-            if use_stockskis:
-                trainer._exit_stockskis_mode(original_agents)
-            elif use_fsp:
-                trainer._exit_fsp_mode()
+                for agent in agents:
+                    agent.set_training(True)
+                    agent.clear_experiences()
 
-            raw_score, win = _score_game(state, scores)
-            total_scores += raw_score
-            total_rewards += raw_score / 100.0
-            total_wins += win
-            games_played += 1
+                game = GameLoop(trainer.agents)
+                state, scores = await game.run(dealer=(start_game_index + games_played) % 4)
 
-            for seat, agent in enumerate(agents):
-                reward = scores.get(seat, 0) / 100.0
-                agent.finalize_game(reward)
-                if not external_opponents or seat == 0:
-                    all_experiences.extend(agent.experiences)
+                if use_stockskis:
+                    trainer._exit_stockskis_mode(original_agents)
+                elif use_fsp:
+                    trainer._exit_fsp_mode()
 
-            if games_played % 4 == 0 or game_offset == games_per_session - 1:
-                await asyncio.sleep(0)
+                raw_score, win = _score_game(state, scores)
+                total_scores += raw_score
+                total_rewards += raw_score / 100.0
+                total_wins += win
+                games_played += 1
+
+                for seat, agent in enumerate(agents):
+                    reward = scores.get(seat, 0) / 100.0
+                    agent.finalize_game(reward)
+                    if not external_opponents or seat == 0:
+                        all_experiences.extend(agent.experiences)
+
+                if games_played % 4 == 0 or game_offset == games_per_session - 1:
+                    await asyncio.sleep(0)
 
         if all_experiences:
             loss_info = trainer._ppo_update(all_experiences)
@@ -914,14 +938,16 @@ async def _run_pbt_self_play_session(
         sessions_completed = 0
         global_game_index = 0
         rng = random.Random(time.time())
+        base_age = _lab.persona.get("age", 0)
 
-        for generation in range(1, total_generations + 1):
+        for iteration in range(1, total_generations + 1):
+            generation = base_age + iteration
             if not _lab.running:
                 break
 
             _lab.phase = "self_play"
             _lab.pbt_generation = generation
-            _lab.training_sessions_done = generation
+            _lab.training_sessions_done = iteration
             _lab.self_play_sessions = sessions_completed
 
             sessions_this_generation = min(batch_sessions, num_sessions - sessions_completed)
@@ -1027,7 +1053,7 @@ async def _run_pbt_self_play_session(
                 member["survival_count"] += 1
                 member["copied_from"] = None
 
-            if generation < total_generations:
+            if iteration < total_generations:
                 _lab.phase = "exploiting"
                 for laggard_idx, laggard in enumerate(laggards):
                     donor = elites[laggard_idx % len(elites)]
@@ -1112,11 +1138,13 @@ async def _run_self_play_session(
             stockskis_strength=1.0,
             fsp_ratio=fsp_ratio,
             bank_size=20,
-            use_rust_engine=False,
+            use_rust_engine=True,
             lr_schedule="cosine",
             entropy_schedule="linear",
             entropy_coef_end=0.002,
             value_clip=0.2,
+            # v2: oracle guiding distillation
+            oracle_guiding_coef=0.1 if _lab.network.oracle_critic_enabled else 0.0,
         )
 
         trainer._running = True
@@ -1237,6 +1265,7 @@ async def _run_self_play_session(
                     "games": _lab.self_play_games,
                 })
 
+                _lab.persona["age"] = _lab.persona.get("age", 0) + 1
                 _update_persona_hash()
                 info = save_to_hof(
                     _lab.network, _lab.persona, _lab.eval_history,
@@ -1283,7 +1312,7 @@ def get_lab_state() -> dict:
         "model_hash": _lab.model_hash,
         "display_name": _lab.display_name,
         "active_program": _lab.active_program,
-        "eval_history": _lab.eval_history,
+        "eval_history": _lab.eval_history[-500:],
         "training_sessions_done": _lab.training_sessions_done,
         "total_training_sessions": _lab.total_training_sessions,
         "current_loss": _lab.current_loss,
@@ -1319,8 +1348,8 @@ def get_lab_state() -> dict:
         "pbt_member_index": _lab.pbt_member_index,
         "pbt_member_total": _lab.pbt_member_total,
         "population": _lab.pbt_population,
-        "generation_history": _lab.pbt_generation_history,
-        "population_events": _lab.pbt_events,
+        "generation_history": _lab.pbt_generation_history[-500:],
+        "population_events": _lab.pbt_events[-500:],
     }
 
 
