@@ -17,10 +17,16 @@ setup:
 	@command -v node >/dev/null 2>&1 || brew install node
 	@echo "==> Checking uv…"
 	@command -v uv >/dev/null 2>&1 || brew install uv
+	@echo "==> Checking Rust…"
+	@command -v rustc >/dev/null 2>&1 || \
+		(curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y && \
+		. "$$HOME/.cargo/env")
 	@echo "==> Installing backend deps…"
 	cd backend && uv sync --default-index https://pypi.org/simple --extra dev
 	@echo "==> Installing frontend deps…"
 	cd frontend && npm install
+	@echo "==> Building Rust engine…"
+	$(MAKE) build-engine
 	@echo "==> Installing pre-commit hook…"
 	$(MAKE) setup-hooks
 	@echo ""
@@ -32,6 +38,7 @@ setup:
 install:
 	cd backend && uv sync --default-index https://pypi.org/simple --extra dev
 	cd frontend && npm install
+	$(MAKE) build-engine
 
 # ──────────────────────────────────────────────
 # Git hooks
