@@ -16,6 +16,7 @@
 .hand-cards {
   display: flex;
   gap: 0;
+  transform-origin: center center;
 }
 
 .hand-horizontal {
@@ -30,28 +31,63 @@
   margin-left: 0;
 }
 
-.hand-vertical {
-  flex-direction: column;
+/* ---- Smaller cards for opponent hands when revealed ---- */
+.hand-top .card:not(.card-back),
+.hand-left .card:not(.card-back),
+.hand-right .card:not(.card-back) {
+  width: 52px;
+  height: 78px;
+  font-size: 0.7em;
 }
 
-.hand-vertical .card {
-  margin-top: -60px;
+.hand-top .hand-horizontal .card:not(.card-back),
+.hand-left .hand-horizontal .card:not(.card-back),
+.hand-right .hand-horizontal .card:not(.card-back) {
+  margin-left: -18px;
 }
 
-.hand-vertical .card:first-child {
-  margin-top: 0;
+.hand-top .hand-horizontal .card:not(.card-back):first-child,
+.hand-left .hand-horizontal .card:not(.card-back):first-child,
+.hand-right .hand-horizontal .card:not(.card-back):first-child {
+  margin-left: 0;
 }
 
 .hand-top {
   order: 0;
 }
 
+.hand-top .hand-cards {
+  transform: rotate(180deg);
+}
+
 .hand-left {
   order: 0;
+  flex-direction: row-reverse;
+  align-items: center;
+}
+
+.hand-left .hand-label {
+  white-space: nowrap;
+  writing-mode: horizontal-tb;
+}
+
+.hand-left .hand-cards {
+  transform: rotate(90deg);
 }
 
 .hand-right {
   order: 0;
+  flex-direction: row;
+  align-items: center;
+}
+
+.hand-right .hand-label {
+  white-space: nowrap;
+  writing-mode: horizontal-tb;
+}
+
+.hand-right .hand-cards {
+  transform: rotate(-90deg);
 }
 
 .hand-bottom {

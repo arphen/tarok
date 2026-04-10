@@ -26,15 +26,14 @@ function isLegal(card: CardData, legalPlays?: CardData[]): boolean {
   );
 }
 
-export default function Hand({ cards, legalPlays, onCardClick, faceDown, position = 'bottom', label, cardCount, teamRole, isSolo }: HandProps) {
-  const isHorizontal = position === 'bottom' || position === 'top';
+const Hand = React.memo(function Hand({ cards, legalPlays, onCardClick, faceDown, position = 'bottom', label, cardCount, teamRole, isSolo }: HandProps) {
   const count = cardCount ?? cards.length;
   const teamClass = teamRole === 'declarer' ? (isSolo ? 'team-solo' : 'team-declarer') : teamRole === 'defender' ? 'team-defender' : '';
 
   return (
     <div className={`hand hand-${position} ${teamClass}`}>
       {label && <div className={`hand-label ${teamClass}`}>{label}</div>}
-      <div className={`hand-cards ${isHorizontal ? 'hand-horizontal' : 'hand-vertical'}`}>
+      <div className={`hand-cards hand-horizontal`}>
         {faceDown ? (
           Array.from({ length: count }).map((_, i) => (
             <Card key={i} card={{ card_type: 'tarok', value: 0, suit: null, label: '', points: 0 }} faceDown small />
@@ -53,4 +52,6 @@ export default function Hand({ cards, legalPlays, onCardClick, faceDown, positio
       </div>
     </div>
   );
-}
+});
+
+export default Hand;

@@ -13,6 +13,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 
 from tarok.adapters.ai.agent import RLAgent
+from tarok.adapters.ai.lookahead_agent import LookaheadAgent
 from tarok.adapters.ai.random_agent import RandomPlayer
 from tarok.adapters.ai.trainer import PPOTrainer, TrainingMetrics
 from tarok.adapters.api.human_player import HumanPlayer
@@ -85,6 +86,9 @@ async def start_training(req: TrainingRequest):
         games_per_session=req.games_per_session,
         stockskis_ratio=req.stockskis_ratio,
         stockskis_strength=req.stockskis_strength,
+        lookahead_ratio=req.lookahead_ratio,
+        lookahead_sims=req.lookahead_sims,
+        lookahead_perfect_info=req.lookahead_perfect_info,
         use_rust_engine=req.use_rust_engine,
         warmup_games=req.warmup_games,
         batch_concurrency=req.batch_concurrency,
@@ -101,9 +105,16 @@ async def start_training(req: TrainingRequest):
         try:
             result = await _trainer.train(req.num_sessions)
             _latest_metrics = result
+        except asyncio.CancelledError:
+            import logging
+            logging.getLogger(__name__).info("Training task cancelled")
         except Exception:
             import logging
             logging.getLogger(__name__).exception("Training task failed")
+            # Preserve the last good metrics so the dashboard shows
+            # what happened before the crash instead of going blank.
+            if _latest_metrics is None:
+                _latest_metrics = _trainer.metrics if _trainer else None
 
     _training_task = asyncio.create_task(run_training())
     return {"status": "started", "num_sessions": req.num_sessions, "games_per_session": req.games_per_session,
@@ -131,12 +142,52 @@ async def training_status():
     return {"running": running}
 
 
+# Checkpoint metadata cache: {filepath_str: (mtime, metadata_dict)}
+_checkpoint_cache: dict[str, tuple[float, dict]] = {}
+
+
+def _load_checkpoint_meta(fpath: Path, ckpt_dir: Path, breed_dir: Path) -> dict:
+    """Load checkpoint metadata, using cache when file hasn't changed."""
+    import torch as _torch
+    fstr = str(fpath)
+    mtime = fpath.stat().st_mtime
+    cached = _checkpoint_cache.get(fstr)
+    if cached and cached[0] == mtime:
+        return cached[1]
+
+    is_bred = "bred_model" in fpath.name
+    if fpath.name == "tarok_agent_latest.pt":
+        fname = "tarok_agent_latest.pt"
+    elif breed_dir in fpath.parents:
+        fname = str(fpath.relative_to(ckpt_dir))
+    else:
+        fname = fpath.name
+
+    try:
+        meta = _torch.load(fpath, map_location="cpu", weights_only=False)
+        entry = {
+            "filename": fname,
+            "episode": meta.get("episode", 0),
+            "session": meta.get("session", 0),
+            "win_rate": meta.get("metrics", {}).get("win_rate", 0),
+            "avg_reward": meta.get("metrics", {}).get("avg_reward", 0),
+            "model_name": meta.get("model_name", None),
+            "is_bred": is_bred,
+        }
+    except Exception:
+        entry = {"filename": fname, "episode": 0, "is_bred": is_bred}
+
+    _checkpoint_cache[fstr] = (mtime, entry)
+    return entry
+
+
 @app.get("/api/checkpoints")
 async def list_checkpoints():
     """List all saved checkpoint files (training, breeding, and HOF)."""
     ckpt_dir = Path("checkpoints")
     breed_dir = Path("checkpoints/breeding_results")
     hof_dir = Path("checkpoints/hall_of_fame")
+    root_ckpt_dir = Path("../checkpoints")
     
     result = []
     # Always include "latest" if the file exists
@@ -167,7 +218,18 @@ async def list_checkpoints():
         files.extend([f for f in hof_dir.glob("hof_*.pt")])
 
     files = sorted(files, key=lambda x: x.stat().st_mtime, reverse=True)
-    result = []
+
+    # Also scan root-level checkpoints/ directory
+    if root_ckpt_dir.exists():
+        seen_names = {f.name for f in files}
+        seen_names.add("tarok_agent_latest.pt")  # already handled above
+        root_files = sorted(
+            [f for f in root_ckpt_dir.glob("*.pt") if f.name not in seen_names],
+            key=lambda x: x.stat().st_mtime,
+            reverse=True,
+        )
+        files.extend(root_files)
+
     for f in files:
         import torch as _torch
         try:
@@ -176,7 +238,7 @@ async def list_checkpoints():
             is_hof = "hof_" in f.name
             
             result.append({
-                "filename": str(f.relative_to(ckpt_dir)),
+                "filename": str(f.relative_to(ckpt_dir)) if ckpt_dir in f.parents or f.parent == ckpt_dir else f.name,
                 "episode": meta.get("episode", 0),
                 "session": meta.get("session", 0),
                 "win_rate": meta.get("metrics", {}).get("win_rate", 0),
@@ -188,7 +250,7 @@ async def list_checkpoints():
             })
         except Exception:
             result.append({
-                "filename": str(f.relative_to(ckpt_dir)),
+                "filename": str(f.relative_to(ckpt_dir)) if ckpt_dir in f.parents or f.parent == ckpt_dir else f.name,
                 "episode": 0,
                 "is_bred": "bred_model" in f.name,
                 "is_hof": "hof_" in f.name,
@@ -204,6 +266,9 @@ def _load_opponent(choice: str, index: int) -> RLAgent:
         agent = RLAgent(name=f"AI-{index + 1}")
         agent.set_training(False)
         return agent
+
+    if choice == "lookahead":
+        return LookaheadAgent(n_simulations=50, name=name)
 
     if choice == "latest":
         path = Path("checkpoints/tarok_agent_latest.pt")
@@ -247,6 +312,7 @@ async def new_game(req: NewGameRequest | None = None):
         "agents": agents,
         "game_loop": None,
         "state": None,
+        "num_rounds": req.num_rounds if req else 1,
     }
     return {"game_id": game_id}
 
@@ -262,13 +328,65 @@ async def game_websocket(ws: WebSocket, game_id: str):
     game_info = _active_games[game_id]
     human: HumanPlayer = game_info["human"]
     agents = game_info["agents"]
+    num_rounds = game_info.get("num_rounds", 1)
     player_names = [a.name for a in agents]
 
     observer = WebSocketObserver(ws, player_idx=0, player_names=player_names)
-    game_loop = GameLoop(agents, observer=observer)
 
-    # Start game in background
-    game_task = asyncio.create_task(game_loop.run())
+    # Match-level state
+    cumulative_scores = {i: 0 for i in range(4)}
+    caller_counts = {i: 0 for i in range(4)}   # times as declarer
+    called_counts = {i: 0 for i in range(4)}    # times as partner
+    round_history: list[dict] = []
+
+    async def run_match():
+        nonlocal cumulative_scores
+        for round_num in range(num_rounds):
+            dealer = round_num % 4
+            game_loop = GameLoop(agents, observer=observer)
+
+            # Send round_start event
+            observer.set_match_info(
+                round_num=round_num + 1,
+                total_rounds=num_rounds,
+                cumulative_scores=cumulative_scores,
+                caller_counts=caller_counts,
+                called_counts=called_counts,
+                round_history=round_history,
+            )
+
+            state, scores = await game_loop.run(dealer=dealer)
+
+            # Update match-level stats
+            for p, s in scores.items():
+                cumulative_scores[p] += s
+            if state.declarer is not None:
+                caller_counts[state.declarer] += 1
+            if state.partner is not None:
+                called_counts[state.partner] += 1
+
+            round_history.append({
+                "round": round_num + 1,
+                "scores": dict(scores),
+                "contract": state.contract.value if state.contract else None,
+                "declarer": state.declarer,
+                "partner": state.partner,
+            })
+
+            # Send match progress after each round
+            if round_num < num_rounds - 1:
+                await observer.send_match_update(
+                    cumulative_scores, caller_counts, called_counts,
+                    round_history, round_num + 1, num_rounds, state,
+                )
+
+        # Final match end
+        await observer.send_match_end(
+            cumulative_scores, caller_counts, called_counts,
+            round_history, num_rounds, state,
+        )
+
+    game_task = asyncio.create_task(run_match())
 
     try:
         while True:
@@ -314,6 +432,9 @@ async def game_websocket(ws: WebSocket, game_id: str):
                 delay = data.get("delay", 1.0)
                 observer.ai_delay = max(0.0, min(float(delay), 5.0))
 
+            elif action_type == "reveal_hands":
+                observer.reveal_hands = bool(data.get("reveal", False))
+
     except WebSocketDisconnect:
         game_task.cancel()
         if game_id in _active_games:
@@ -344,6 +465,8 @@ async def new_spectate(req: SpectateRequest):
 
         if agent_type == "random":
             agents.append(RandomPlayer(name=agent_name))
+        elif agent_type == "lookahead":
+            agents.append(LookaheadAgent(n_simulations=50, name=agent_name))
         else:
             ckpt_path = Path("checkpoints") / checkpoint if checkpoint else Path("checkpoints/tarok_agent_latest.pt")
             if ckpt_path.exists():
@@ -420,6 +543,297 @@ async def spectate_websocket(ws: WebSocket, game_id: str):
             if task and not task.done():
                 task.cancel()
             del _spectator_games[game_id]
+
+
+# ---- Tournament batch endpoint ----
+
+class TournamentMatchRequest(BaseModel):
+    agents: list[dict]  # [{name, type, checkpoint?}] — exactly 4
+    num_games: int = 5
+
+
+def _build_agent(cfg: dict, idx: int):
+    """Instantiate a single agent from a config dict."""
+    agent_type = cfg.get("type", "rl")
+    agent_name = cfg.get("name", f"Agent-{idx}")
+    checkpoint = cfg.get("checkpoint")
+
+    if agent_type == "random":
+        return RandomPlayer(name=agent_name)
+    elif agent_type == "lookahead":
+        return LookaheadAgent(n_simulations=50, name=agent_name)
+    else:
+        ckpt_path = None
+        if checkpoint:
+            candidate = Path("checkpoints") / checkpoint
+            root_candidate = Path("../checkpoints") / checkpoint
+            if candidate.exists():
+                ckpt_path = candidate
+            elif root_candidate.exists():
+                ckpt_path = root_candidate
+        else:
+            default = Path("checkpoints/tarok_agent_latest.pt")
+            if default.exists():
+                ckpt_path = default
+        if ckpt_path:
+            agent = RLAgent.from_checkpoint(ckpt_path, name=agent_name)
+        else:
+            agent = RLAgent(name=agent_name)
+        agent.set_training(False)
+        return agent
+
+
+@app.post("/api/tournament/match")
+async def tournament_match(req: TournamentMatchRequest):
+    """Run N games between 4 agents and return cumulative scores."""
+    agents = [_build_agent(cfg, i) for i, cfg in enumerate(req.agents[:4])]
+    while len(agents) < 4:
+        agents.append(RandomPlayer(name=f"Fill-{len(agents)}"))
+
+    cumulative: dict[int, int] = {0: 0, 1: 0, 2: 0, 3: 0}
+    game_results: list[dict[str, int]] = []
+
+    for _ in range(max(1, min(req.num_games, 100))):
+        loop = GameLoop(agents)
+        _state, scores = await loop.run()
+        for pid, pts in scores.items():
+            cumulative[pid] += pts
+        game_results.append({str(k): v for k, v in scores.items()})
+
+    ranked = sorted(cumulative.items(), key=lambda x: x[1], reverse=True)
+    return {
+        "cumulative": {str(k): v for k, v in cumulative.items()},
+        "ranked": [{"seat": k, "name": agents[k].name, "score": v} for k, v in ranked],
+        "games": game_results,
+    }
+
+
+# ---- Multi-tournament simulation ----
+
+class MultiTournamentRequest(BaseModel):
+    agents: list[dict]  # [{name, type, checkpoint?}] — 4-8 entries
+    num_tournaments: int = 5
+    games_per_round: int = 5
+
+
+_multi_tournament_task: asyncio.Task | None = None
+_multi_tournament_progress: dict | None = None
+
+
+def _run_single_bracket(entries: list[dict]) -> list[list[dict]]:
+    """Build a bracket: return list of match groups (each group = 4 agent configs).
+
+    Shuffle entries, pad to 8, return the 6 match groups in order.
+    The bracket advancement is done server-side for the simulation.
+    """
+    import random as _random
+
+    padded = list(entries)
+    while len(padded) < 8:
+        padded.append({"name": f"Random-{len(padded)}", "type": "random"})
+    _random.shuffle(padded)
+    return padded  # type: ignore
+
+
+async def _simulate_single_tournament(
+    agent_configs: list[dict],
+    games_per_round: int,
+) -> dict[str, dict]:
+    """Run one double-elimination tournament, return per-agent placement stats."""
+    import random as _random
+
+    padded = list(agent_configs)
+    while len(padded) < 8:
+        padded.append({"name": f"Random-{len(padded)}", "type": "random"})
+    _random.shuffle(padded)
+
+    # Match schedule: same as frontend bracket
+    # WB R1-A: slots 0-3, WB R1-B: slots 4-7
+    async def _play_match(cfgs: list[dict]) -> list[dict]:
+        """Play a match, return configs ranked best→worst."""
+        agents = [_build_agent(c, i) for i, c in enumerate(cfgs[:4])]
+        while len(agents) < 4:
+            agents.append(RandomPlayer(name=f"Fill-{len(agents)}"))
+
+        cumulative: dict[int, int] = {0: 0, 1: 0, 2: 0, 3: 0}
+        for _ in range(max(1, min(games_per_round, 100))):
+            loop = GameLoop(agents)
+            _state, scores = await loop.run()
+            for pid, pts in scores.items():
+                cumulative[pid] += pts
+            await asyncio.sleep(0)
+
+        ranked_seats = sorted(cumulative, key=lambda s: cumulative[s], reverse=True)
+        return [cfgs[s] for s in ranked_seats]
+
+    # WB R1
+    wb_r1_a = await _play_match(padded[0:4])
+    wb_r1_b = await _play_match(padded[4:8])
+
+    wb_r1_top = wb_r1_a[:2] + wb_r1_b[:2]  # advance
+    wb_r1_bot = wb_r1_a[2:] + wb_r1_b[2:]  # drop to losers
+
+    # LB R1
+    lb_r1 = await _play_match(wb_r1_bot)
+    lb_r1_top = lb_r1[:2]
+    # lb_r1[2:] eliminated
+
+    # WB Final
+    wb_final = await _play_match(wb_r1_top)
+    wb_final_top = wb_final[:2]
+    wb_final_bot = wb_final[2:]
+
+    # LB Final
+    lb_final_entries = lb_r1_top + wb_final_bot
+    lb_final = await _play_match(lb_final_entries)
+    lb_final_top = lb_final[:2]
+
+    # Grand Final
+    gf_entries = wb_final_top + lb_final_top
+    gf_ranked = await _play_match(gf_entries)
+
+    # Assign placements (1st=champion, 2nd, 3rd, 4th from GF; 5-6 from LB final losers; 7-8 from LB R1 losers)
+    placements: dict[str, int] = {}
+    for i, cfg in enumerate(gf_ranked):
+        placements[cfg["name"]] = i + 1
+    for i, cfg in enumerate(lb_final[2:]):
+        placements[cfg["name"]] = 5 + i
+    for i, cfg in enumerate(lb_r1[2:]):
+        placements[cfg["name"]] = 7 + i
+
+    return placements
+
+
+@app.post("/api/tournament/simulate")
+async def simulate_multi_tournament(req: MultiTournamentRequest):
+    """Run multiple tournaments and return aggregate standings."""
+    global _multi_tournament_task, _multi_tournament_progress
+
+    if _multi_tournament_task and not _multi_tournament_task.done():
+        return {"status": "already_running"}
+
+    num = max(1, min(req.num_tournaments, 100))
+    agent_configs = req.agents[:8]
+
+    _multi_tournament_progress = {
+        "status": "running",
+        "current": 0,
+        "total": num,
+        "standings": {},
+    }
+
+    async def _run():
+        global _multi_tournament_progress
+        # Per-agent stats: {name: {wins, top2, total_placement, placements: [...]}}
+        standings: dict[str, dict] = {}
+        for cfg in agent_configs:
+            standings[cfg["name"]] = {
+                "name": cfg["name"],
+                "type": cfg.get("type", "rl"),
+                "checkpoint": cfg.get("checkpoint", ""),
+                "wins": 0,
+                "top2": 0,
+                "top4": 0,
+                "total_placement": 0,
+                "tournaments_played": 0,
+                "placements": [],
+            }
+        # Also init for random fillers
+        for i in range(len(agent_configs), 8):
+            fill_name = f"Random-{i}"
+            standings[fill_name] = {
+                "name": fill_name,
+                "type": "random",
+                "checkpoint": "",
+                "wins": 0,
+                "top2": 0,
+                "top4": 0,
+                "total_placement": 0,
+                "tournaments_played": 0,
+                "placements": [],
+            }
+
+        try:
+            for t in range(num):
+                try:
+                    placements = await _simulate_single_tournament(agent_configs, req.games_per_round)
+                except Exception:
+                    import logging
+                    logging.getLogger(__name__).exception("Tournament %d/%d failed, skipping", t + 1, num)
+                    _multi_tournament_progress = {
+                        "status": "running",
+                        "current": t + 1,
+                        "total": num,
+                        "standings": {
+                            name: {**s, "avg_placement": round(s["total_placement"] / max(s["tournaments_played"], 1), 2)}
+                            for name, s in standings.items()
+                        },
+                    }
+                    await asyncio.sleep(0)
+                    continue
+
+                for name, place in placements.items():
+                    if name not in standings:
+                        continue
+                    s = standings[name]
+                    s["tournaments_played"] += 1
+                    s["total_placement"] += place
+                    s["placements"].append(place)
+                    if place == 1:
+                        s["wins"] += 1
+                    if place <= 2:
+                        s["top2"] += 1
+                    if place <= 4:
+                        s["top4"] += 1
+
+                _multi_tournament_progress = {
+                    "status": "running",
+                    "current": t + 1,
+                    "total": num,
+                    "standings": {
+                        name: {**s, "avg_placement": round(s["total_placement"] / max(s["tournaments_played"], 1), 2)}
+                        for name, s in standings.items()
+                    },
+                }
+                await asyncio.sleep(0)
+
+            # Final result
+            final_standings = {
+                name: {**s, "avg_placement": round(s["total_placement"] / max(s["tournaments_played"], 1), 2)}
+                for name, s in standings.items()
+            }
+            _multi_tournament_progress = {
+                "status": "done",
+                "current": num,
+                "total": num,
+                "standings": final_standings,
+            }
+        except asyncio.CancelledError:
+            import logging
+            logging.getLogger(__name__).info("Multi-tournament cancelled")
+            _multi_tournament_progress["status"] = "cancelled"
+        except Exception:
+            import logging
+            logging.getLogger(__name__).exception("Multi-tournament failed")
+            _multi_tournament_progress["status"] = "error"
+
+    _multi_tournament_task = asyncio.create_task(_run())
+    return {"status": "started", "num_tournaments": num}
+
+
+@app.get("/api/tournament/simulate/progress")
+async def multi_tournament_progress():
+    if _multi_tournament_progress:
+        return _multi_tournament_progress
+    return {"status": "idle", "current": 0, "total": 0, "standings": {}}
+
+
+@app.post("/api/tournament/simulate/stop")
+async def stop_multi_tournament():
+    global _multi_tournament_task
+    if _multi_tournament_task and not _multi_tournament_task.done():
+        _multi_tournament_task.cancel()
+    return {"status": "stopped"}
 
 
 @app.websocket("/ws/training")
@@ -862,7 +1276,14 @@ async def start_breeding(req: BreedRequest):
     config.progress_callback = on_progress
 
     async def run_breed():
-        await _run_breed(config)
+        try:
+            await _run_breed(config)
+        except asyncio.CancelledError:
+            import logging
+            logging.getLogger(__name__).info("Breeding task cancelled")
+        except Exception:
+            import logging
+            logging.getLogger(__name__).exception("Breeding task failed")
 
     _breed_task = asyncio.create_task(run_breed())
     return {"status": "started", "config": {

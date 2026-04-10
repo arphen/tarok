@@ -83,8 +83,8 @@ test('cards without images show white fallback with text', async ({ page }) => {
   await page.locator('button:has-text("Start Game")').click();
   await expect(page.locator('[data-testid="game-board"]')).toBeVisible({ timeout: 15_000 });
 
-  // Disable AI delay for faster tests
-  await page.locator('.speed-control input[type="range"]').fill('0');
+  // Reduce AI delay for faster tests
+  await page.locator('.speed-control input[type="range"]').fill('0.25');
 
   // Wait until we have cards in hand
   await page.waitForFunction(

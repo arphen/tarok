@@ -30,6 +30,9 @@ const INITIAL_STATE: GameState = {
   callable_kings: null,
   must_discard: 0,
   player_names: [],
+  card_tracker: null,
+  match_info: null,
+  hands: null,
 };
 
 function cardLabel(card: CardData): string {
@@ -82,7 +85,19 @@ function formatEvent(event: string, data: Record<string, unknown>, names: string
       const lines = Object.entries(scores)
         .map(([pid, s]) => `${name(Number(pid))}: ${s > 0 ? '+' : ''}${s}`)
         .join(' | ');
-      return { id: nextId, message: `Game over — ${lines}`, category: 'score' };
+      return { id: nextId, message: `Round over — ${lines}`, category: 'score' };
+    }
+    case 'match_update': {
+      const rn = data.round_num as number;
+      const tr = data.total_rounds as number;
+      return { id: nextId, message: `Round ${rn}/${tr} complete. Next round starting...`, category: 'system' };
+    }
+    case 'match_end': {
+      const cs = data.cumulative_scores as Record<string, number>;
+      const lines = Object.entries(cs)
+        .map(([pid, s]) => `${name(Number(pid))}: ${s > 0 ? '+' : ''}${s}`)
+        .join(' | ');
+      return { id: nextId, message: `Match over! Final scores — ${lines}`, category: 'score' };
     }
     default:
       return null;
@@ -95,14 +110,17 @@ export function useGame() {
   const [connected, setConnected] = useState(false);
   const [events, setEvents] = useState<string[]>([]);
   const [logEntries, setLogEntries] = useState<LogEntry[]>([]);
+  const [trickWinner, setTrickWinner] = useState<number | null>(null);
+  const [trickWinCards, setTrickWinCards] = useState<GameState['current_trick']>([]);
   const wsRef = useRef<WebSocket | null>(null);
+  const trickTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const addEvent = useCallback((msg: string) => {
     setEvents(prev => [...prev.slice(-50), msg]);
   }, []);
 
   const addLogEntry = useCallback((entry: LogEntry) => {
-    setLogEntries(prev => [...prev.slice(-100), entry]);
+    setLogEntries(prev => [...prev.slice(-49), entry]);
   }, []);
 
   const connect = useCallback((id: string) => {
@@ -116,11 +134,27 @@ export function useGame() {
 
     ws.onmessage = (e) => {
       const data: GameEvent = JSON.parse(e.data);
-      setGameState(data.state);
       addEvent(`Event: ${data.event}`);
       const names = data.state.player_names.length > 0 ? data.state.player_names : ['You', 'AI-1', 'AI-2', 'AI-3'];
       const entry = formatEvent(data.event, data.data, names);
       if (entry) addLogEntry(entry);
+
+      // Always apply state immediately to avoid stale-state rollback
+      setGameState(data.state);
+
+      if (data.event === 'trick_won') {
+        // Show sweep animation with the trick cards from the event
+        const winner = data.data.winner as number;
+        const cards = data.data.cards as GameState['current_trick'];
+        setTrickWinCards(cards);
+        setTrickWinner(winner);
+        // Clear after animation completes
+        if (trickTimerRef.current) clearTimeout(trickTimerRef.current);
+        trickTimerRef.current = setTimeout(() => {
+          setTrickWinner(null);
+          setTrickWinCards([]);
+        }, 900);
+      }
     };
 
     ws.onclose = () => {
@@ -135,13 +169,16 @@ export function useGame() {
     wsRef.current = ws;
   }, [addEvent, addLogEntry]);
 
-  const startNewGame = useCallback(async (opponents?: string[]) => {
+  const startNewGame = useCallback(async (opponents?: string[], numRounds?: number) => {
     try {
-      const body = opponents ? { opponents } : undefined;
+      const body: Record<string, unknown> = {};
+      if (opponents) body.opponents = opponents;
+      if (numRounds && numRounds > 1) body.num_rounds = numRounds;
+      const hasBody = Object.keys(body).length > 0;
       const res = await fetch('/api/game/new', {
         method: 'POST',
-        headers: body ? { 'Content-Type': 'application/json' } : {},
-        body: body ? JSON.stringify(body) : undefined,
+        headers: hasBody ? { 'Content-Type': 'application/json' } : {},
+        body: hasBody ? JSON.stringify(body) : undefined,
       });
       const data = await res.json();
       setGameId(data.game_id);
@@ -181,6 +218,10 @@ export function useGame() {
     sendAction({ action: 'set_delay', delay });
   }, [sendAction]);
 
+  const revealHands = useCallback((reveal: boolean) => {
+    sendAction({ action: 'reveal_hands', reveal });
+  }, [sendAction]);
+
   useEffect(() => {
     return () => {
       wsRef.current?.close();
@@ -193,6 +234,8 @@ export function useGame() {
     connected,
     events,
     logEntries,
+    trickWinner,
+    trickWinCards,
     startNewGame,
     playCard,
     bid,
@@ -200,5 +243,6 @@ export function useGame() {
     chooseTalon,
     discard,
     setDelay,
+    revealHands,
   };
 }

@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import type { GameState, CardData } from '../types/game';
+import type { GameState, CardData, TrickCard } from '../types/game';
 import { CONTRACT_NAMES } from '../types/game';
 import Hand from './Hand';
 import TrickArea from './TrickArea';
@@ -31,10 +31,12 @@ interface GameBoardProps {
   onCallKing: (suit: string) => void;
   onChooseTalon: (groupIndex: number) => void;
   onDiscard: (cards: CardData[]) => void;
+  trickWinner?: number | null;
+  trickWinCards?: TrickCard[];
 }
 
 export default function GameBoard({
-  state, onPlayCard, onBid, onCallKing, onChooseTalon, onDiscard,
+  state, onPlayCard, onBid, onCallKing, onChooseTalon, onDiscard, trickWinner, trickWinCards,
 }: GameBoardProps) {
   const isMyTurn = state.current_player === 0;
   const names = state.player_names.length > 0 ? state.player_names : ['You', 'AI-1', 'AI-2', 'AI-3'];
@@ -59,6 +61,12 @@ export default function GameBoard({
       setDiscardSelection([]);
     }
   };
+
+  // Show trick-win animation cards when winner is set
+  const showTrickAnimation = trickWinner != null && trickWinCards && trickWinCards.length > 0;
+  const displayTrickCards = showTrickAnimation ? trickWinCards! : state.current_trick;
+
+  const revealedHands = state.hands;
 
   return (
     <div className="game-board" data-testid="game-board" data-phase={state.phase}>      {/* Game info bar */}
@@ -95,23 +103,24 @@ export default function GameBoard({
       <div className="table">
         {/* Top player (P2) */}
         <div className="table-top">
-          <Hand cards={[]} faceDown cardCount={state.hand_sizes[2]} position="top" label={names[2]} teamRole={teamOf(2)} isSolo={isSolo} />
+          <Hand cards={revealedHands?.['2'] ?? []} faceDown={!revealedHands?.['2']} cardCount={state.hand_sizes[2]} position="top" label={names[2]} teamRole={teamOf(2)} isSolo={isSolo} />
         </div>
 
         {/* Left player (P1) */}
         <div className="table-left">
-          <Hand cards={[]} faceDown cardCount={state.hand_sizes[1]} position="left" label={names[1]} teamRole={teamOf(1)} isSolo={isSolo} />
+          <Hand cards={revealedHands?.['1'] ?? []} faceDown={!revealedHands?.['1']} cardCount={state.hand_sizes[1]} position="left" label={names[1]} teamRole={teamOf(1)} isSolo={isSolo} />
         </div>
 
         {/* Center — trick area */}
         <div className="table-center">
-          {state.phase === 'trick_play' && (
+          {(state.phase === 'trick_play' || showTrickAnimation) && (
             <TrickArea
-              trickCards={state.current_trick}
+              trickCards={displayTrickCards}
               playerNames={names}
               playerIndex={0}
               getTeamRole={(idx) => teamOf(idx)}
               isSolo={isSolo}
+              trickWinner={trickWinner}
             />
           )}
 
@@ -128,7 +137,7 @@ export default function GameBoard({
             />
           )}
 
-          {/* Talon selection / Discard */}
+          {/* Talon selection / Discard — shown in center only during active choice */}
           {state.phase === 'talon_exchange' && isMyTurn && mustDiscard > 0 && (
             <div className="talon-selection">
               <h3>Discard {mustDiscard} card{mustDiscard > 1 ? 's' : ''}</h3>
@@ -190,7 +199,7 @@ export default function GameBoard({
 
         {/* Right player (P3) */}
         <div className="table-right">
-          <Hand cards={[]} faceDown cardCount={state.hand_sizes[3]} position="right" label={names[3]} teamRole={teamOf(3)} isSolo={isSolo} />
+          <Hand cards={revealedHands?.['3'] ?? []} faceDown={!revealedHands?.['3']} cardCount={state.hand_sizes[3]} position="right" label={names[3]} teamRole={teamOf(3)} isSolo={isSolo} />
         </div>
 
         {/* Bottom player (human, P0) */}
@@ -208,7 +217,7 @@ export default function GameBoard({
       </div>
 
       {/* Turn indicator */}
-      {state.phase === 'trick_play' && (
+      {state.phase === 'trick_play' && !showTrickAnimation && (
         <div className={`turn-indicator ${isMyTurn ? 'your-turn' : ''}`} data-testid="turn-indicator">
           {isMyTurn ? '🎯 Your turn — play a card' : `Waiting for ${names[state.current_player]}...`}
         </div>
@@ -216,5 +225,3 @@ export default function GameBoard({
     </div>
   );
 }
-
-

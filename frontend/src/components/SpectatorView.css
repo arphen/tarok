@@ -140,37 +140,225 @@
   color: var(--text-secondary) !important;
 }
 
-/* ---- Spectator layout ---- */
-.spectator-layout {
+/* ---- Spectator drawer (replaces sidebar) ---- */
+.spectator-drawer {
+  position: absolute;
+  right: 0;
+  top: 0;
+  bottom: 0;
+  width: 0;
+  z-index: 20;
+  transition: width 0.3s ease;
   display: flex;
-  flex: 1;
-  min-height: 0;
-  height: calc(100vh - 50px);
 }
 
-.spectator-board {
-  flex: 1;
-  overflow-y: auto;
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  gap: 16px;
-  padding: 16px;
-}
-
-.spectator-table {
-  grid-template-columns: 160px 1fr 160px;
-}
-
-/* ---- Spectator sidebar ---- */
-.spectator-sidebar {
+.spectator-drawer.drawer-open {
   width: 320px;
-  min-width: 320px;
+}
+
+.drawer-tab {
+  position: absolute;
+  writing-mode: vertical-rl;
+  text-orientation: mixed;
+  background: rgba(0, 0, 0, 0.6);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  color: var(--accent-gold);
+  font-size: 12px;
+  font-weight: 600;
+  padding: 12px 6px;
+  cursor: pointer;
+  z-index: 21;
+  transition: background 0.2s;
+}
+
+.drawer-tab:hover {
+  background: rgba(0, 0, 0, 0.8);
+}
+
+.drawer-tab-right {
+  right: 100%;
+  top: 50%;
+  transform: translateY(-50%);
+  border-radius: 8px 0 0 8px;
+  border-right: none;
+}
+
+.drawer-panel {
+  width: 320px;
+  height: 100%;
   display: flex;
   flex-direction: column;
   background: rgba(0, 0, 0, 0.4);
   border-left: 1px solid rgba(255, 255, 255, 0.08);
   overflow: hidden;
+}
+
+/* Layout must be position:relative for drawer positioning */
+.spectator-layout {
+  display: flex;
+  flex: 1;
+  min-height: 0;
+  height: calc(100vh - 50px);
+  position: relative;
+  overflow: hidden;
+}
+
+.spectator-board {
+  flex: 1;
+  overflow-y: auto;
+  overflow-x: hidden;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 16px;
+}
+
+.spectator-table {
+  grid-template-columns: 140px 1fr 140px;
+  grid-template-areas:
+    "top    top    top"
+    "left center right"
+    "bottom bottom bottom";
+  flex: 1;
+  min-height: 0;
+  max-height: calc(100vh - 200px);
+}
+
+/* Spectator: all hands visible — use smaller cards for opponents */
+.spectator-table .hand-top .card,
+.spectator-table .hand-left .card,
+.spectator-table .hand-right .card,
+.spectator-table .hand-bottom .card {
+  width: 48px;
+  height: 72px;
+  font-size: 0.65em;
+}
+
+.spectator-table .hand-horizontal .card {
+  margin-left: -16px;
+}
+
+.spectator-table .hand-horizontal .card:first-child {
+  margin-left: 0;
+}
+
+/* Vertical labels for top/bottom players in spectator mode */
+.spectator-table .hand-bottom .hand-label {
+  writing-mode: vertical-rl;
+  text-orientation: upright;
+  letter-spacing: 2px;
+}
+
+.spectator-table .hand-top .hand-label {
+  writing-mode: vertical-rl;
+  text-orientation: upright;
+  letter-spacing: 2px;
+  transform: rotate(180deg);
+}
+
+.spectator-board .game-info-bar {
+  position: sticky;
+  top: 0;
+  z-index: 15;
+  backdrop-filter: blur(8px);
+  background: rgba(0, 0, 0, 0.7);
+  flex-shrink: 0;
+}
+
+/* ---- Spectator Scoreboard ---- */
+.spectator-scoreboard {
+  border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+  flex-shrink: 0;
+}
+
+.spectator-scoreboard-header {
+  padding: 12px 16px 8px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+}
+
+.spectator-scoreboard-header h4 {
+  font-size: 12px;
+  text-transform: uppercase;
+  letter-spacing: 1.5px;
+  color: var(--accent-gold);
+  margin: 0;
+}
+
+.spectator-scoreboard-body {
+  padding: 8px 16px;
+}
+
+.scoreboard-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 4px 0;
+  font-size: 13px;
+  gap: 8px;
+}
+
+.scoreboard-name {
+  flex: 1;
+  color: var(--text-primary);
+  font-weight: 500;
+}
+
+.scoreboard-tricks {
+  color: var(--text-secondary);
+  font-size: 12px;
+  min-width: 55px;
+  text-align: right;
+}
+
+.scoreboard-cumulative {
+  font-size: 12px;
+  font-weight: 600;
+  min-width: 40px;
+  text-align: right;
+}
+
+.scoreboard-final {
+  margin-top: 8px;
+  padding-top: 8px;
+  border-top: 1px solid rgba(255, 255, 255, 0.1);
+}
+
+.scoreboard-final-row.score-positive .scoreboard-score {
+  color: #81c784;
+  font-weight: 700;
+}
+
+.scoreboard-final-row.score-negative .scoreboard-score {
+  color: #e57373;
+  font-weight: 700;
+}
+
+.scoreboard-score {
+  min-width: 40px;
+  text-align: right;
+}
+
+.scoreboard-game-score {
+  font-size: 12px;
+  min-width: 36px;
+  text-align: right;
+}
+
+.scoreboard-leader {
+  background: rgba(218, 165, 32, 0.1);
+  border-radius: 4px;
+  padding: 4px 4px;
+}
+
+.scoreboard-leader .scoreboard-name {
+  color: var(--accent-gold);
+  font-weight: 700;
+}
+
+.scoreboard-leader-row td {
+  color: var(--accent-gold) !important;
+  font-weight: 700;
 }
 
 /* ---- Trick history ---- */
@@ -596,5 +784,47 @@
 
 .trick-winner-cell {
   font-weight: 600;
+}
+
+/* ---- Game counter (tournament) ---- */
+.game-counter {
+  font-size: 13px;
+  color: #daa520;
+  font-weight: 600;
+  background: rgba(218, 165, 32, 0.1);
+  padding: 4px 10px;
+  border-radius: 4px;
+}
+
+.tournament-controls {
+  text-align: center;
+  margin-top: 16px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 12px;
+}
+
+.cumulative-scores {
+  background: rgba(0, 0, 0, 0.3);
+  border-radius: 12px;
+  padding: 12px 16px;
+  min-width: 280px;
+}
+
+.cumulative-scores h4 {
+  color: var(--accent-gold);
+  font-size: 14px;
+  margin: 0 0 8px;
+  text-align: center;
+}
+
+.tournament-finished {
+  color: var(--accent-gold);
+  font-size: 18px;
+  font-weight: 700;
+  padding: 8px 16px;
+  background: rgba(218, 165, 32, 0.15);
+  border-radius: 8px;
 }
 

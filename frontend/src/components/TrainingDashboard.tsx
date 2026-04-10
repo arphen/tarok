@@ -28,6 +28,9 @@ export default function TrainingDashboard({ onBack }: Props) {
   const [resumeFrom, setResumeFrom] = useState('tarok_agent_latest.pt');
   const [stockskisRatio, setStockskisRatio] = useState(0.0);
   const [stockskisStrength, setStockskisStrength] = useState(1.0);
+  const [lookaheadRatio, setLookaheadRatio] = useState(0.0);
+  const [lookaheadSims, setLookaheadSims] = useState(20);
+  const [lookaheadPerfectInfo, setLookaheadPerfectInfo] = useState(true);
   const [availableSnapshots, setAvailableSnapshots] = useState<{filename: string, session: number, episode: number}[]>([]);
   const [tab, setTab] = useState<'overview' | 'contracts' | 'loss' | 'snapshots' | 'tarok_bids'>('overview');
   const [smoothing, setSmoothing] = useState(0.8);
@@ -68,6 +71,9 @@ export default function TrainingDashboard({ onBack }: Props) {
         resume_from: resume && !isLatest ? resumeFrom : undefined,
         stockskis_ratio: stockskisRatio,
         stockskis_strength: stockskisStrength,
+        lookahead_ratio: lookaheadRatio,
+        lookahead_sims: lookaheadSims,
+        lookahead_perfect_info: lookaheadPerfectInfo,
         use_rust_engine: useRustEngine,
         warmup_games: warmupGames,
       }),
@@ -81,6 +87,20 @@ export default function TrainingDashboard({ onBack }: Props) {
   };
 
   // Chart data — memoised to avoid re-deriving every render
+  // Downsample large datasets to MAX_CHART_POINTS to keep SVG rendering fast
+  const MAX_CHART_POINTS = 500;
+
+  const downsample = useCallback(<T,>(data: T[]): T[] => {
+    if (data.length <= MAX_CHART_POINTS) return data;
+    const step = data.length / MAX_CHART_POINTS;
+    const result: T[] = [];
+    for (let i = 0; i < MAX_CHART_POINTS - 1; i++) {
+      result.push(data[Math.floor(i * step)]);
+    }
+    result.push(data[data.length - 1]); // always include latest point
+    return result;
+  }, []);
+
   const applySmoothing = useCallback((data: any[], keys: string[]) => {
     if (data.length === 0 || smoothing === 0) return data;
     const result = [{ ...data[0] }];
@@ -97,19 +117,25 @@ export default function TrainingDashboard({ onBack }: Props) {
     return result;
   }, [smoothing]);
 
+  const smoothAndSample = useCallback((data: any[], keys: string[]) => {
+    return downsample(applySmoothing(data, keys));
+  }, [applySmoothing, downsample]);
+
   const historyOffset = metrics?.history_offset ?? 0;
 
-  const rewardData = useMemo(() => applySmoothing(metrics?.reward_history.map((v, i) => ({ s: historyOffset + i + 1, reward: v })) ?? [], ['reward']), [metrics?.reward_history, historyOffset, applySmoothing]);
-  const winRateData = useMemo(() => applySmoothing(metrics?.win_rate_history.map((v, i) => ({ s: historyOffset + i + 1, winRate: +(v * 100).toFixed(1) })) ?? [], ['winRate']), [metrics?.win_rate_history, historyOffset, applySmoothing]);
-  const lossData = useMemo(() => applySmoothing(metrics?.loss_history.map((v, i) => ({ s: historyOffset + i + 1, loss: v })) ?? [], ['loss']), [metrics?.loss_history, historyOffset, applySmoothing]);
-  const sessionScoreData = useMemo(() => applySmoothing(metrics?.session_avg_score_history?.map((v, i) => ({ s: historyOffset + i + 1, avgScore: v })) ?? [], ['avgScore']), [metrics?.session_avg_score_history, historyOffset, applySmoothing]);
-  const stockskisPlaceData = useMemo(() => applySmoothing(metrics?.stockskis_place_history?.map((v, i) => ({ s: historyOffset + i + 1, place: v })) ?? [], ['place']), [metrics?.stockskis_place_history, historyOffset, applySmoothing]);
-  const bidKlopData = useMemo(() => applySmoothing(metrics?.bid_rate_history?.map((v, i) => ({
+  const rewardData = useMemo(() => smoothAndSample(metrics?.reward_history.map((v, i) => ({ s: historyOffset + i + 1, reward: v })) ?? [], ['reward']), [metrics?.reward_history, historyOffset, smoothAndSample]);
+  const winRateData = useMemo(() => smoothAndSample(metrics?.win_rate_history.map((v, i) => ({ s: historyOffset + i + 1, winRate: +(v * 100).toFixed(1) })) ?? [], ['winRate']), [metrics?.win_rate_history, historyOffset, smoothAndSample]);
+  const lossData = useMemo(() => smoothAndSample(metrics?.loss_history.map((v, i) => ({ s: historyOffset + i + 1, loss: v })) ?? [], ['loss']), [metrics?.loss_history, historyOffset, smoothAndSample]);
+  const sessionScoreData = useMemo(() => smoothAndSample(metrics?.session_avg_score_history?.map((v, i) => ({ s: historyOffset + i + 1, avgScore: v })) ?? [], ['avgScore']), [metrics?.session_avg_score_history, historyOffset, smoothAndSample]);
+  const stockskisPlaceData = useMemo(() => smoothAndSample(metrics?.stockskis_place_history?.map((v, i) => ({ s: historyOffset + i + 1, place: v })) ?? [], ['place']), [metrics?.stockskis_place_history, historyOffset, smoothAndSample]);
+  const lookaheadScoreData = useMemo(() => smoothAndSample(metrics?.lookahead_score_history?.map((v, i) => ({ s: historyOffset + i + 1, score: v })) ?? [], ['score']), [metrics?.lookahead_score_history, historyOffset, smoothAndSample]);
+  const lookaheadBidData = useMemo(() => smoothAndSample(metrics?.lookahead_bid_rate_history?.map((v, i) => ({ s: historyOffset + i + 1, bidRate: +(v * 100).toFixed(1) })) ?? [], ['bidRate']), [metrics?.lookahead_bid_rate_history, historyOffset, smoothAndSample]);
+  const bidKlopData = useMemo(() => smoothAndSample(metrics?.bid_rate_history?.map((v, i) => ({
     s: historyOffset + i + 1,
     bid: +((metrics.bid_rate_history[i] ?? 0) * 100).toFixed(1),
     klop: +((metrics.klop_rate_history?.[i] ?? 0) * 100).toFixed(1),
     solo: +((metrics.solo_rate_history?.[i] ?? 0) * 100).toFixed(1),
-  })) ?? [], ['bid', 'klop', 'solo']), [metrics?.bid_rate_history, metrics?.klop_rate_history, metrics?.solo_rate_history, historyOffset, applySmoothing]);
+  })) ?? [], ['bid', 'klop', 'solo']), [metrics?.bid_rate_history, metrics?.klop_rate_history, metrics?.solo_rate_history, historyOffset, smoothAndSample]);
 
   // Contract bar data (declarer stats only — the meaningful metric)
   const contractBarData = metrics?.contract_stats ? Object.entries(metrics.contract_stats)
@@ -123,7 +149,7 @@ export default function TrainingDashboard({ onBack }: Props) {
     })) : [];
 
   // Contract win-rate over time
-  const contractWinData = useMemo(() => applySmoothing(metrics?.contract_win_rate_history
+  const contractWinData = useMemo(() => smoothAndSample(metrics?.contract_win_rate_history
     ? (metrics.win_rate_history || []).map((_, i) => {
         const row: Record<string, number> = { s: historyOffset + i + 1 };
         for (const [cname, arr] of Object.entries(metrics.contract_win_rate_history)) {
@@ -131,7 +157,7 @@ export default function TrainingDashboard({ onBack }: Props) {
         }
         return row;
       })
-    : [], Object.keys(metrics?.contract_win_rate_history || {})), [metrics?.contract_win_rate_history, metrics?.win_rate_history, historyOffset, applySmoothing]);
+    : [], Object.keys(metrics?.contract_win_rate_history || {})), [metrics?.contract_win_rate_history, metrics?.win_rate_history, historyOffset, smoothAndSample]);
 
   const sessionPct = metrics && metrics.total_sessions > 0
     ? (metrics.session / metrics.total_sessions) * 100
@@ -167,6 +193,24 @@ export default function TrainingDashboard({ onBack }: Props) {
             <span>StockŠkis STR {Math.round(stockskisStrength * 100)}%</span>
             <input type="range" value={stockskisStrength} onChange={e => setStockskisStrength(Number(e.target.value))}
               disabled={isTraining} min={0.1} max={1.0} step={0.1} />
+          </label>
+        )}
+        <label className="td-field min-width-80">
+          <span>Lookahead Ratio {Math.round(lookaheadRatio * 100)}%</span>
+          <input type="range" value={lookaheadRatio} onChange={e => setLookaheadRatio(Number(e.target.value))}
+            disabled={isTraining} min={0} max={1.0} step={0.1} />
+        </label>
+        {lookaheadRatio > 0 && (
+          <label className="td-field min-width-80">
+            <span>Lookahead Sims</span>
+            <input type="number" value={lookaheadSims} onChange={e => setLookaheadSims(Number(e.target.value))}
+              disabled={isTraining} min={1} max={200} step={5} />
+          </label>
+        )}
+        {lookaheadRatio > 0 && (
+          <label className="td-check" style={{ margin: 0 }}>
+            <input type="checkbox" checked={lookaheadPerfectInfo} onChange={e => setLookaheadPerfectInfo(e.target.checked)} disabled={isTraining} />
+            <span>Perfect Info</span>
           </label>
         )}
         <label className="td-field min-width-80">
@@ -319,6 +363,34 @@ export default function TrainingDashboard({ onBack }: Props) {
                     <YAxis stroke="#666" fontSize={11} domain={[1, 4]} reversed />
                     <Tooltip {...tooltipStyle} />
                     <Line type="monotone" dataKey="place" stroke="#9c27b0" strokeWidth={2} dot={false} name="Avg Place" />
+                  </LineChart>
+                </ResponsiveContainer>
+              </ChartCard>
+            )}
+
+            {lookaheadScoreData.length > 0 && (
+              <ChartCard title="Avg Score vs Lookahead Opponents">
+                <ResponsiveContainer width="100%" height={260}>
+                  <LineChart data={lookaheadScoreData}>
+                    <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.08)" />
+                    <XAxis dataKey="s" stroke="#666" fontSize={11} type="number" domain={['dataMin', 'dataMax']} />
+                    <YAxis stroke="#666" fontSize={11} />
+                    <Tooltip {...tooltipStyle} />
+                    <Line type="monotone" dataKey="score" stroke="#00bcd4" strokeWidth={2} dot={false} name="Avg Score" />
+                  </LineChart>
+                </ResponsiveContainer>
+              </ChartCard>
+            )}
+
+            {lookaheadBidData.length > 0 && (
+              <ChartCard title="Bid Rate vs Lookahead Opponents">
+                <ResponsiveContainer width="100%" height={260}>
+                  <LineChart data={lookaheadBidData}>
+                    <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.08)" />
+                    <XAxis dataKey="s" stroke="#666" fontSize={11} type="number" domain={['dataMin', 'dataMax']} />
+                    <YAxis stroke="#666" fontSize={11} domain={[0, 100]} unit="%" />
+                    <Tooltip {...tooltipStyle} />
+                    <Line type="monotone" dataKey="bidRate" stroke="#00bcd4" strokeWidth={2} dot={false} name="Bid %" />
                   </LineChart>
                 </ResponsiveContainer>
               </ChartCard>
