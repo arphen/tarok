@@ -12,17 +12,20 @@ interface EvalPoint {
   step: number;
   label: string;
   program?: string;
-  vs_v1: number;
-  vs_v2: number;
-  vs_v3: number;
-  'vs_v3.2': number;
-  avg_score_v1: number;
-  avg_score_v2: number;
-  avg_score_v3: number;
-  'avg_score_v3.2': number;
+  vs_v1?: number;
+  vs_v2?: number;
+  vs_v3?: number;
+  vs_v4?: number;
+  vs_v5?: number;
+  avg_score_v1?: number;
+  avg_score_v2?: number;
+  avg_score_v3?: number;
+  avg_score_v4?: number;
+  avg_score_v5?: number;
   loss: number;
   experiences?: number;
   games?: number;
+  [key: string]: unknown;
 }
 
 interface Snapshot {
@@ -37,14 +40,16 @@ interface PopulationMember {
   fitness: number;
   batch_avg_reward: number;
   batch_win_rate: number;
-  vs_v1: number;
-  vs_v2: number;
-  vs_v3: number;
-  'vs_v3.2': number;
-  avg_score_v1: number;
-  avg_score_v2: number;
-  avg_score_v3: number;
-  'avg_score_v3.2': number;
+  vs_v1?: number;
+  vs_v2?: number;
+  vs_v3?: number;
+  vs_v4?: number;
+  vs_v5?: number;
+  avg_score_v1?: number;
+  avg_score_v2?: number;
+  avg_score_v3?: number;
+  avg_score_v4?: number;
+  avg_score_v5?: number;
   loss: number;
   games: number;
   status: string;
@@ -63,10 +68,11 @@ interface GenerationPoint {
   avg_v3: number;
   best_index: number;
   best_label: string;
-  best_vs_v1: number;
-  best_vs_v2: number;
-  best_vs_v3: number;
-  'best_vs_v3.2': number;
+  best_vs_v1?: number;
+  best_vs_v2?: number;
+  best_vs_v3?: number;
+  best_vs_v4?: number;
+  best_vs_v5?: number;
   best_batch_reward: number;
 }
 
@@ -143,6 +149,14 @@ const tooltipStyle = {
   labelStyle: { color: '#aaa' },
 };
 
+const ALL_BOT_VERSIONS = ['v1', 'v2', 'v3', 'v4'] as const;
+const BOT_COLORS: Record<string, string> = {
+  v1: '#4caf50', v2: '#2196f3', v3: '#9c27b0', v4: '#ff9800', v5: '#f44336',
+};
+const BOT_LABELS: Record<string, string> = {
+  v1: 'V1', v2: 'V2', v3: 'V3', v4: 'V4', v5: 'V5',
+};
+
 export default function TrainingLab({ onBack }: Props) {
   const [state, setState] = useState<LabState | null>(null);
   const [checkpoints, setCheckpoints] = useState<CheckpointOption[]>([]);
@@ -150,6 +164,7 @@ export default function TrainingLab({ onBack }: Props) {
   // Imitation learning config
   const [expertGames, setExpertGames] = useState(500000);
   const [expertSource, setExpertSource] = useState("v2v3v5");
+  const [evalBots, setEvalBots] = useState<string[]>(['v1', 'v2', 'v3']);
   const [numRounds, setNumRounds] = useState(10);
   const [evalGames, setEvalGames] = useState(100);
   const [hiddenSize, setHiddenSize] = useState(256);
@@ -227,6 +242,7 @@ export default function TrainingLab({ onBack }: Props) {
       body: JSON.stringify({
         expert_games: expertGames,
         expert_source: expertSource,
+        eval_bots: evalBots,
         num_rounds: numRounds,
         eval_games: evalGames,
         learning_rate: ilLearningRate,
@@ -243,6 +259,7 @@ export default function TrainingLab({ onBack }: Props) {
         num_sessions: spSessions,
         games_per_session: spGamesPerSession,
         eval_games: evalGames,
+        eval_bots: evalBots,
         eval_interval: spEvalInterval,
         learning_rate: spLearningRate,
         fsp_ratio: spFspRatio,
@@ -285,14 +302,14 @@ export default function TrainingLab({ onBack }: Props) {
   // Chart data
   const evalData = useMemo(() => {
     if (!state?.eval_history?.length) return [];
-    return state.eval_history.map(e => ({
-      ...e,
-      vs_v1_pct: +(e.vs_v1 * 100).toFixed(1),
-      vs_v2_pct: +(e.vs_v2 * 100).toFixed(1),
-      vs_v3_pct: +(e.vs_v3 * 100).toFixed(1),
-      vs_v3_2_pct: +((e['vs_v3.2'] ?? 0) * 100).toFixed(1),
-      avg_score_v3_2: e['avg_score_v3.2'] ?? 0,
-    }));
+    return state.eval_history.map(e => {
+      const row: Record<string, unknown> = { ...e };
+      for (const v of ALL_BOT_VERSIONS) {
+        const wr = (e as Record<string, unknown>)[`vs_${v}`];
+        row[`vs_${v}_pct`] = wr != null ? +((wr as number) * 100).toFixed(1) : undefined;
+      }
+      return row;
+    });
   }, [state?.eval_history]);
 
   const lossData = useMemo(() => {
@@ -501,6 +518,21 @@ export default function TrainingLab({ onBack }: Props) {
                 </select>
               </label>
               <label className="lab-field">
+                <span>Eval Opponents</span>
+                <div className="lab-checkbox-group">
+                  {ALL_BOT_VERSIONS.map(v => (
+                    <label key={v} className="lab-checkbox">
+                      <input type="checkbox" checked={evalBots.includes(v)}
+                        onChange={e => {
+                          if (e.target.checked) setEvalBots(prev => [...prev, v].sort());
+                          else setEvalBots(prev => prev.filter(b => b !== v));
+                        }} />
+                      <span style={{ color: BOT_COLORS[v] }}>{BOT_LABELS[v]}</span>
+                    </label>
+                  ))}
+                </div>
+              </label>
+              <label className="lab-field">
                 <span>Expert Games</span>
                 <input type="number" value={expertGames} onChange={e => setExpertGames(Number(e.target.value))}
                   min={10000} step={50000} />
@@ -655,30 +687,18 @@ export default function TrainingLab({ onBack }: Props) {
       {/* Stat cards */}
       {hasNetwork && (
         <div className="lab-stats">
-          <StatCard
-            label="vs V1 Bots"
-            value={latest ? `${(latest.vs_v1 * 100).toFixed(1)}%` : '—'}
-            sublabel="Win Rate"
-            color="#4caf50"
-          />
-          <StatCard
-            label="vs V2 Bots"
-            value={latest ? `${(latest.vs_v2 * 100).toFixed(1)}%` : '—'}
-            sublabel="Win Rate"
-            color="#2196f3"
-          />
-          <StatCard
-            label="vs V3 Bots"
-            value={latest ? `${(latest.vs_v3 * 100).toFixed(1)}%` : '—'}
-            sublabel="Win Rate"
-            color="#9c27b0"
-          />
-          <StatCard
-            label="vs V3.2 Bots"
-            value={latest ? `${((latest['vs_v3.2'] ?? 0) * 100).toFixed(1)}%` : '—'}
-            sublabel="Win Rate"
-            color="#e91e63"
-          />
+          {ALL_BOT_VERSIONS.map(v => {
+            const wr = latest ? (latest as Record<string, unknown>)[`vs_${v}`] : undefined;
+            return (
+              <StatCard
+                key={v}
+                label={`vs ${BOT_LABELS[v]} Bots`}
+                value={wr != null ? `${((wr as number) * 100).toFixed(1)}%` : '—'}
+                sublabel="Win Rate"
+                color={BOT_COLORS[v]}
+              />
+            );
+          })}
           <StatCard
             label={state?.pbt_enabled ? 'Best Fitness' : 'Loss'}
             value={state?.pbt_enabled ? (latestGeneration ? latestGeneration.max_fitness.toFixed(4) : '—') : (state?.current_loss ? state.current_loss.toFixed(4) : '—')}
@@ -760,22 +780,12 @@ export default function TrainingLab({ onBack }: Props) {
                   <ResponsiveContainer width="100%" height={320}>
                     <AreaChart data={evalData}>
                       <defs>
-                        <linearGradient id="gradV1" x1="0" y1="0" x2="0" y2="1">
-                          <stop offset="5%" stopColor="#4caf50" stopOpacity={0.3} />
-                          <stop offset="95%" stopColor="#4caf50" stopOpacity={0} />
-                        </linearGradient>
-                        <linearGradient id="gradV2" x1="0" y1="0" x2="0" y2="1">
-                          <stop offset="5%" stopColor="#2196f3" stopOpacity={0.3} />
-                          <stop offset="95%" stopColor="#2196f3" stopOpacity={0} />
-                        </linearGradient>
-                        <linearGradient id="gradV3" x1="0" y1="0" x2="0" y2="1">
-                          <stop offset="5%" stopColor="#9c27b0" stopOpacity={0.3} />
-                          <stop offset="95%" stopColor="#9c27b0" stopOpacity={0} />
-                        </linearGradient>
-                        <linearGradient id="gradV3_2" x1="0" y1="0" x2="0" y2="1">
-                          <stop offset="5%" stopColor="#e91e63" stopOpacity={0.3} />
-                          <stop offset="95%" stopColor="#e91e63" stopOpacity={0} />
-                        </linearGradient>
+                        {ALL_BOT_VERSIONS.map(v => (
+                          <linearGradient key={v} id={`grad${BOT_LABELS[v]}`} x1="0" y1="0" x2="0" y2="1">
+                            <stop offset="5%" stopColor={BOT_COLORS[v]} stopOpacity={0.3} />
+                            <stop offset="95%" stopColor={BOT_COLORS[v]} stopOpacity={0} />
+                          </linearGradient>
+                        ))}
                       </defs>
                       <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.08)" />
                       <XAxis dataKey="label" stroke="#666" fontSize={11} />
@@ -783,10 +793,9 @@ export default function TrainingLab({ onBack }: Props) {
                       <Tooltip {...tooltipStyle} />
                       <Legend />
                       <ReferenceLine y={25} stroke="rgba(255,255,255,0.15)" strokeDasharray="5 5" label={{ value: "Random (25%)", fill: '#555', fontSize: 10 }} />
-                      <Area type="monotone" dataKey="vs_v1_pct" stroke="#4caf50" fill="url(#gradV1)" strokeWidth={2} name="vs V1" />
-                      <Area type="monotone" dataKey="vs_v2_pct" stroke="#2196f3" fill="url(#gradV2)" strokeWidth={2} name="vs V2" />
-                      <Area type="monotone" dataKey="vs_v3_pct" stroke="#9c27b0" fill="url(#gradV3)" strokeWidth={2} name="vs V3" />
-                      <Area type="monotone" dataKey="vs_v3_2_pct" stroke="#e91e63" fill="url(#gradV3_2)" strokeWidth={2} name="vs V3.2" />
+                      {ALL_BOT_VERSIONS.map(v => (
+                        <Area key={v} type="monotone" dataKey={`vs_${v}_pct`} stroke={BOT_COLORS[v]} fill={`url(#grad${BOT_LABELS[v]})`} strokeWidth={2} name={`vs ${BOT_LABELS[v]}`} />
+                      ))}
                     </AreaChart>
                   </ResponsiveContainer>
                 </ChartCard>
@@ -845,7 +854,6 @@ export default function TrainingLab({ onBack }: Props) {
                             <th>Fitness</th>
                             <th>vs V1</th>
                             <th>vs V3</th>
-                            <th>vs V3.2</th>
                             <th>Loss</th>
                             <th>Hyperparameters</th>
                           </tr>
@@ -859,9 +867,8 @@ export default function TrainingLab({ onBack }: Props) {
                               <td>{(member.games ?? 0).toLocaleString()}</td>
                               <td>{((member as any).games_per_sec ?? 0).toFixed(1)}</td>
                               <td style={{ color: '#d4a843' }}>{member.fitness.toFixed(4)}</td>
-                              <td>{formatPercent(member.vs_v1)}</td>
-                              <td>{formatPercent(member.vs_v3)}</td>
-                              <td>{formatPercent(member['vs_v3.2'] ?? 0)}</td>
+                              <td>{formatPercent(member.vs_v1 ?? 0)}</td>
+                              <td>{formatPercent(member.vs_v3 ?? 0)}</td>
                               <td>{member.loss.toFixed(4)}</td>
                               <td style={{ maxWidth: 320 }}>{formatHparams(member)}</td>
                             </tr>
@@ -876,73 +883,30 @@ export default function TrainingLab({ onBack }: Props) {
 
             {tab === 'winrate' && (
               <div className="lab-charts">
-                <ChartCard title="Win Rate vs V1 (Weakest)" wide>
-                  <ResponsiveContainer width="100%" height={280}>
-                    <BarChart data={evalData}>
-                      <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.08)" />
-                      <XAxis dataKey="label" stroke="#666" fontSize={11} />
-                      <YAxis stroke="#666" fontSize={11} domain={[0, 100]} unit="%" />
-                      <Tooltip {...tooltipStyle} />
-                      <ReferenceLine y={25} stroke="rgba(255,255,255,0.2)" strokeDasharray="5 5" />
-                      <Bar dataKey="vs_v1_pct" name="Win % vs V1" radius={[4, 4, 0, 0]}>
-                        {evalData.map((e, i) => (
-                          <Cell key={i} fill={e.program === 'self_play' ? '#e040fb' : i === 0 ? '#555' : `hsl(${120 * (e.vs_v1_pct / 50)}, 70%, 45%)`} />
-                        ))}
-                      </Bar>
-                    </BarChart>
-                  </ResponsiveContainer>
-                </ChartCard>
-
-                <ChartCard title="Win Rate vs V2 (Medium)">
-                  <ResponsiveContainer width="100%" height={280}>
-                    <BarChart data={evalData}>
-                      <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.08)" />
-                      <XAxis dataKey="label" stroke="#666" fontSize={11} />
-                      <YAxis stroke="#666" fontSize={11} domain={[0, 100]} unit="%" />
-                      <Tooltip {...tooltipStyle} />
-                      <ReferenceLine y={25} stroke="rgba(255,255,255,0.2)" strokeDasharray="5 5" />
-                      <Bar dataKey="vs_v2_pct" name="Win % vs V2" radius={[4, 4, 0, 0]}>
-                        {evalData.map((e, i) => (
-                          <Cell key={i} fill={e.program === 'self_play' ? '#e040fb' : i === 0 ? '#555' : `hsl(${200 + 60 * (e.vs_v2_pct / 50)}, 70%, 45%)`} />
-                        ))}
-                      </Bar>
-                    </BarChart>
-                  </ResponsiveContainer>
-                </ChartCard>
-
-                <ChartCard title="Win Rate vs V3 (Strongest)">
-                  <ResponsiveContainer width="100%" height={280}>
-                    <BarChart data={evalData}>
-                      <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.08)" />
-                      <XAxis dataKey="label" stroke="#666" fontSize={11} />
-                      <YAxis stroke="#666" fontSize={11} domain={[0, 100]} unit="%" />
-                      <Tooltip {...tooltipStyle} />
-                      <ReferenceLine y={25} stroke="rgba(255,255,255,0.2)" strokeDasharray="5 5" />
-                      <Bar dataKey="vs_v3_pct" name="Win % vs V3" radius={[4, 4, 0, 0]}>
-                        {evalData.map((e, i) => (
-                          <Cell key={i} fill={e.program === 'self_play' ? '#e040fb' : i === 0 ? '#555' : `hsl(${270 + 30 * (e.vs_v3_pct / 50)}, 70%, 45%)`} />
-                        ))}
-                      </Bar>
-                    </BarChart>
-                  </ResponsiveContainer>
-                </ChartCard>
-
-                <ChartCard title="Win Rate vs V3.2 (Hybrid)">
-                  <ResponsiveContainer width="100%" height={280}>
-                    <BarChart data={evalData}>
-                      <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.08)" />
-                      <XAxis dataKey="label" stroke="#666" fontSize={11} />
-                      <YAxis stroke="#666" fontSize={11} domain={[0, 100]} unit="%" />
-                      <Tooltip {...tooltipStyle} />
-                      <ReferenceLine y={25} stroke="rgba(255,255,255,0.2)" strokeDasharray="5 5" />
-                      <Bar dataKey="vs_v3_2_pct" name="Win % vs V3.2" radius={[4, 4, 0, 0]}>
-                        {evalData.map((e, i) => (
-                          <Cell key={i} fill={e.program === 'self_play' ? '#e040fb' : i === 0 ? '#555' : `hsl(${340 + 20 * ((e as any).vs_v3_2_pct / 50)}, 70%, 45%)`} />
-                        ))}
-                      </Bar>
-                    </BarChart>
-                  </ResponsiveContainer>
-                </ChartCard>
+                {ALL_BOT_VERSIONS.map((v, vi) => {
+                  const dataKey = `vs_${v}_pct`;
+                  const hasData = evalData.some(e => e[dataKey] != null);
+                  if (!hasData) return null;
+                  const hueBase = [120, 200, 270, 30, 0][vi] ?? 0;
+                  return (
+                    <ChartCard key={v} title={`Win Rate vs ${BOT_LABELS[v]}`} wide={vi === 0}>
+                      <ResponsiveContainer width="100%" height={280}>
+                        <BarChart data={evalData}>
+                          <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.08)" />
+                          <XAxis dataKey="label" stroke="#666" fontSize={11} />
+                          <YAxis stroke="#666" fontSize={11} domain={[0, 100]} unit="%" />
+                          <Tooltip {...tooltipStyle} />
+                          <ReferenceLine y={25} stroke="rgba(255,255,255,0.2)" strokeDasharray="5 5" />
+                          <Bar dataKey={dataKey} name={`Win % vs ${BOT_LABELS[v]}`} radius={[4, 4, 0, 0]}>
+                            {evalData.map((e, i) => (
+                              <Cell key={i} fill={(e as Record<string, unknown>).program === 'self_play' ? '#e040fb' : i === 0 ? '#555' : `hsl(${hueBase + 30 * (((e[dataKey] as number) ?? 0) / 50)}, 70%, 45%)`} />
+                            ))}
+                          </Bar>
+                        </BarChart>
+                      </ResponsiveContainer>
+                    </ChartCard>
+                  );
+                })}
               </div>
             )}
 
@@ -957,10 +921,9 @@ export default function TrainingLab({ onBack }: Props) {
                       <Tooltip {...tooltipStyle} />
                       <Legend />
                       <ReferenceLine y={0} stroke="rgba(255,255,255,0.2)" />
-                      <Line type="monotone" dataKey="avg_score_v1" stroke="#4caf50" strokeWidth={2} dot={{ r: 4 }} name="vs V1 Score" />
-                      <Line type="monotone" dataKey="avg_score_v2" stroke="#2196f3" strokeWidth={2} dot={{ r: 4 }} name="vs V2 Score" />
-                      <Line type="monotone" dataKey="avg_score_v3" stroke="#9c27b0" strokeWidth={2} dot={{ r: 4 }} name="vs V3 Score" />
-                      <Line type="monotone" dataKey="avg_score_v3_2" stroke="#e91e63" strokeWidth={2} dot={{ r: 4 }} name="vs V3.2 Score" />
+                      {ALL_BOT_VERSIONS.map(v => (
+                        <Line key={v} type="monotone" dataKey={`avg_score_${v}`} stroke={BOT_COLORS[v]} strokeWidth={2} dot={{ r: 4 }} name={`vs ${BOT_LABELS[v]} Score`} />
+                      ))}
                     </LineChart>
                   </ResponsiveContainer>
                 </ChartCard>
@@ -972,35 +935,33 @@ export default function TrainingLab({ onBack }: Props) {
                         <tr>
                           <th>Round</th>
                           <th>Program</th>
-                          <th>vs V1 WR</th>
-                          <th>vs V2 WR</th>
-                          <th>vs V3 WR</th>
-                          <th>vs V3.2 WR</th>
-                          <th>Score V1</th>
-                          <th>Score V2</th>
-                          <th>Score V3</th>
-                          <th>Score V3.2</th>
+                          {ALL_BOT_VERSIONS.map(v => (
+                            <th key={`wr-${v}`}>vs {BOT_LABELS[v]} WR</th>
+                          ))}
+                          {ALL_BOT_VERSIONS.map(v => (
+                            <th key={`sc-${v}`}>Score {BOT_LABELS[v]}</th>
+                          ))}
                           <th>Loss</th>
                         </tr>
                       </thead>
                       <tbody>
                         {evalData.map((e, i) => (
                           <tr key={i} className={i === 0 ? 'lab-row-baseline' : ''}>
-                            <td>{e.label}</td>
+                            <td>{e.label as string}</td>
                             <td>
                               {e.program === 'imitation' && <span className="lab-badge-il">📚 IL</span>}
                               {e.program === 'self_play' && <span className="lab-badge-sp">🎮 SP</span>}
                               {e.program === 'init' && <span style={{ color: '#666' }}>—</span>}
                             </td>
-                            <td style={{ color: '#4caf50' }}>{e.vs_v1_pct}%</td>
-                            <td style={{ color: '#2196f3' }}>{e.vs_v2_pct}%</td>
-                            <td style={{ color: '#9c27b0' }}>{e.vs_v3_pct}%</td>
-                            <td style={{ color: '#e91e63' }}>{(e as any).vs_v3_2_pct}%</td>
-                            <td>{e.avg_score_v1.toFixed(1)}</td>
-                            <td>{e.avg_score_v2.toFixed(1)}</td>
-                            <td>{e.avg_score_v3.toFixed(1)}</td>
-                            <td>{((e as any).avg_score_v3_2 ?? 0).toFixed(1)}</td>
-                            <td>{e.loss ? e.loss.toFixed(4) : '—'}</td>
+                            {ALL_BOT_VERSIONS.map(v => {
+                              const pct = e[`vs_${v}_pct`];
+                              return <td key={`wr-${v}`} style={{ color: BOT_COLORS[v] }}>{pct != null ? `${pct}%` : '—'}</td>;
+                            })}
+                            {ALL_BOT_VERSIONS.map(v => {
+                              const sc = e[`avg_score_${v}`];
+                              return <td key={`sc-${v}`}>{sc != null ? (sc as number).toFixed(1) : '—'}</td>;
+                            })}
+                            <td>{(e.loss as number) ? (e.loss as number).toFixed(4) : '—'}</td>
                           </tr>
                         ))}
                       </tbody>

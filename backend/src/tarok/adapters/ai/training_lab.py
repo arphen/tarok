@@ -2,7 +2,7 @@
 
 Provides endpoints for:
 1. Creating a fresh neural network with a generated persona
-2. Evaluating it against v1/v2/v3/v3.2 heuristic bots (real games)
+2. Evaluating it against v1/v2/v3 heuristic bots (real games)
 3. Generating expert data from v2/v3 bots (imitation learning)
 4. Self-play PPO training with all existing improvements
 5. Saving snapshots to Hall of Fame for model selection / FSP
@@ -53,7 +53,6 @@ from tarok.adapters.ai.imitation import imitation_pretrain
 from tarok.adapters.ai.stockskis_player import StockSkisPlayer
 from tarok.adapters.ai.stockskis_v2 import StockSkisPlayerV2
 from tarok.adapters.ai.stockskis_v3 import StockSkisPlayerV3
-from tarok.adapters.ai.stockskis_v3_2 import StockSkisPlayerV3_2
 from tarok.adapters.ai.stockskis_v4 import StockSkisPlayerV4
 from tarok.adapters.api.spectator_observer import SpectatorObserver
 from tarok.use_cases.game_loop import GameLoop
@@ -141,7 +140,6 @@ def save_to_hof(network: TarokNet, persona: dict, eval_history: list[dict], phas
             "vs_v1": latest_eval.get("vs_v1", 0),
             "vs_v2": latest_eval.get("vs_v2", 0),
             "vs_v3": latest_eval.get("vs_v3", 0),
-            "vs_v3.2": latest_eval.get("vs_v3.2", 0),
             "avg_score_v1": latest_eval.get("avg_score_v1", 0),
         },
         "saved_at": time.time(),
@@ -163,7 +161,6 @@ def save_to_hof(network: TarokNet, persona: dict, eval_history: list[dict], phas
         "vs_v1": latest_eval.get("vs_v1", 0),
         "vs_v2": latest_eval.get("vs_v2", 0),
         "vs_v3": latest_eval.get("vs_v3", 0),
-        "vs_v3.2": latest_eval.get("vs_v3.2", 0),
         "saved_at": data["saved_at"],
     })
     manifest_path.write_text(json.dumps(manifest, indent=2))
@@ -277,16 +274,17 @@ def _get_eval_pool() -> ProcessPoolExecutor:
 
 def _eval_member_in_process(
     state_dict: dict, hidden_size: int, eval_games: int,
+    eval_bots: list[str] | None = None,
 ) -> dict:
-    """Run in a subprocess: evaluate one network snapshot against v1/v2/v3."""
+    """Run in a subprocess: evaluate one network snapshot against selected bots."""
+    if eval_bots is None:
+        eval_bots = ["v1", "v2", "v3"]
     net = TarokNet(hidden_size=hidden_size)
     net.load_state_dict(state_dict)
     net.eval()
     return {
-        "vs_v1": _evaluate_vs_bots_sync(net, eval_games, "v1"),
-        "vs_v2": _evaluate_vs_bots_sync(net, eval_games, "v2"),
-        "vs_v3": _evaluate_vs_bots_sync(net, eval_games, "v3"),
-        "vs_v3.2": _evaluate_vs_bots_sync(net, eval_games, "v3.2"),
+        f"vs_{v}": _evaluate_vs_bots_sync(net, eval_games, v)
+        for v in eval_bots
     }
 
 
@@ -585,20 +583,12 @@ def _restore_member_from_snapshot(member: dict[str, Any], snapshot: dict[str, An
 
 def _member_state_dict(member: dict[str, Any]) -> dict[str, Any]:
     best_eval = member.get("best_eval") or {}
-    return {
+    out = {
         "index": member["index"],
         "label": member["label"],
         "fitness": round(float(member.get("fitness", 0.0)), 4),
         "batch_avg_reward": round(float(member.get("batch_avg_reward", 0.0)), 4),
         "batch_win_rate": round(float(member.get("batch_win_rate", 0.0)), 4),
-        "vs_v1": round(float(best_eval.get("vs_v1", 0.0)), 4),
-        "vs_v2": round(float(best_eval.get("vs_v2", 0.0)), 4),
-        "vs_v3": round(float(best_eval.get("vs_v3", 0.0)), 4),
-        "vs_v3.2": round(float(best_eval.get("vs_v3.2", 0.0)), 4),
-        "avg_score_v1": round(float(best_eval.get("avg_score_v1", 0.0)), 2),
-        "avg_score_v2": round(float(best_eval.get("avg_score_v2", 0.0)), 2),
-        "avg_score_v3": round(float(best_eval.get("avg_score_v3", 0.0)), 2),
-        "avg_score_v3.2": round(float(best_eval.get("avg_score_v3.2", 0.0)), 2),
         "loss": round(float(member.get("loss", 0.0)), 4),
         "games": int(member.get("games", 0)),
         "status": member.get("status", "idle"),
@@ -608,6 +598,11 @@ def _member_state_dict(member: dict[str, Any]) -> dict[str, Any]:
         "model_hash": member.get("model_hash", ""),
         "hparams": _round_hparams(member.get("hparams", {})),
     }
+    for v in ["v1", "v2", "v3", "v4", "v5"]:
+        if f"vs_{v}" in best_eval:
+            out[f"vs_{v}"] = round(float(best_eval[f"vs_{v}"]), 4)
+            out[f"avg_score_{v}"] = round(float(best_eval.get(f"avg_score_{v}", 0.0)), 2)
+    return out
 
 
 def _sync_population_state(members: list[dict[str, Any]]) -> None:
@@ -643,8 +638,6 @@ def _make_opponents(version: str) -> list:
         return [StockSkisPlayerV2(name=f"V2-{i}") for i in range(3)]
     elif version == "v3":
         return [StockSkisPlayerV3(name=f"V3-{i}") for i in range(3)]
-    elif version == "v3.2":
-        return [StockSkisPlayerV3_2(name=f"V3.2-{i}") for i in range(3)]
     elif version == "v4":
         return [StockSkisPlayerV4(name=f"V4-{i}") for i in range(3)]
     else:
@@ -710,6 +703,43 @@ async def _evaluate_vs_bots(
     )
 
 
+async def _evaluate_vs_selected_bots(
+    network: TarokNet,
+    num_games: int,
+    eval_bots: list[str],
+) -> dict[str, dict]:
+    """Evaluate NN against each selected bot version.
+    Returns {version_str: {win_rate, avg_score, games}}."""
+    results = {}
+    for v in eval_bots:
+        results[v] = await _evaluate_vs_bots(network, num_games, v)
+    return results
+
+
+def _eval_results_to_history_entry(
+    results: dict[str, dict],
+    step: int,
+    label: str,
+    program: str,
+    loss: float = 0,
+    experiences: int = 0,
+    games: int = 0,
+) -> dict:
+    """Convert per-version eval results into an eval_history entry."""
+    entry: dict = {
+        "step": step,
+        "label": label,
+        "program": program,
+        "loss": loss,
+        "experiences": experiences,
+        "games": games,
+    }
+    for v, r in results.items():
+        entry[f"vs_{v}"] = r["win_rate"]
+        entry[f"avg_score_{v}"] = r["avg_score"]
+    return entry
+
+
 async def _save_sample_replay(network: TarokNet, generation: int, member: dict[str, Any]) -> None:
     sample_agent = _make_eval_agent(network)
     opponents = _make_opponents("v3")
@@ -736,6 +766,7 @@ async def _save_sample_replay(network: TarokNet, generation: int, member: dict[s
 async def _run_lab_session(
     expert_games: int,
     expert_source: str,
+    eval_bots: list[str],
     training_epochs: int,
     eval_games: int,
     num_rounds: int,
@@ -745,7 +776,7 @@ async def _run_lab_session(
 ):
     """Imitation learning pipeline:
     1. Eval fresh network (plays real games — should be helpless)
-    2. For each round: train on v2/v3 expert data → eval vs all bots → save snapshot
+    2. For each round: train on v2/v3 expert data → eval vs selected bots → save snapshot
     """
     global _lab
 
@@ -757,27 +788,14 @@ async def _run_lab_session(
 
         if not _lab.loaded_from_checkpoint or not _lab.eval_history:
             # Initial eval for a fresh model, or a loaded checkpoint without saved eval history.
-            v1 = await _evaluate_vs_bots(_lab.network, eval_games, "v1")
-            v2 = await _evaluate_vs_bots(_lab.network, eval_games, "v2")
-            v3 = await _evaluate_vs_bots(_lab.network, eval_games, "v3")
-            v3_2 = await _evaluate_vs_bots(_lab.network, eval_games, "v3.2")
-
-            _lab.eval_history.append({
-                "step": len(_lab.eval_history),
-                "label": "Loaded checkpoint" if _lab.loaded_from_checkpoint else "Fresh (random)",
-                "program": "init",
-                "vs_v1": v1["win_rate"],
-                "vs_v2": v2["win_rate"],
-                "vs_v3": v3["win_rate"],
-                "vs_v3.2": v3_2["win_rate"],
-                "avg_score_v1": v1["avg_score"],
-                "avg_score_v2": v2["avg_score"],
-                "avg_score_v3": v3["avg_score"],
-                "avg_score_v3.2": v3_2["avg_score"],
-                "loss": 0,
-                "experiences": 0,
-                "games": 0,
-            })
+            results = await _evaluate_vs_selected_bots(_lab.network, eval_games, eval_bots)
+            entry = _eval_results_to_history_entry(
+                results,
+                step=len(_lab.eval_history),
+                label="Loaded checkpoint" if _lab.loaded_from_checkpoint else "Fresh (random)",
+                program="init",
+            )
+            _lab.eval_history.append(entry)
             _update_persona_hash()
             await asyncio.sleep(0)
 
@@ -826,28 +844,19 @@ async def _run_lab_session(
             _lab.phase = "evaluating"
             await asyncio.sleep(0)
 
-            v1 = await _evaluate_vs_bots(_lab.network, eval_games, "v1")
-            v2 = await _evaluate_vs_bots(_lab.network, eval_games, "v2")
-            v3 = await _evaluate_vs_bots(_lab.network, eval_games, "v3")
-            v3_2 = await _evaluate_vs_bots(_lab.network, eval_games, "v3.2")
+            results = await _evaluate_vs_selected_bots(_lab.network, eval_games, eval_bots)
 
             step = len(_lab.eval_history)
-            _lab.eval_history.append({
-                "step": step,
-                "label": f"IL Round {existing_il_rounds + round_idx + 1}",
-                "program": "imitation",
-                "vs_v1": v1["win_rate"],
-                "vs_v2": v2["win_rate"],
-                "vs_v3": v3["win_rate"],
-                "vs_v3.2": v3_2["win_rate"],
-                "avg_score_v1": v1["avg_score"],
-                "avg_score_v2": v2["avg_score"],
-                "avg_score_v3": v3["avg_score"],
-                "avg_score_v3.2": v3_2["avg_score"],
-                "loss": _lab.current_loss,
-                "experiences": _lab.expert_experiences,
-                "games": _lab.expert_games_generated,
-            })
+            entry = _eval_results_to_history_entry(
+                results,
+                step=step,
+                label=f"IL Round {existing_il_rounds + round_idx + 1}",
+                program="imitation",
+                loss=_lab.current_loss,
+                experiences=_lab.expert_experiences,
+                games=_lab.expert_games_generated,
+            )
+            _lab.eval_history.append(entry)
 
             # Save snapshot to HOF
             _update_persona_hash()
@@ -1078,35 +1087,32 @@ async def _run_population_member(
     return summary, start_game_index + games_played
 
 
-async def _evaluate_population_member(member: dict[str, Any], eval_games: int) -> dict[str, float]:
+async def _evaluate_population_member(member: dict[str, Any], eval_games: int, eval_bots: list[str] | None = None) -> dict[str, float]:
+    if eval_bots is None:
+        eval_bots = ["v1", "v2", "v3"]
     network = member["trainer"].shared_network
-    v1, v2, v3, v3_2 = await asyncio.gather(
-        _evaluate_vs_bots(network, eval_games, "v1"),
-        _evaluate_vs_bots(network, eval_games, "v2"),
-        _evaluate_vs_bots(network, eval_games, "v3"),
-        _evaluate_vs_bots(network, eval_games, "v3.2"),
-    )
+    results = await _evaluate_vs_selected_bots(network, eval_games, eval_bots)
 
     avg_reward_norm = max(0.0, min(1.0, (member.get("batch_avg_reward", 0.0) + 1.0) / 2.0))
-    fitness = (
-        0.35 * v3["win_rate"]
-        + 0.25 * v3_2["win_rate"]
-        + 0.15 * v2["win_rate"]
-        + 0.10 * v1["win_rate"]
-        + 0.15 * avg_reward_norm
-    )
 
-    return {
-        "fitness": round(fitness, 6),
-        "vs_v1": v1["win_rate"],
-        "vs_v2": v2["win_rate"],
-        "vs_v3": v3["win_rate"],
-        "vs_v3.2": v3_2["win_rate"],
-        "avg_score_v1": v1["avg_score"],
-        "avg_score_v2": v2["avg_score"],
-        "avg_score_v3": v3["avg_score"],
-        "avg_score_v3.2": v3_2["avg_score"],
-    }
+    # Fitness: weighted by bot strength. Give highest weight to strongest evaluated bot.
+    wr_values = [results[v]["win_rate"] for v in eval_bots]
+    if len(wr_values) >= 3:
+        weights = [0.15, 0.25, 0.45] + [0.45] * (len(wr_values) - 3)
+        total_w = sum(weights[:len(wr_values)]) + 0.15
+        fitness = sum(w * wr for w, wr in zip(weights, wr_values)) / total_w + 0.15 * avg_reward_norm / total_w
+    elif len(wr_values) == 2:
+        fitness = 0.35 * wr_values[0] + 0.50 * wr_values[1] + 0.15 * avg_reward_norm
+    elif len(wr_values) == 1:
+        fitness = 0.85 * wr_values[0] + 0.15 * avg_reward_norm
+    else:
+        fitness = avg_reward_norm
+
+    out: dict[str, float] = {"fitness": round(fitness, 6)}
+    for v, r in results.items():
+        out[f"vs_{v}"] = r["win_rate"]
+        out[f"avg_score_{v}"] = r["avg_score"]
+    return out
 
 
 def _set_best_member(best_member: dict[str, Any], generation: int) -> None:
@@ -1122,6 +1128,7 @@ async def _background_pbt_eval(
     eval_games: int,
     generation: int,
     persona_snapshot: dict,
+    eval_bots: list[str] | None = None,
 ) -> None:
     """Fire-and-forget: evaluate population in background processes, update _lab when done.
 
@@ -1129,6 +1136,8 @@ async def _background_pbt_eval(
     blocking the training loop.  Results are written to _lab.eval_history
     and _lab.pbt_generation_history for the dashboard.
     """
+    if eval_bots is None:
+        eval_bots = ["v1", "v2", "v3"]
     global _lab
     try:
         pool = _get_eval_pool()
@@ -1136,7 +1145,7 @@ async def _background_pbt_eval(
         futures = [
             loop.run_in_executor(
                 pool, _eval_member_in_process,
-                snap["state_dict"], snap["hidden_size"], eval_games,
+                snap["state_dict"], snap["hidden_size"], eval_games, eval_bots,
             )
             for snap in member_snapshots
         ]
@@ -1145,21 +1154,20 @@ async def _background_pbt_eval(
         best_snap = None
         best_fitness = -1.0
         gen_fitnesses: list[float] = []
-        gen_v3s: list[float] = []
-        gen_v3_2s: list[float] = []
+        gen_best_wr: list[float] = []
 
         for snap, result in zip(member_snapshots, results):
             avg_reward_norm = max(0.0, min(1.0, (snap["batch_avg_reward"] + 1.0) / 2.0))
-            fitness = (
-                0.35 * result["vs_v3"]["win_rate"]
-                + 0.25 * result["vs_v3.2"]["win_rate"]
-                + 0.15 * result["vs_v2"]["win_rate"]
-                + 0.10 * result["vs_v1"]["win_rate"]
-                + 0.15 * avg_reward_norm
-            )
+            # Dynamic fitness: equal weighting across evaluated bots
+            wr_values = [result[f"vs_{v}"]["win_rate"] for v in eval_bots]
+            if wr_values:
+                wr_avg = sum(wr_values) / len(wr_values)
+                fitness = 0.85 * wr_avg + 0.15 * avg_reward_norm
+            else:
+                fitness = avg_reward_norm
             gen_fitnesses.append(fitness)
-            gen_v3s.append(result["vs_v3"]["win_rate"])
-            gen_v3_2s.append(result["vs_v3.2"]["win_rate"])
+            # Track the strongest bot's win rate (last in list = strongest)
+            gen_best_wr.append(wr_values[-1] if wr_values else 0.0)
             if fitness > best_fitness:
                 best_fitness = fitness
                 best_snap = {**snap, **result, "fitness": fitness}
@@ -1169,41 +1177,35 @@ async def _background_pbt_eval(
 
         avg_fitness = sum(gen_fitnesses) / max(len(gen_fitnesses), 1)
 
-        _lab.pbt_generation_history.append({
+        gen_entry: dict[str, Any] = {
             "generation": generation,
             "avg_fitness": round(avg_fitness, 4),
             "min_fitness": round(min(gen_fitnesses), 4),
             "max_fitness": round(max(gen_fitnesses), 4),
-            "avg_v3": round(sum(gen_v3s) / max(len(gen_v3s), 1), 4),
-            "avg_v3.2": round(sum(gen_v3_2s) / max(len(gen_v3_2s), 1), 4),
+            "avg_v3": round(sum(gen_best_wr) / max(len(gen_best_wr), 1), 4),
             "best_index": best_snap["index"],
             "best_label": best_snap["label"],
-            "best_vs_v1": round(best_snap["vs_v1"]["win_rate"], 4),
-            "best_vs_v2": round(best_snap["vs_v2"]["win_rate"], 4),
-            "best_vs_v3": round(best_snap["vs_v3"]["win_rate"], 4),
-            "best_vs_v3.2": round(best_snap["vs_v3.2"]["win_rate"], 4),
             "best_batch_reward": round(best_snap.get("batch_avg_reward", 0.0), 4),
-        })
+        }
+        for v in eval_bots:
+            gen_entry[f"best_vs_{v}"] = round(best_snap[f"vs_{v}"]["win_rate"], 4)
+        _lab.pbt_generation_history.append(gen_entry)
 
-        _lab.eval_history.append({
+        eval_entry: dict[str, Any] = {
             "step": len(_lab.eval_history),
             "label": f"PBT Gen {generation}",
             "program": "self_play_pbt",
-            "vs_v1": best_snap["vs_v1"]["win_rate"],
-            "vs_v2": best_snap["vs_v2"]["win_rate"],
-            "vs_v3": best_snap["vs_v3"]["win_rate"],
-            "vs_v3.2": best_snap["vs_v3.2"]["win_rate"],
-            "avg_score_v1": best_snap["vs_v1"]["avg_score"],
-            "avg_score_v2": best_snap["vs_v2"]["avg_score"],
-            "avg_score_v3": best_snap["vs_v3"]["avg_score"],
-            "avg_score_v3.2": best_snap["vs_v3.2"]["avg_score"],
             "loss": best_snap.get("loss", 0.0),
             "experiences": 0,
             "games": _lab.self_play_games,
             "generation": generation,
             "best_fitness": round(best_snap["fitness"], 4),
             "avg_fitness": round(avg_fitness, 4),
-        })
+        }
+        for v in eval_bots:
+            eval_entry[f"vs_{v}"] = best_snap[f"vs_{v}"]["win_rate"]
+            eval_entry[f"avg_score_{v}"] = best_snap[f"vs_{v}"]["avg_score"]
+        _lab.eval_history.append(eval_entry)
 
         # Save best to HoF
         net = TarokNet(hidden_size=best_snap["hidden_size"])
@@ -1234,6 +1236,7 @@ async def _run_island_pbt_session(
     num_sessions: int,
     games_per_session: int,
     eval_games: int,
+    eval_bots: list[str],
     eval_interval: int,
     learning_rate: float,
     population_size: int,
@@ -1307,8 +1310,8 @@ async def _run_island_pbt_session(
             {"index": i, "label": f"Island {i}", "status": "starting",
              "fitness": 0, "games": 0, "hparams": {},
              "batch_avg_reward": 0, "batch_win_rate": 0,
-             "vs_v1": 0, "vs_v2": 0, "vs_v3": 0, "vs_v3.2": 0,
-             "avg_score_v1": 0, "avg_score_v2": 0, "avg_score_v3": 0, "avg_score_v3.2": 0,
+             **{f"vs_{v}": 0 for v in eval_bots},
+             **{f"avg_score_{v}": 0 for v in eval_bots},
              "loss": 0, "copied_from": None, "mutations": 0,
              "survival_count": 0, "model_hash": "",
              "games_per_sec": 0, "generation": 0}
@@ -1341,7 +1344,6 @@ async def _run_island_pbt_session(
                         "batch_win_rate": s.get("session_win_rate", 0),
                         "vs_v1": s.get("vs_v1", 0),
                         "vs_v3": s.get("vs_v3", 0),
-                        "vs_v3.2": s.get("vs_v3.2", 0),
                         "loss": s.get("loss", 0),
                         "games_per_sec": s.get("games_per_sec", 0),
                         "generation": s.get("generation", 0),
@@ -1414,6 +1416,7 @@ async def _run_pbt_self_play_session(
     exploit_top_ratio: float,
     exploit_bottom_ratio: float,
     mutation_scale: float,
+    eval_bots: list[str] | None = None,
 ):
     global _lab
 
@@ -1587,6 +1590,7 @@ async def _run_pbt_self_play_session(
             ]
             asyncio.create_task(_background_pbt_eval(
                 member_snapshots, eval_games, generation, dict(_lab.persona),
+                eval_bots=eval_bots,
             ))
 
             elite_count = max(1, int(round(len(members) * exploit_top_ratio)))
@@ -1649,6 +1653,7 @@ async def _run_self_play_session(
     num_sessions: int,
     games_per_session: int,
     eval_games: int,
+    eval_bots: list[str],
     eval_interval: int,
     learning_rate: float,
     stockskis_ratio: float,
@@ -1859,28 +1864,19 @@ async def _run_self_play_session(
                 _lab.phase = "evaluating"
                 await asyncio.sleep(0)
 
-                v1 = await _evaluate_vs_bots(_lab.network, eval_games, "v1")
-                v2 = await _evaluate_vs_bots(_lab.network, eval_games, "v2")
-                v3 = await _evaluate_vs_bots(_lab.network, eval_games, "v3")
-                v3_2 = await _evaluate_vs_bots(_lab.network, eval_games, "v3.2")
+                results = await _evaluate_vs_selected_bots(_lab.network, eval_games, eval_bots)
 
                 step = len(_lab.eval_history)
-                _lab.eval_history.append({
-                    "step": step,
-                    "label": f"SP Session {session_idx + 1}",
-                    "program": "self_play",
-                    "vs_v1": v1["win_rate"],
-                    "vs_v2": v2["win_rate"],
-                    "vs_v3": v3["win_rate"],
-                    "vs_v3.2": v3_2["win_rate"],
-                    "avg_score_v1": v1["avg_score"],
-                    "avg_score_v2": v2["avg_score"],
-                    "avg_score_v3": v3["avg_score"],
-                    "avg_score_v3.2": v3_2["avg_score"],
-                    "loss": _lab.current_loss,
-                    "experiences": _lab.expert_experiences,
-                    "games": _lab.self_play_games,
-                })
+                entry = _eval_results_to_history_entry(
+                    results,
+                    step=step,
+                    label=f"SP Session {session_idx + 1}",
+                    program="self_play",
+                    loss=_lab.current_loss,
+                    experiences=_lab.expert_experiences,
+                    games=_lab.self_play_games,
+                )
+                _lab.eval_history.append(entry)
 
                 _lab.persona["age"] = _lab.persona.get("age", 0) + 1
                 _update_persona_hash()
@@ -2089,6 +2085,7 @@ def load_lab_checkpoint(choice: str) -> dict:
 async def start_lab_training(
     expert_games: int = 500_000,
     expert_source: str = "v2v3v5",
+    eval_bots: list[str] | None = None,
     training_epochs: int = 3,
     eval_games: int = 500,
     num_rounds: int = 10,
@@ -2098,6 +2095,9 @@ async def start_lab_training(
 ):
     """Start the imitation learning pipeline."""
     global _lab, _lab_task
+
+    if eval_bots is None:
+        eval_bots = ["v1", "v2", "v3"]
 
     if _lab.network is None:
         create_lab_network()
@@ -2110,6 +2110,7 @@ async def start_lab_training(
         _run_lab_session(
             expert_games=expert_games,
             expert_source=expert_source,
+            eval_bots=eval_bots,
             training_epochs=training_epochs,
             eval_games=eval_games,
             num_rounds=num_rounds,
@@ -2124,6 +2125,7 @@ async def start_self_play(
     num_sessions: int = 50,
     games_per_session: int = 20,
     eval_games: int = 100,
+    eval_bots: list[str] | None = None,
     eval_interval: int = 5,
     learning_rate: float = 3e-4,
     stockskis_ratio: float = 0.0,
@@ -2137,6 +2139,9 @@ async def start_self_play(
 ):
     """Start the self-play PPO training pipeline."""
     global _lab, _lab_task
+
+    if eval_bots is None:
+        eval_bots = ["v1", "v2", "v3"]
 
     if _lab.network is None:
         create_lab_network()
@@ -2159,6 +2164,7 @@ async def start_self_play(
                 num_sessions=num_sessions,
                 games_per_session=games_per_session,
                 eval_games=eval_games,
+                eval_bots=eval_bots,
                 eval_interval=eval_interval,
                 learning_rate=learning_rate,
                 population_size=population_size,
@@ -2173,6 +2179,7 @@ async def start_self_play(
                 num_sessions=num_sessions,
                 games_per_session=games_per_session,
                 eval_games=eval_games,
+                eval_bots=eval_bots,
                 eval_interval=eval_interval,
                 learning_rate=learning_rate,
                 stockskis_ratio=stockskis_ratio,
