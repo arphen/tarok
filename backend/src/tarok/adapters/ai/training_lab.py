@@ -386,37 +386,46 @@ def _train_member_in_process(
             if progress_queue is not None:
                 elapsed = _time.perf_counter() - t_start
                 n_session_games = len(stats) + len(sk_stats)
-                progress_queue.put({
-                    "type": "session",
-                    "member": member_index,
-                    "session": session_offset + 1,
-                    "total_sessions": num_sessions,
-                    "games": games_played,
-                    "games_per_sec": games_played / max(elapsed, 0.01),
-                    "win_rate": total_wins / max(games_played, 1),
-                    "avg_score": total_scores / max(games_played, 1),
-                })
+                try:
+                    progress_queue.put_nowait({
+                        "type": "session",
+                        "member": member_index,
+                        "session": session_offset + 1,
+                        "total_sessions": num_sessions,
+                        "games": games_played,
+                        "games_per_sec": games_played / max(elapsed, 0.01),
+                        "win_rate": total_wins / max(games_played, 1),
+                        "avg_score": total_scores / max(games_played, 1),
+                    })
+                except Exception:
+                    pass
     finally:
         loop.close()
 
     # Report PPO phase
     if progress_queue is not None:
-        progress_queue.put({
-            "type": "ppo_start",
-            "member": member_index,
-            "experiences": len(all_experiences),
-        })
+        try:
+            progress_queue.put_nowait({
+                "type": "ppo_start",
+                "member": member_index,
+                "experiences": len(all_experiences),
+            })
+        except Exception:
+            pass
 
     loss_info = trainer._ppo_update(all_experiences) if all_experiences else {}
     n = max(games_played, 1)
 
     if progress_queue is not None:
-        progress_queue.put({
-            "type": "done",
-            "member": member_index,
-            "games": games_played,
-            "elapsed": _time.perf_counter() - t_start,
-        })
+        try:
+            progress_queue.put_nowait({
+                "type": "done",
+                "member": member_index,
+                "games": games_played,
+                "elapsed": _time.perf_counter() - t_start,
+            })
+        except Exception:
+            pass
 
     return {
         "network_state": trainer.shared_network.state_dict(),
@@ -1234,6 +1243,7 @@ async def _run_pbt_self_play_session(
         global_game_index = 0
         rng = random.Random(time.time())
         base_age = _lab.persona.get("age", 0)
+        progress_manager = mp.Manager()
 
         for iteration in range(1, total_generations + 1):
             generation = base_age + iteration
@@ -1258,8 +1268,7 @@ async def _run_pbt_self_play_session(
             # Parallel training with live progress reporting
             pool = _get_train_pool()
             loop = asyncio.get_event_loop()
-            manager = mp.Manager()
-            progress_queue = manager.Queue()
+            progress_queue = progress_manager.Queue()
             gen_start = time.perf_counter()
 
             train_futures = [
@@ -1423,6 +1432,10 @@ async def _run_pbt_self_play_session(
         _lab.pbt_member_total = 0
         if _lab.network is not None:
             _lab.network = _lab.network.to("cpu")
+        try:
+            progress_manager.shutdown()
+        except Exception:
+            pass
 
 
 async def _run_self_play_session(
