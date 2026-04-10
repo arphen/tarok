@@ -182,11 +182,9 @@ def _save_to_hof(
         "phase_label": f"island-{island_id}-g{generation}",
         "eval_history": [],
         "hidden_size": hidden_size,
-        "metrics": {
-            "vs_v1": eval_results.get("vs_v1", 0),
-            "vs_v2": eval_results.get("vs_v2", 0),
-            "vs_v3": eval_results.get("vs_v3", 0),
-        },
+        "metrics": {f"vs_{v}": eval_results.get(f"vs_{v}", 0) for v in eval_results if v.startswith("vs_")}
+                    if any(k.startswith("vs_") for k in eval_results)
+                    else {k: v for k, v in eval_results.items()},
         "saved_at": time.time(),
     }
     torch.save(data, hof_dir / filename)
@@ -199,17 +197,17 @@ def _save_to_hof(
             manifest = json.loads(manifest_path.read_text())
         except Exception:
             manifest = []
-    manifest.append({
+    manifest_entry = {
         "filename": filename,
         "display_name": data["display_name"],
         "persona": data["persona"],
         "model_hash": h,
         "phase_label": data["phase_label"],
-        "vs_v1": eval_results.get("vs_v1", 0),
-        "vs_v2": eval_results.get("vs_v2", 0),
-        "vs_v3": eval_results.get("vs_v3", 0),
         "saved_at": data["saved_at"],
-    })
+    }
+    for k, v in eval_results.items():
+        manifest_entry[k] = v
+    manifest.append(manifest_entry)
     # Atomic write
     tmp_path = manifest_path.with_suffix(".tmp")
     tmp_path.write_text(json.dumps(manifest, indent=2))
@@ -226,6 +224,9 @@ def _evaluate_vs_bots(network, num_games: int, version: str) -> dict:
     from tarok.adapters.ai.stockskis_player import StockSkisPlayer
     from tarok.adapters.ai.stockskis_v2 import StockSkisPlayerV2
     from tarok.adapters.ai.stockskis_v3 import StockSkisPlayerV3
+    from tarok.adapters.ai.stockskis_v3_2 import StockSkisPlayerV3_2
+    from tarok.adapters.ai.stockskis_v4 import StockSkisPlayerV4
+    from tarok.adapters.ai.stockskis_v5 import StockSkisPlayerV5
     from tarok.use_cases.game_loop import GameLoop
 
     network.eval()
@@ -239,6 +240,12 @@ def _evaluate_vs_bots(network, num_games: int, version: str) -> dict:
         opponents = [StockSkisPlayerV2(name=f"V2-{i}") for i in range(3)]
     elif version == "v3":
         opponents = [StockSkisPlayerV3(name=f"V3-{i}") for i in range(3)]
+    elif version == "v3.2":
+        opponents = [StockSkisPlayerV3_2(name=f"V3.2-{i}") for i in range(3)]
+    elif version == "v4":
+        opponents = [StockSkisPlayerV4(name=f"V4-{i}") for i in range(3)]
+    elif version == "v5":
+        opponents = [StockSkisPlayerV5(name=f"V5-{i}") for i in range(3)]
     else:
         opponents = [StockSkisPlayer(name=f"V1-{i}", strength=1.0) for i in range(3)]
 
@@ -331,6 +338,7 @@ def island_worker(
     mutation_scale: float = 1.0,
     fsp_ratio: float = 0.3,
     time_limit_seconds: float = 0,
+    eval_bots: list[str] | None = None,
 ) -> None:
     """Self-contained training loop for one island.
 
@@ -342,6 +350,9 @@ def island_worker(
     from tarok.adapters.ai.agent import RLAgent
     from tarok.adapters.ai.network import TarokNet
     from tarok.adapters.ai.trainer import PPOTrainer
+
+    if eval_bots is None:
+        eval_bots = ["v1", "v3"]
 
     ckpt_dir = Path(checkpoints_dir)
     hof_dir = ckpt_dir / "hall_of_fame"
@@ -463,19 +474,28 @@ def island_worker(
 
             # --- Periodic eval ---
             net.eval()
-            v1 = _evaluate_vs_bots(net, eval_games, "v1")
-            v3 = _evaluate_vs_bots(net, eval_games, "v3")
+            eval_results: dict[str, dict] = {}
+            for bot_v in eval_bots:
+                eval_results[bot_v] = _evaluate_vs_bots(net, eval_games, bot_v)
             net.train()
 
-            fitness = 0.6 * v3["win_rate"] + 0.25 * v1["win_rate"] + 0.15 * max(0.0, min(1.0, (session_wins / max(session_games, 1))))
+            # Dynamic fitness: equal weighting across eval bots + reward bonus
+            wr_values = [eval_results[v]["win_rate"] for v in eval_bots]
+            reward_norm = max(0.0, min(1.0, (session_wins / max(session_games, 1))))
+            if wr_values:
+                wr_avg = sum(wr_values) / len(wr_values)
+                fitness = 0.85 * wr_avg + 0.15 * reward_norm
+            else:
+                fitness = reward_norm
 
             # --- Save to HoF if improved ---
             if fitness > best_fitness:
                 best_fitness = fitness
-                best_eval = {"vs_v1": v1["win_rate"], "vs_v3": v3["win_rate"]}
+                best_eval = {f"vs_{v}": eval_results[v]["win_rate"] for v in eval_bots}
+                hof_eval = {f"vs_{v}": eval_results[v]["win_rate"] for v in eval_bots}
                 _save_to_hof(
                     net.state_dict(), hidden_size, island_id, generation,
-                    {"vs_v1": v1["win_rate"], "vs_v2": 0, "vs_v3": v3["win_rate"]},
+                    hof_eval,
                     hof_dir,
                 )
 
@@ -493,8 +513,10 @@ def island_worker(
 
                 hof_data = _load_best_from_hof(hof_dir)
                 if hof_data is not None:
-                    hof_v3 = hof_data.get("metrics", {}).get("vs_v3", 0)
-                    if hof_v3 > best_fitness + 0.05:
+                    # Use the strongest evaluated bot's win rate as proxy for fitness
+                    hof_metrics = hof_data.get("metrics", {})
+                    hof_best_wr = max((v for k, v in hof_metrics.items() if k.startswith("vs_")), default=0)
+                    if hof_best_wr > best_fitness + 0.05:
                         # Adopt better weights from another island
                         net.load_state_dict(hof_data["model_state_dict"])
                         for a in agents:
@@ -514,7 +536,7 @@ def island_worker(
                             a.explore_rate = float(hp.get("explore_rate", 0.1))
 
             # --- Write stats for dashboard ---
-            _write_stats(stats_dir, island_id, {
+            stats_data = {
                 "island_id": island_id,
                 "generation": generation,
                 "total_games": total_games,
@@ -525,14 +547,16 @@ def island_worker(
                 "session_win_rate": round(session_wins / max(session_games, 1), 4),
                 "avg_score": round(total_scores / max(total_games, 1), 2),
                 "loss": round(loss, 4),
-                "vs_v1": v1["win_rate"],
-                "vs_v3": v3["win_rate"],
                 "fitness": round(fitness, 4),
                 "best_fitness": round(best_fitness, 4),
                 "elapsed": round(elapsed, 1),
                 "hparams": {k: round(v, 6) if isinstance(v, float) else v for k, v in hp.items()},
                 "status": "running",
-            })
+            }
+            for v in eval_bots:
+                stats_data[f"vs_{v}"] = eval_results[v]["win_rate"]
+                stats_data[f"avg_score_{v}"] = eval_results[v]["avg_score"]
+            _write_stats(stats_dir, island_id, stats_data)
 
     except Exception:
         import traceback
@@ -542,17 +566,18 @@ def island_worker(
 
         # Write final stats
         elapsed = time.perf_counter() - t_start
-        _write_stats(stats_dir, island_id, {
+        final_stats = {
             "island_id": island_id,
             "generation": generation,
             "total_games": total_games,
             "games_per_sec": round(total_games / max(elapsed, 0.01), 1),
             "win_rate": round(total_wins / max(total_games, 1), 4),
-            "vs_v1": best_eval.get("vs_v1", 0),
-            "vs_v3": best_eval.get("vs_v3", 0),
             "fitness": round(best_fitness, 4),
             "best_fitness": round(best_fitness, 4),
             "elapsed": round(elapsed, 1),
             "hparams": {k: round(v, 6) if isinstance(v, float) else v for k, v in hp.items()},
             "status": "stopped",
-        })
+        }
+        for k, v in best_eval.items():
+            final_stats[k] = v
+        _write_stats(stats_dir, island_id, final_stats)

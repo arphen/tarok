@@ -149,13 +149,15 @@ const tooltipStyle = {
   labelStyle: { color: '#aaa' },
 };
 
-const ALL_BOT_VERSIONS = ['v1', 'v2', 'v3', 'v4'] as const;
+const ALL_BOT_VERSIONS = ['v1', 'v2', 'v3', 'v3.2', 'v4', 'v5'] as const;
 const BOT_COLORS: Record<string, string> = {
-  v1: '#4caf50', v2: '#2196f3', v3: '#9c27b0', v4: '#ff9800', v5: '#f44336',
+  v1: '#4caf50', v2: '#2196f3', v3: '#9c27b0', 'v3.2': '#e91e63', v4: '#ff9800', v5: '#f44336',
 };
 const BOT_LABELS: Record<string, string> = {
-  v1: 'V1', v2: 'V2', v3: 'V3', v4: 'V4', v5: 'V5',
+  v1: 'V1', v2: 'V2', v3: 'V3', 'v3.2': 'V3.2', v4: 'V4', v5: 'V5',
 };
+/** Sanitize bot version for use as Recharts dataKey (dots break nested access) */
+const sanitizeKey = (v: string) => v.replace(/\./g, '_');
 
 export default function TrainingLab({ onBack }: Props) {
   const [state, setState] = useState<LabState | null>(null);
@@ -306,7 +308,10 @@ export default function TrainingLab({ onBack }: Props) {
       const row: Record<string, unknown> = { ...e };
       for (const v of ALL_BOT_VERSIONS) {
         const wr = (e as Record<string, unknown>)[`vs_${v}`];
-        row[`vs_${v}_pct`] = wr != null ? +((wr as number) * 100).toFixed(1) : undefined;
+        const sk = sanitizeKey(v);
+        row[`vs_${sk}_pct`] = wr != null ? +((wr as number) * 100).toFixed(1) : undefined;
+        const sc = (e as Record<string, unknown>)[`avg_score_${v}`];
+        if (sc != null) row[`avg_score_${sk}`] = sc;
       }
       return row;
     });
@@ -794,7 +799,7 @@ export default function TrainingLab({ onBack }: Props) {
                       <Legend />
                       <ReferenceLine y={25} stroke="rgba(255,255,255,0.15)" strokeDasharray="5 5" label={{ value: "Random (25%)", fill: '#555', fontSize: 10 }} />
                       {ALL_BOT_VERSIONS.map(v => (
-                        <Area key={v} type="monotone" dataKey={`vs_${v}_pct`} stroke={BOT_COLORS[v]} fill={`url(#grad${BOT_LABELS[v]})`} strokeWidth={2} name={`vs ${BOT_LABELS[v]}`} />
+                        <Area key={v} type="monotone" dataKey={`vs_${sanitizeKey(v)}_pct`} stroke={BOT_COLORS[v]} fill={`url(#grad${BOT_LABELS[v]})`} strokeWidth={2} name={`vs ${BOT_LABELS[v]}`} />
                       ))}
                     </AreaChart>
                   </ResponsiveContainer>
@@ -854,6 +859,7 @@ export default function TrainingLab({ onBack }: Props) {
                             <th>Fitness</th>
                             <th>vs V1</th>
                             <th>vs V3</th>
+                            <th>vs V3.2</th>
                             <th>Loss</th>
                             <th>Hyperparameters</th>
                           </tr>
@@ -884,10 +890,11 @@ export default function TrainingLab({ onBack }: Props) {
             {tab === 'winrate' && (
               <div className="lab-charts">
                 {ALL_BOT_VERSIONS.map((v, vi) => {
-                  const dataKey = `vs_${v}_pct`;
+                  const sk = sanitizeKey(v);
+                  const dataKey = `vs_${sk}_pct`;
                   const hasData = evalData.some(e => e[dataKey] != null);
                   if (!hasData) return null;
-                  const hueBase = [120, 200, 270, 30, 0][vi] ?? 0;
+                  const hueBase = [120, 200, 270, 340, 30, 0][vi] ?? 0;
                   return (
                     <ChartCard key={v} title={`Win Rate vs ${BOT_LABELS[v]}`} wide={vi === 0}>
                       <ResponsiveContainer width="100%" height={280}>
@@ -922,7 +929,7 @@ export default function TrainingLab({ onBack }: Props) {
                       <Legend />
                       <ReferenceLine y={0} stroke="rgba(255,255,255,0.2)" />
                       {ALL_BOT_VERSIONS.map(v => (
-                        <Line key={v} type="monotone" dataKey={`avg_score_${v}`} stroke={BOT_COLORS[v]} strokeWidth={2} dot={{ r: 4 }} name={`vs ${BOT_LABELS[v]} Score`} />
+                        <Line key={v} type="monotone" dataKey={`avg_score_${sanitizeKey(v)}`} stroke={BOT_COLORS[v]} strokeWidth={2} dot={{ r: 4 }} name={`vs ${BOT_LABELS[v]} Score`} />
                       ))}
                     </LineChart>
                   </ResponsiveContainer>
@@ -954,11 +961,11 @@ export default function TrainingLab({ onBack }: Props) {
                               {e.program === 'init' && <span style={{ color: '#666' }}>—</span>}
                             </td>
                             {ALL_BOT_VERSIONS.map(v => {
-                              const pct = e[`vs_${v}_pct`];
+                              const pct = e[`vs_${sanitizeKey(v)}_pct`];
                               return <td key={`wr-${v}`} style={{ color: BOT_COLORS[v] }}>{pct != null ? `${pct}%` : '—'}</td>;
                             })}
                             {ALL_BOT_VERSIONS.map(v => {
-                              const sc = e[`avg_score_${v}`];
+                              const sc = e[`avg_score_${sanitizeKey(v)}`];
                               return <td key={`sc-${v}`}>{sc != null ? (sc as number).toFixed(1) : '—'}</td>;
                             })}
                             <td>{(e.loss as number) ? (e.loss as number).toFixed(4) : '—'}</td>
