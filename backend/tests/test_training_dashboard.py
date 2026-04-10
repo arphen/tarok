@@ -88,11 +88,11 @@ async def test_trainer_to_dict():
 async def test_rust_engine_fallback(trainer):
     """When Rust engine is unavailable, use_rust_engine should be False."""
     agents = [RLAgent(name=f"Agent-{i}", hidden_size=64) for i in range(4)]
-    t = PPOTrainer(agents, lr=3e-4, device="cpu", games_per_session=5, use_rust_engine=True)
-    # _HAS_RUST is False because tarok_engine isn't installed
-    assert t.use_rust_engine is False
-    result = await t.train(1)
-    assert result.episode == 5
+    with patch("tarok.adapters.ai.trainer._HAS_RUST", False):
+        t = PPOTrainer(agents, lr=3e-4, device="cpu", games_per_session=5, use_rust_engine=True)
+        assert t.use_rust_engine is False
+        result = await t.train(1)
+        assert result.episode == 5
 
 
 async def test_trainer_tarok_count_bids(trainer):

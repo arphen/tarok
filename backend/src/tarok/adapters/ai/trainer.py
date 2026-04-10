@@ -635,11 +635,21 @@ class PPOTrainer:
                         and self.network_bank.is_ready
                         and self._rng.random() < self.fsp_ratio
                     )
-                    external_opponents = use_fsp or use_stockskis
+                    # Lookahead mode: use Monte Carlo search opponents
+                    use_lookahead = (
+                        not use_stockskis
+                        and not use_fsp
+                        and self.lookahead_ratio > 0
+                        and self._lookahead_opponents is not None
+                        and self._rng.random() < self.lookahead_ratio
+                    )
+                    external_opponents = use_fsp or use_stockskis or use_lookahead
 
                     original_agents = None
                     if use_stockskis:
                         original_agents = self._enter_stockskis_mode()
+                    elif use_lookahead:
+                        original_agents = self._enter_lookahead_mode()
                     elif use_fsp:
                         self._enter_fsp_mode()
 
@@ -648,15 +658,26 @@ class PPOTrainer:
                         agent.clear_experiences()
 
                     # Play one game (Rust engine or Python engine)
-                    if self.use_rust_engine and not use_stockskis:
-                        game = RustGameLoop(self.agents)
-                    else:
-                        game = GameLoop(self.agents)
-                    state, scores = await game.run(dealer=(game_count + g) % 4)
+                    try:
+                        if self.use_rust_engine and not use_stockskis:
+                            game = RustGameLoop(self.agents)
+                        else:
+                            game = GameLoop(self.agents)
+                        state, scores = await game.run(dealer=(game_count + g) % 4)
+                    except Exception:
+                        if use_stockskis:
+                            self._exit_stockskis_mode(original_agents)
+                        elif use_lookahead:
+                            self._exit_lookahead_mode(original_agents)
+                        elif use_fsp:
+                            self._exit_fsp_mode()
+                        continue
 
                     # Restore agents after external-opponent game
                     if use_stockskis:
                         self._exit_stockskis_mode(original_agents)
+                    elif use_lookahead:
+                        self._exit_lookahead_mode(original_agents)
                     elif use_fsp:
                         self._exit_fsp_mode()
 
@@ -674,6 +695,13 @@ class PPOTrainer:
                         places = {p: rank + 1 for rank, p in enumerate(sorted_players)}
                         avg_sk_place = sum(places[p] for p in range(1, 4)) / 3.0
                         session_stockskis_places.append(avg_sk_place)
+
+                    # Track lookahead finishing scores and bid rates
+                    if use_lookahead:
+                        session_lookahead_scores.append(raw_score)
+                        session_lookahead_bids.append(
+                            1.0 if agent0_bids else 0.0
+                        )
 
                     # Track tarok count vs contract for player 0
                     if state.initial_tarok_counts:
