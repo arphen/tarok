@@ -7,6 +7,8 @@ import base64
 import time
 from contextlib import asynccontextmanager
 from pathlib import Path
+import importlib
+import re
 
 from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
@@ -451,6 +453,77 @@ class SpectateRequest(BaseModel):
     delay: float = 1.5  # seconds between moves
 
 
+_STOCKSKIS_FILE_RE = re.compile(r"^stockskis_v(\d+)\.py$")
+
+
+def _available_stockskis_versions() -> list[int]:
+    ai_dir = Path(__file__).resolve().parents[1] / "ai"
+    versions: list[int] = []
+    try:
+        for f in ai_dir.iterdir():
+            m = _STOCKSKIS_FILE_RE.match(f.name)
+            if m:
+                versions.append(int(m.group(1)))
+    except Exception:
+        return []
+    return sorted(set(versions))
+
+
+def _build_stockskis_player(version: int, name: str):
+    mod = importlib.import_module(f"tarok.adapters.ai.stockskis_v{version}")
+    cls = getattr(mod, f"StockSkisPlayerV{version}", None)
+    if cls is None:
+        raise ValueError(f"StockSkisPlayerV{version} not found")
+    return cls(name=name)
+
+
+def _build_spectate_agent(cfg: dict, idx: int):
+    agent_type_raw = str(cfg.get("type", "rl"))
+    agent_type = agent_type_raw.strip().lower()
+    agent_name = str(cfg.get("name", f"Agent-{idx}"))
+    checkpoint = cfg.get("checkpoint")
+
+    if agent_type == "random":
+        return RandomPlayer(name=agent_name)
+
+    # StockŠkis heuristics (dynamic versions)
+    if agent_type == "stockskis":
+        versions = _available_stockskis_versions()
+        if not versions:
+            raise HTTPException(status_code=400, detail="No StockŠkis versions available on server")
+        return _build_stockskis_player(max(versions), name=agent_name)
+
+    m = re.match(r"^stockskis_v(\d+)$", agent_type)
+    if m:
+        version = int(m.group(1))
+        try:
+            return _build_stockskis_player(version, name=agent_name)
+        except ModuleNotFoundError as exc:
+            raise HTTPException(status_code=400, detail=f"Unknown StockŠkis version: v{version}") from exc
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    # RL agent
+    ckpt_path = Path("checkpoints") / checkpoint if checkpoint else Path("checkpoints/tarok_agent_latest.pt")
+    if ckpt_path.exists():
+        agent = RLAgent.from_checkpoint(ckpt_path, name=agent_name)
+    else:
+        agent = RLAgent(name=agent_name)
+    agent.set_training(False)
+    return agent
+
+
+@app.get("/api/agents/stockskis")
+async def list_stockskis_versions():
+    """List available StockŠkis heuristic versions for UI dropdowns."""
+    versions = _available_stockskis_versions()
+    return {
+        "versions": [f"v{v}" for v in versions],
+        "latest": (f"v{max(versions)}" if versions else None),
+        "types": ([f"stockskis_v{v}" for v in versions] if versions else []),
+    }
+
+
 @app.post("/api/spectate/new")
 async def new_spectate(req: SpectateRequest):
     """Create a new 4-AI spectator game."""
@@ -459,22 +532,9 @@ async def new_spectate(req: SpectateRequest):
 
     agents = []
     for i, agent_cfg in enumerate(req.agents[:4]):
-        agent_type = agent_cfg.get("type", "rl")
-        agent_name = agent_cfg.get("name", f"Agent-{i}")
-        checkpoint = agent_cfg.get("checkpoint")
-
-        if agent_type == "random":
-            agents.append(RandomPlayer(name=agent_name))
-        elif agent_type == "lookahead":
-            agents.append(LookaheadAgent(n_simulations=50, name=agent_name))
-        else:
-            ckpt_path = Path("checkpoints") / checkpoint if checkpoint else Path("checkpoints/tarok_agent_latest.pt")
-            if ckpt_path.exists():
-                agent = RLAgent.from_checkpoint(ckpt_path, name=agent_name)
-            else:
-                agent = RLAgent(name=agent_name)
-            agent.set_training(False)
-            agents.append(agent)
+        agents.append(_build_spectate_agent(agent_cfg, i))
+        # Note: Lookahead is intentionally not supported here unless a concrete
+        # implementation exists in this codebase. Keep spectate robust.
 
     # Fill remaining slots with RL agents
     while len(agents) < 4:

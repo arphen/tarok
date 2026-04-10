@@ -628,18 +628,28 @@ class PPOTrainer:
                         and self._stockskis_opponents is not None
                         and self._rng.random() < self.stockskis_ratio
                     )
+                    # Lookahead mode: use Monte Carlo search bots as opponents (only if not StockŠkis)
+                    use_lookahead = (
+                        not use_stockskis
+                        and self.lookahead_ratio > 0
+                        and self._lookahead_opponents is not None
+                        and self._rng.random() < self.lookahead_ratio
+                    )
                     # FSP mode: use historical network weights (only if not StockŠkis)
                     use_fsp = (
                         not use_stockskis
+                        and not use_lookahead
                         and self.fsp_ratio > 0
                         and self.network_bank.is_ready
                         and self._rng.random() < self.fsp_ratio
                     )
-                    external_opponents = use_fsp or use_stockskis
+                    external_opponents = use_fsp or use_stockskis or use_lookahead
 
                     original_agents = None
                     if use_stockskis:
                         original_agents = self._enter_stockskis_mode()
+                    elif use_lookahead:
+                        original_agents = self._enter_lookahead_mode()
                     elif use_fsp:
                         self._enter_fsp_mode()
 
@@ -652,13 +662,19 @@ class PPOTrainer:
                         game = RustGameLoop(self.agents)
                     else:
                         game = GameLoop(self.agents)
-                    state, scores = await game.run(dealer=(game_count + g) % 4)
-
-                    # Restore agents after external-opponent game
-                    if use_stockskis:
-                        self._exit_stockskis_mode(original_agents)
-                    elif use_fsp:
-                        self._exit_fsp_mode()
+                    try:
+                        state, scores = await game.run(dealer=(game_count + g) % 4)
+                    except Exception:
+                        log.exception("Training game crashed; skipping (session=%s game=%s)", session_idx + 1, g + 1)
+                        continue
+                    finally:
+                        # Restore agents after external-opponent game (even on crash)
+                        if use_stockskis and original_agents is not None:
+                            self._exit_stockskis_mode(original_agents)
+                        elif use_lookahead and original_agents is not None:
+                            self._exit_lookahead_mode(original_agents)
+                        elif use_fsp:
+                            self._exit_fsp_mode()
 
                     # Extract stats
                     is_klop = state.contract is not None and state.contract.is_klop
@@ -706,6 +722,11 @@ class PPOTrainer:
                     b = 1.0 if agent0_bids else 0.0
                     k = 1.0 if is_klop else 0.0
                     s = 1.0 if is_solo else 0.0
+
+                    # Track lookahead scores + bid rate (per-game, aggregated per-session)
+                    if use_lookahead:
+                        session_lookahead_scores.append(raw_score)
+                        session_lookahead_bids.append(b)
                     recent_rewards.append(r); recent_wins.append(w)
                     recent_bids.append(b); recent_klops.append(k); recent_solos.append(s)
                     recent_games.append((contract_name, declarer_p0, raw_score, w > 0))
