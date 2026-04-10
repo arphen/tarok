@@ -1,22 +1,30 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, Suspense, lazy } from 'react';
 import GameBoard from './components/GameBoard';
 import GameLog from './components/GameLog';
-import TrainingDashboard from './components/TrainingDashboard';
-import TrainingLab from './components/TrainingLab';
-import EvoDashboard from './components/EvoDashboard';
-import BreedingDashboard from './components/BreedingDashboard';
-import CameraAgent from './components/CameraAgent';
-import SpectatorView from './components/SpectatorView';
+import Scoreboard from './components/Scoreboard';
+import GameInfoDrawer from './components/GameInfoDrawer';
 import { useGame } from './hooks/useGame';
 import type { CardData } from './types/game';
 import './App.css';
 
-type Page = 'home' | 'training' | 'lab' | 'play' | 'lobby' | 'camera' | 'spectate' | 'evolve' | 'breed';
+// Lazy-load heavy dashboard components — they pull in Recharts and other large deps
+const TrainingDashboard = lazy(() => import('./components/TrainingDashboard'));
+const TrainingLab = lazy(() => import('./components/TrainingLab'));
+const EvoDashboard = lazy(() => import('./components/EvoDashboard'));
+const BreedingDashboard = lazy(() => import('./components/BreedingDashboard'));
+const CameraAgent = lazy(() => import('./components/CameraAgent'));
+const SpectatorView = lazy(() => import('./components/SpectatorView'));
+const TournamentBracket = lazy(() => import('./components/TournamentBracket'));
+
+type Page = 'home' | 'training' | 'lab' | 'play' | 'lobby' | 'camera' | 'spectate' | 'tournament' | 'evolve' | 'breed';
 
 export default function App() {
   const [page, setPage] = useState<Page>('home');
   const [checkpoints, setCheckpoints] = useState<{ filename: string; episode: number; win_rate: number; session?: number; model_name?: string; is_hof?: boolean }[]>([]);
   const [opponents, setOpponents] = useState<[string, string, string]>(['latest', 'latest', 'latest']);
+  const [numRounds, setNumRounds] = useState(1);
+  const [playSidebarOpen, setPlaySidebarOpen] = useState(false);
+  const [showAllHands, setShowAllHands] = useState(false);
   const game = useGame();
 
   useEffect(() => {
@@ -24,35 +32,39 @@ export default function App() {
       .then(r => r.json())
       .then(data => setCheckpoints(data.checkpoints ?? []))
       .catch(() => {});
-  }, []);
+  }, [page]);
 
   const handleStartGame = async () => {
-    await game.startNewGame(opponents);
+    await game.startNewGame(opponents, numRounds);
     setPage('play');
   };
 
   if (page === 'training') {
-    return <TrainingDashboard onBack={() => setPage('home')} />;
+    return <Suspense fallback={<div className="app"><p>Loading dashboard…</p></div>}><TrainingDashboard onBack={() => setPage('home')} /></Suspense>;
   }
 
   if (page === 'lab') {
-    return <TrainingLab onBack={() => setPage('home')} />;
+    return <Suspense fallback={<div className="app"><p>Loading…</p></div>}><TrainingLab onBack={() => setPage('home')} /></Suspense>;
   }
 
   if (page === 'evolve') {
-    return <EvoDashboard onBack={() => setPage('home')} />;
+    return <Suspense fallback={<div className="app"><p>Loading…</p></div>}><EvoDashboard onBack={() => setPage('home')} /></Suspense>;
   }
 
   if (page === 'breed') {
-    return <BreedingDashboard onBack={() => setPage('home')} />;
+    return <Suspense fallback={<div className="app"><p>Loading…</p></div>}><BreedingDashboard onBack={() => setPage('home')} /></Suspense>;
   }
 
   if (page === 'camera') {
-    return <CameraAgent onBack={() => setPage('home')} />;
+    return <Suspense fallback={<div className="app"><p>Loading…</p></div>}><CameraAgent onBack={() => setPage('home')} /></Suspense>;
   }
 
   if (page === 'spectate') {
-    return <SpectatorView onBack={() => setPage('home')} checkpoints={checkpoints} />;
+    return <Suspense fallback={<div className="app"><p>Loading…</p></div>}><SpectatorView onBack={() => setPage('home')} checkpoints={checkpoints} /></Suspense>;
+  }
+
+  if (page === 'tournament') {
+    return <Suspense fallback={<div className="app"><p>Loading…</p></div>}><TournamentBracket onBack={() => setPage('home')} checkpoints={checkpoints} /></Suspense>;
   }
 
   if (page === 'lobby') {
@@ -93,6 +105,7 @@ export default function App() {
                 >
                   <option value="latest">Latest trained model</option>
                   <option value="random">Random (untrained)</option>
+                  <option value="lookahead">Lookahead (Monte Carlo search)</option>
                   {checkpoints.map(cp => (
                     <option key={cp.filename} value={cp.filename}>
                       {ckptLabel(cp.filename)}
@@ -101,6 +114,29 @@ export default function App() {
                 </select>
               </div>
             ))}
+          </div>
+
+          <div className="lobby-rounds">
+            <label className="lobby-label">Number of Rounds</label>
+            <div className="rounds-selector">
+              {[1, 3, 5, 10, 20].map(n => (
+                <button
+                  key={n}
+                  className={`rounds-btn ${numRounds === n ? 'rounds-btn-active' : ''}`}
+                  onClick={() => setNumRounds(n)}
+                >
+                  {n}
+                </button>
+              ))}
+              <input
+                type="number"
+                className="rounds-input"
+                min={1}
+                max={100}
+                value={numRounds}
+                onChange={e => setNumRounds(Math.max(1, Math.min(100, Number(e.target.value))))}
+              />
+            </div>
           </div>
 
           <button className="btn-gold btn-large lobby-start" onClick={handleStartGame}>
@@ -117,6 +153,11 @@ export default function App() {
       <div className="app">
         <div className="app-bar">
           <button className="btn-secondary btn-sm" onClick={() => setPage('home')}>← Menu</button>
+          {game.gameState.match_info && game.gameState.match_info.total_rounds > 1 && (
+            <span className="round-indicator">
+              Round {game.gameState.match_info.round_num}/{game.gameState.match_info.total_rounds}
+            </span>
+          )}
           <label className="speed-control">
             AI Speed
             <input
@@ -128,11 +169,23 @@ export default function App() {
               onChange={(e) => game.setDelay(Number(e.target.value))}
             />
           </label>
+          <label className="reveal-toggle">
+            <input
+              type="checkbox"
+              checked={showAllHands}
+              onChange={(e) => {
+                setShowAllHands(e.target.checked);
+                game.revealHands(e.target.checked);
+              }}
+            />
+            Show hands
+          </label>
           <span className="connection-status">
             {game.connected ? '🟢 Connected' : '🔴 Disconnected'}
           </span>
         </div>
         <div className="play-layout">
+          <GameInfoDrawer state={game.gameState} />
           <div className="play-main">
             <GameBoard
               state={game.gameState}
@@ -141,9 +194,24 @@ export default function App() {
               onCallKing={(suit) => game.callKing(suit)}
               onChooseTalon={(idx) => game.chooseTalon(idx)}
               onDiscard={(cards: CardData[]) => game.discard(cards)}
+              trickWinner={game.trickWinner}
+              trickWinCards={game.trickWinCards}
             />
           </div>
-          <GameLog entries={game.logEntries} />
+          <div className={`play-drawer ${playSidebarOpen ? 'drawer-open' : ''}`}>
+            <button className="drawer-tab drawer-tab-right" onClick={() => setPlaySidebarOpen(o => !o)}>
+              {playSidebarOpen ? '▶' : '◀'} Log
+            </button>
+            <div className="drawer-panel">
+              {game.gameState.match_info && game.gameState.match_info.total_rounds > 1 && (
+                <Scoreboard
+                  matchInfo={game.gameState.match_info}
+                  playerNames={game.gameState.player_names.length > 0 ? game.gameState.player_names : ['You', 'AI-1', 'AI-2', 'AI-3']}
+                />
+              )}
+              <GameLog entries={game.logEntries} />
+            </div>
+          </div>
         </div>
       </div>
     );
@@ -202,6 +270,14 @@ export default function App() {
             <span>
               <strong>Spectate AI vs AI</strong>
               <small>Watch 4 agents play and verify every move</small>
+            </span>
+          </button>
+
+          <button className="btn-secondary btn-large" onClick={() => setPage('tournament')}>
+            <span className="btn-icon">🏆</span>
+            <span>
+              <strong>Tournament</strong>
+              <small>Double-elimination bracket between AI models</small>
             </span>
           </button>
 

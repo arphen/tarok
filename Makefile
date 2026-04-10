@@ -1,5 +1,5 @@
 .PHONY: run backend frontend test train clean install test-e2e setup setup-hooks \
-	test-backend test-frontend test-coverage check-coverage \
+	test-backend test-frontend test-frontend-unit test-coverage check-coverage test-lookahead \
 	pipeline imitation-pretrain generate-expert-data build-engine kill stop
 
 UV_RUN = cd backend && PYTHONPATH=src uv run --default-index https://pypi.org/simple
@@ -56,7 +56,7 @@ frontend:
 # ──────────────────────────────────────────────
 # Tests
 # ──────────────────────────────────────────────
-test: test-backend test-frontend
+test: test-backend test-frontend test-frontend-unit
 
 test-backend:
 	$(UV_RUN) python -m pytest tests/ -v
@@ -64,8 +64,14 @@ test-backend:
 test-quick:
 	$(UV_RUN) python -m pytest tests/ -v -x --no-header
 
+test-lookahead:
+	$(UV_RUN) python -m pytest tests/test_lookahead.py -v
+
 test-frontend:
 	cd frontend && npx tsc -b --noEmit
+
+test-frontend-unit:
+	cd frontend && npx vitest run
 
 test-e2e:
 	cd frontend && npx playwright test
@@ -121,6 +127,7 @@ train-bred:
 	$(UV_RUN) python -m tarok train-bred
 
 # ──────────────────────────────────────────────
+# ──────────────────────────────────────────────
 # 3-Phase Training Pipeline
 # ──────────────────────────────────────────────
 
@@ -151,12 +158,18 @@ pipeline-large:
 		--p3-sessions 1000 --p3-games 100
 
 # ──────────────────────────────────────────────
+# Build
+# ──────────────────────────────────────────────
+build:
+	cd frontend && npm run build
+
+# ──────────────────────────────────────────────
 # Housekeeping
 # ──────────────────────────────────────────────
 clean:
 	find . -type d -name __pycache__ -exec rm -rf {} + 2>/dev/null || true
 	find . -type d -name .pytest_cache -exec rm -rf {} + 2>/dev/null || true
-	rm -rf backend/.venv frontend/node_modules
+	rm -rf backend/.venv frontend/node_modules frontend/dist
 	rm -f backend/coverage.json
 
 kill:

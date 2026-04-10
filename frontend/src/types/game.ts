@@ -8,6 +8,36 @@ export interface CardData {
 
 export type TrickCard = [number, CardData];
 
+export interface PlayerCardInfo {
+  void_suits: string[];
+  highest_tarok: number | null;
+  lowest_tarok: number | null;
+  taroks_played_count: number;
+}
+
+export interface CardTracker {
+  remaining_by_group: Record<string, CardData[]>;
+  remaining_count: number;
+  player_info: Record<string, PlayerCardInfo>;
+}
+
+export interface MatchInfo {
+  round_num: number;
+  total_rounds: number;
+  cumulative_scores: Record<string, number>;
+  caller_counts: Record<string, number>;
+  called_counts: Record<string, number>;
+  round_history: RoundResult[];
+}
+
+export interface RoundResult {
+  round: number;
+  scores: Record<string, number>;
+  contract: number | null;
+  declarer: number | null;
+  partner: number | null;
+}
+
 export interface GameState {
   phase: string;
   hand: CardData[];
@@ -28,6 +58,9 @@ export interface GameState {
   callable_kings: CardData[] | null;
   must_discard: number;
   player_names: string[];
+  card_tracker: CardTracker | null;
+  match_info: MatchInfo | null;
+  hands: Record<string, CardData[]> | null;
 }
 
 export interface GameEvent {
@@ -84,6 +117,8 @@ export interface TrainingMetrics {
   contract_win_rate_history: Record<string, number[]>;
   session_avg_score_history: number[];
   stockskis_place_history: number[];
+  lookahead_score_history: number[];
+  lookahead_bid_rate_history: number[];
   snapshots: SnapshotInfo[];
   tarok_count_bids?: Record<string, Record<string, number>>;
 }

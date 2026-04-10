@@ -16,7 +16,7 @@ const CATEGORY_ICONS: Record<string, string> = {
   score: '🏆',
 };
 
-export default function GameLog({ entries }: GameLogProps) {
+const GameLog = React.memo(function GameLog({ entries }: GameLogProps) {
   const bottomRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -45,4 +45,6 @@ export default function GameLog({ entries }: GameLogProps) {
       </div>
     </div>
   );
-}
+});
+
+export default GameLog;

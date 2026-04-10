@@ -1,11 +1,13 @@
 import React, { useEffect, useState } from 'react';
 import { useSpectator } from '../hooks/useSpectator';
 import type { AgentConfig } from '../hooks/useSpectator';
-import type { CardData, CompletedTrick, ScoreBreakdown, TrickSummaryEntry } from '../types/game';
+import type { CardData, CompletedTrick, ScoreBreakdown, TrickSummaryEntry, RoundResult, MatchInfo } from '../types/game';
 import { CONTRACT_NAMES, SUIT_SYMBOLS } from '../types/game';
 import Hand from './Hand';
 import TrickArea from './TrickArea';
 import Card from './Card';
+import TalonDrawer from './TalonDrawer';
+import Scoreboard from './Scoreboard';
 import './SpectatorView.css';
 
 interface SpectatorViewProps {
@@ -13,7 +15,7 @@ interface SpectatorViewProps {
   checkpoints: { filename: string; episode: number; win_rate: number; model_name?: string; is_hof?: boolean }[];
 }
 
-type AgentType = 'rl' | 'random';
+type AgentType = 'rl' | 'random' | 'lookahead';
 
 interface AgentSetup {
   name: string;
@@ -43,6 +45,11 @@ export default function SpectatorView({ onBack, checkpoints }: SpectatorViewProp
   const [selectedTrick, setSelectedTrick] = useState<number | null>(null);
   const [replays, setReplays] = useState<ReplayOption[]>([]);
   const [selectedReplay, setSelectedReplay] = useState('');
+  const [sidebarOpen, setSidebarOpen] = useState(false);
+  const [numGames, setNumGames] = useState(1);
+  const [callerCounts, setCallerCounts] = useState<Record<string, number>>({});
+  const [calledCounts, setCalledCounts] = useState<Record<string, number>>({});
+  const [roundHistory, setRoundHistory] = useState<RoundResult[]>([]);
 
   useEffect(() => {
     fetch('/api/replays')
@@ -67,8 +74,47 @@ export default function SpectatorView({ onBack, checkpoints }: SpectatorViewProp
       type: a.type,
       checkpoint: a.checkpoint || undefined,
     }));
-    spectator.startGame(configs);
+    setCallerCounts({});
+    setCalledCounts({});
+    setRoundHistory([]);
+    spectator.startGame(configs, numGames);
   };
+
+  // Auto-advance to next game in tournament mode
+  const handleNextGame = () => {
+    if (spectator.currentGameNum >= spectator.totalGames) return;
+    // Accumulate declarer/partner counts and round history from finished game
+    if (state.scores) {
+      if (state.declarer !== null) {
+        setCallerCounts(prev => ({ ...prev, [String(state.declarer)]: (prev[String(state.declarer!)] ?? 0) + 1 }));
+      }
+      if (state.partner !== null) {
+        setCalledCounts(prev => ({ ...prev, [String(state.partner)]: (prev[String(state.partner!)] ?? 0) + 1 }));
+      }
+      setRoundHistory(prev => [...prev, {
+        round: spectator.currentGameNum,
+        scores: Object.fromEntries(Object.entries(state.scores!).map(([k, v]) => [k, Number(v)])),
+        contract: state.contract,
+        declarer: state.declarer,
+        partner: state.partner,
+      }]);
+    }
+    const configs: AgentConfig[] = agents.map(a => ({
+      name: a.name,
+      type: a.type,
+      checkpoint: a.checkpoint || undefined,
+    }));
+    spectator.continueNextGame(configs);
+  };
+
+  // Compute live cumulative totals (past games + current game if finished)
+  const liveCumulative: Record<string, number> = { ...spectator.cumulativeScores };
+  if (state.scores) {
+    Object.entries(state.scores).forEach(([pid, score]) => {
+      liveCumulative[pid] = (liveCumulative[pid] ?? 0) + Number(score);
+    });
+  }
+  const maxCumulative = Math.max(...Object.values(liveCumulative), -Infinity);
 
   const updateAgent = (idx: number, patch: Partial<AgentSetup>) => {
     setAgents(prev => prev.map((a, i) => i === idx ? { ...a, ...patch } : a));
@@ -117,6 +163,7 @@ export default function SpectatorView({ onBack, checkpoints }: SpectatorViewProp
                   >
                     <option value="rl">RL Agent (trained)</option>
                     <option value="random">Random Agent</option>
+                    <option value="lookahead">Lookahead (Monte Carlo)</option>
                   </select>
                 </label>
 
@@ -150,6 +197,17 @@ export default function SpectatorView({ onBack, checkpoints }: SpectatorViewProp
                 step={50}
                 value={spectator.playbackSpeed}
                 onChange={e => spectator.setPlaybackSpeed(Number(e.target.value))}
+              />
+            </label>
+            <label className="config-field config-field-inline">
+              <span>Number of Games</span>
+              <input
+                type="number"
+                min={1}
+                max={100}
+                value={numGames}
+                onChange={e => setNumGames(Math.max(1, Math.min(100, Number(e.target.value))))}
+                data-testid="num-games-input"
               />
             </label>
           </div>
@@ -193,12 +251,26 @@ export default function SpectatorView({ onBack, checkpoints }: SpectatorViewProp
       <div className="app-bar">
         <button className="btn-secondary btn-sm" onClick={() => { spectator.disconnect(); }}>← Setup</button>
         <span className="spectator-title">{spectator.mode === 'replay' ? 'Replay Viewer' : 'Spectating'}</span>
+        {spectator.totalGames > 1 && (
+          <span className="game-counter" data-testid="game-counter">
+            Game {spectator.currentGameNum}/{spectator.totalGames}
+          </span>
+        )}
         <span className="connection-status">
           {spectator.mode === 'replay' ? `📼 ${spectator.replayName}` : spectator.connected ? '🟢 Connected' : '🔴 Disconnected'}
         </span>
       </div>
 
       <div className="spectator-layout">
+        {/* Talon drawer — only show after talon is revealed */}
+        {state.talon_groups && state.talon_groups.length > 0 && state.put_down.length > 0 && (
+          <TalonDrawer
+            talonGroups={state.talon_groups}
+            putDown={state.put_down}
+            side="left"
+          />
+        )}
+
         {/* Main board area */}
         <div className="spectator-board">
           {/* Game info bar */}
@@ -337,27 +409,6 @@ export default function SpectatorView({ onBack, checkpoints }: SpectatorViewProp
                     </div>
                   )}
 
-                  {/* Show talon and put-down info during announcements/trick play */}
-                  {(state.phase === 'announcements' || state.phase === 'trick_play') && state.put_down.length > 0 && state.talon_groups && (
-                    <div className="spectator-talon-info">
-                      <div className="talon-groups talon-groups-mini">
-                        {state.talon_groups.map((group, i) => (
-                          <div key={i} className="talon-group">
-                            {group.map((card, j) => (
-                              <Card key={j} card={card} small />
-                            ))}
-                          </div>
-                        ))}
-                      </div>
-                      <div className="talon-put-down">
-                        <span className="put-down-label">Put down:</span>
-                        {state.put_down.map((card, j) => (
-                          <Card key={j} card={card} small />
-                        ))}
-                      </div>
-                    </div>
-                  )}
-
                   {state.phase === 'finished' && state.scores && (
                     <div className="score-display score-display-full">
                       <h3>Game Over!</h3>
@@ -444,6 +495,38 @@ export default function SpectatorView({ onBack, checkpoints }: SpectatorViewProp
                       )}
                     </div>
                   )}
+
+                  {/* Tournament: cumulative scores + next game button */}
+                  {state.phase === 'finished' && spectator.totalGames > 1 && (
+                    <div className="tournament-controls" data-testid="tournament-controls">
+                      <div className="cumulative-scores">
+                        <h4>Tournament Standings ({spectator.gamesPlayed + 1} game{spectator.gamesPlayed + 1 !== 1 ? 's' : ''} played)</h4>
+                        <table className="results-table">
+                          <thead><tr><th>Player</th><th>Total</th></tr></thead>
+                          <tbody>
+                            {Object.entries(liveCumulative)
+                              .sort(([, a], [, b]) => b - a)
+                              .map(([pid, score]) => (
+                              <tr key={pid} className={`${score > 0 ? 'score-positive' : 'score-negative'} ${score === maxCumulative ? 'scoreboard-leader-row' : ''}`}>
+                                <td>{score === maxCumulative && '👑 '}{names[Number(pid)]}</td>
+                                <td className="score-value">{score > 0 ? '+' : ''}{score}</td>
+                              </tr>
+                            ))}
+                          </tbody>
+                        </table>
+                      </div>
+                      {spectator.currentGameNum < spectator.totalGames && (
+                        <button className="btn-gold btn-sm" onClick={handleNextGame} data-testid="next-game-btn">
+                          Next Game ({spectator.currentGameNum + 1}/{spectator.totalGames})
+                        </button>
+                      )}
+                      {spectator.currentGameNum >= spectator.totalGames && (
+                        <div className="tournament-finished">
+                          🏆 Tournament Complete! Winner: {names[Number(Object.entries(liveCumulative).sort(([, a], [, b]) => b - a)[0]?.[0] ?? 0)]}
+                        </div>
+                      )}
+                    </div>
+                  )}
                 </>
               )}
             </div>
@@ -501,50 +584,68 @@ export default function SpectatorView({ onBack, checkpoints }: SpectatorViewProp
           )}
         </div>
 
-        {/* Right panel: log + trick history */}
-        <div className="spectator-sidebar">
-          {/* Trick history */}
-          {state.completed_tricks.length > 0 && (
-            <div className="trick-history">
-              <div className="trick-history-header">
-                <h4>Trick History</h4>
+        {/* Right drawer: log + trick history */}
+        <div className={`spectator-drawer ${sidebarOpen ? 'drawer-open' : ''}`}>
+          <button className="drawer-tab drawer-tab-right" onClick={() => setSidebarOpen(o => !o)}>
+            {sidebarOpen ? '▶' : '◀'} Log
+          </button>
+          <div className="drawer-panel">
+            {/* Scoreboard (same as play vs AI) */}
+            <Scoreboard
+              matchInfo={{
+                round_num: spectator.currentGameNum,
+                total_rounds: spectator.totalGames,
+                cumulative_scores: liveCumulative,
+                caller_counts: callerCounts,
+                called_counts: calledCounts,
+                round_history: roundHistory,
+              }}
+              playerNames={names}
+            />
+
+            {/* Trick history */}
+            {state.completed_tricks.length > 0 && (
+              <div className="trick-history">
+                <div className="trick-history-header">
+                  <h4>Trick History</h4>
+                </div>
+                <div className="trick-history-list">
+                  {state.completed_tricks.map((trick, i) => (
+                    <button
+                      key={i}
+                      className={`trick-history-item ${selectedTrick === i ? 'active' : ''}`}
+                      onClick={() => setSelectedTrick(selectedTrick === i ? null : i)}
+                    >
+                      <span className="trick-num">#{i + 1}</span>
+                      <span className="trick-cards-mini">
+                        {trick.cards.map(([, c]) => c.label).join(', ')}
+                      </span>
+                      <span className="trick-winner-badge">{names[trick.winner]}</span>
+                    </button>
+                  ))}
+                </div>
               </div>
-              <div className="trick-history-list">
-                {state.completed_tricks.map((trick, i) => (
-                  <button
-                    key={i}
-                    className={`trick-history-item ${selectedTrick === i ? 'active' : ''}`}
-                    onClick={() => setSelectedTrick(selectedTrick === i ? null : i)}
+            )}
+
+            {/* Game log */}
+            <div className="spectator-log">
+              <div className="spectator-log-header">
+                <h4>Game Log</h4>
+              </div>
+              <div className="spectator-log-entries">
+                {spectator.logEntries.length === 0 && (
+                  <div className="spectator-log-empty">Waiting for game to start…</div>
+                )}
+                {spectator.logEntries.map(entry => (
+                  <div
+                    key={entry.id}
+                    className={`spectator-log-entry log-${entry.category}`}
                   >
-                    <span className="trick-num">#{i + 1}</span>
-                    <span className="trick-cards-mini">
-                      {trick.cards.map(([, c]) => c.label).join(', ')}
-                    </span>
-                    <span className="trick-winner-badge">{names[trick.winner]}</span>
-                  </button>
+                    <span className="log-icon">{CATEGORY_ICONS[entry.category] ?? '•'}</span>
+                    <span className="log-message">{entry.message}</span>
+                  </div>
                 ))}
               </div>
-            </div>
-          )}
-
-          {/* Game log */}
-          <div className="spectator-log">
-            <div className="spectator-log-header">
-              <h4>Game Log</h4>
-            </div>
-            <div className="spectator-log-entries">
-              {spectator.logEntries.length === 0 && (
-                <div className="spectator-log-empty">Waiting for game to start…</div>
-              )}
-              {spectator.logEntries.map(entry => (
-                <div
-                  key={entry.id}
-                  className={`spectator-log-entry log-${entry.category}`}
-                >
-                  <span className="log-icon">{CATEGORY_ICONS[entry.category] ?? '•'}</span>
-                  <span className="log-message">{entry.message}</span>
-                </div>
-              ))}
             </div>
           </div>
         </div>

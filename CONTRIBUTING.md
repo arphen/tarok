@@ -39,12 +39,13 @@ make setup-hooks   # just install the pre-commit hook
 ## Running Tests
 
 ```bash
-make test          # backend unit tests + frontend type-check
-make test-backend  # backend only
-make test-frontend # frontend type-check only
-make test-quick    # backend, stop on first failure
-make test-e2e      # Playwright end-to-end tests
-make test-coverage # backend tests with full coverage report
+make test               # backend pytest + frontend type-check + frontend unit tests
+make test-backend       # backend only
+make test-frontend      # frontend type-check only
+make test-frontend-unit # frontend Vitest component tests
+make test-quick         # backend, stop on first failure
+make test-e2e           # Playwright end-to-end tests
+make test-coverage      # backend tests with full coverage report
 ```
 
 ## Coverage Policy
@@ -71,6 +72,7 @@ make update-coverage-baseline
 | `make run` | Start backend + frontend |
 | `make stop` | Stop background servers |
 | `make test` | Run all tests |
+| `make test-frontend-unit` | Frontend component tests (Vitest) |
 | `make test-coverage` | Tests with coverage report |
 | `make check-coverage` | Test + assert no regression |
 | `make update-coverage-baseline` | Reset coverage baseline |

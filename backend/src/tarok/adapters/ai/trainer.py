@@ -11,6 +11,7 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import json
+import logging
 import random
 import time
 from collections import defaultdict
@@ -20,6 +21,8 @@ from pathlib import Path
 import torch
 import torch.nn as nn
 import torch.optim as optim
+
+log = logging.getLogger(__name__)
 
 from tarok.adapters.ai.agent import RLAgent, Experience
 from tarok.adapters.ai.compute import ComputeBackend, create_backend
@@ -31,6 +34,7 @@ from tarok.adapters.ai.encoding import (
     CARD_ACTION_SIZE,
     ANNOUNCE_ACTION_SIZE,
 )
+from tarok.adapters.ai.lookahead_agent import LookaheadAgent
 from tarok.adapters.ai.network import TarokNet
 from tarok.adapters.ai.network_bank import NetworkBank
 from tarok.adapters.ai.stockskis_player import StockSkisPlayer
@@ -139,6 +143,9 @@ class TrainingMetrics:
     snapshots: list[dict] = field(default_factory=list)
     # Avg finishing place of StockŠkis opponents per session (1=best, 4=worst)
     stockskis_place_history: list[float] = field(default_factory=list)
+    # Lookahead opponent metrics per session
+    lookahead_score_history: list[float] = field(default_factory=list)
+    lookahead_bid_rate_history: list[float] = field(default_factory=list)
     # Tarok count vs bid: for each tarok count (0..12), track which contract was played
     tarok_count_bids: dict[int, dict[str, int]] = field(
         default_factory=lambda: {i: {} for i in range(13)}
@@ -174,6 +181,8 @@ class TrainingMetrics:
             },
             "session_avg_score_history": self.session_avg_score_history[-500:],
             "stockskis_place_history": self.stockskis_place_history[-500:],
+            "lookahead_score_history": self.lookahead_score_history[-500:],
+            "lookahead_bid_rate_history": self.lookahead_bid_rate_history[-500:],
             "snapshots": self.snapshots,
             "tarok_count_bids": {
                 str(k): v for k, v in self.tarok_count_bids.items()
@@ -212,6 +221,10 @@ class PPOTrainer:
         # --- StockŠkis opponents ---
         stockskis_ratio: float = 0.0,
         stockskis_strength: float = 1.0,
+        # --- Lookahead opponents ---
+        lookahead_ratio: float = 0.0,
+        lookahead_sims: int = 20,
+        lookahead_perfect_info: bool = True,
         # --- Rust engine ---
         use_rust_engine: bool = False,
         warmup_games: int = 0,
@@ -286,6 +299,19 @@ class PPOTrainer:
                 for i in range(3)
             ]
 
+        # --- Lookahead opponents ---
+        self.lookahead_ratio = lookahead_ratio
+        self._lookahead_opponents: list[LookaheadAgent] | None = None
+        if lookahead_ratio > 0:
+            self._lookahead_opponents = [
+                LookaheadAgent(
+                    n_simulations=lookahead_sims,
+                    name=f"Lookahead-{i}",
+                    perfect_information=lookahead_perfect_info,
+                )
+                for i in range(3)
+            ]
+
         self.metrics = TrainingMetrics()
         self._running = False
         self._metrics_callback: list = []
@@ -330,6 +356,19 @@ class PPOTrainer:
 
     def _exit_stockskis_mode(self, original_agents: list) -> None:
         """Restore the original agents after a StockŠkis game."""
+        for i in range(4):
+            self.agents[i] = original_agents[i]
+
+    def _enter_lookahead_mode(self) -> list:
+        """Replace opponents (agents 1-3) with Lookahead search bots."""
+        assert self._lookahead_opponents is not None
+        original = list(self.agents)
+        for i in range(1, 4):
+            self.agents[i] = self._lookahead_opponents[i - 1]  # type: ignore[assignment]
+        return original
+
+    def _exit_lookahead_mode(self, original_agents: list) -> None:
+        """Restore the original agents after a Lookahead game."""
         for i in range(4):
             self.agents[i] = original_agents[i]
 
@@ -397,6 +436,8 @@ class PPOTrainer:
             all_experiences: list[Experience] = []
             session_scores: list[int] = []
             session_stockskis_places: list[float] = []
+            session_lookahead_scores: list[int] = []
+            session_lookahead_bids: list[float] = []
 
             # --- Batched self-play (Rust engine only) ---
             # Split games into batched NN games and sequential StockŠkis games
@@ -750,6 +791,15 @@ class PPOTrainer:
             if session_stockskis_places:
                 self.metrics.stockskis_place_history.append(
                     round(sum(session_stockskis_places) / len(session_stockskis_places), 2)
+                )
+
+            # Lookahead opponent metrics for this session
+            if session_lookahead_scores:
+                self.metrics.lookahead_score_history.append(
+                    round(sum(session_lookahead_scores) / len(session_lookahead_scores), 2)
+                )
+                self.metrics.lookahead_bid_rate_history.append(
+                    round(sum(session_lookahead_bids) / len(session_lookahead_bids), 4)
                 )
 
             # --- Append per-session history for charts ---
@@ -1123,6 +1173,12 @@ class PPOTrainer:
                             actor_feats, critic_feats, dim=-1
                         ).mean()
                         loss = loss + self._oracle_guiding_coef * oracle_guide_loss
+
+                    # Skip corrupted batches — NaN/Inf in loss would
+                    # poison all network weights via backward().
+                    if not torch.isfinite(loss):
+                        log.warning("Non-finite loss (%.4g) at session %d, skipping batch", loss.item(), self.metrics.session)
+                        continue
 
                     self.optimizer.zero_grad()
                     loss.backward()

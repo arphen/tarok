@@ -601,11 +601,19 @@ async def run_breeding(config: BreedingConfig | None = None) -> dict[str, Any]:
     }
     torch.save(final_ckpt, output_dir / f"bred_model_{base_model_name}.pt")
 
+    # Also save to the main checkpoints directory so it shows up in the
+    # training dashboard and can be resumed directly.
+    main_ckpt_dir = Path("checkpoints")
+    main_ckpt_dir.mkdir(parents=True, exist_ok=True)
+    final_path = main_ckpt_dir / f"bred_model_{base_model_name}.pt"
+    torch.save(final_ckpt, final_path)
+
     print()
     print(f"🏆 Breeding complete for model: {base_model_name}! Best fitness: {progress.best_fitness:.4f}")
     print(f"   Best profile: {best_profile.to_dict()}")
     print(f"   Results: {results_path}")
     print(f"   Model: {output_dir / f'bred_model_{base_model_name}.pt'}")
+    print(f"   Also saved to: {final_path}")
 
     return result
 

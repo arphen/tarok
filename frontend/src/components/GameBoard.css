@@ -2,17 +2,25 @@
   display: flex;
   flex-direction: column;
   align-items: center;
-  gap: 16px;
-  padding: 16px;
+  gap: 8px;
+  padding: 8px 16px;
+  height: 100%;
+  overflow-y: auto;
+  overflow-x: hidden;
 }
 
 .game-info-bar {
   display: flex;
   gap: 24px;
   padding: 12px 24px;
-  background: rgba(0, 0, 0, 0.3);
+  background: rgba(0, 0, 0, 0.7);
   border-radius: 12px;
   border: 1px solid rgba(255, 255, 255, 0.08);
+  position: sticky;
+  top: 0;
+  z-index: 15;
+  backdrop-filter: blur(8px);
+  flex-shrink: 0;
 }
 
 .info-item {
@@ -43,31 +51,34 @@
 .table {
   display: grid;
   grid-template-areas:
-    ".    top    ."
+    "top    top    top"
     "left center right"
-    ".    bottom .";
+    "bottom bottom bottom";
   grid-template-columns: 120px 1fr 120px;
   grid-template-rows: auto 1fr auto;
-  gap: 16px;
+  gap: 12px;
   width: 100%;
   max-width: 900px;
-  min-height: 500px;
-  padding: 24px;
+  padding: 16px;
   background: radial-gradient(ellipse at center, var(--green-felt) 0%, var(--green-felt-dark) 100%);
   border-radius: 24px;
   border: 4px solid #1a3a14;
   box-shadow: inset 0 0 60px rgba(0, 0, 0, 0.3), 0 8px 32px rgba(0, 0, 0, 0.5);
+  flex: 1;
+  min-height: 0;
 }
 
-.table-top    { grid-area: top;    display: flex; justify-content: center; }
+.table-top    { grid-area: top;    display: flex; justify-content: center; overflow: visible; }
 .table-left   { grid-area: left;   display: flex; align-items: center; justify-content: center; }
-.table-center { grid-area: center; display: flex; align-items: center; justify-content: center; }
+.table-center { grid-area: center; display: flex; align-items: center; justify-content: center; min-height: 200px; }
 .table-right  { grid-area: right;  display: flex; align-items: center; justify-content: center; }
-.table-bottom { grid-area: bottom; display: flex; justify-content: center; }
+.table-bottom { grid-area: bottom; display: flex; justify-content: center; overflow: visible; }
 
 /* ---- Talon selection ---- */
 .talon-selection {
   text-align: center;
+  position: relative;
+  z-index: 5;
 }
 
 .talon-selection h3 {
@@ -94,6 +105,36 @@
   border-color: var(--accent-gold);
   background: rgba(212, 168, 67, 0.1);
   transform: translateY(-4px);
+}
+
+/* ---- Discard selection ---- */
+.discard-hand {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  justify-content: center;
+  margin-bottom: 16px;
+}
+
+.discard-card {
+  cursor: pointer;
+  transition: transform 0.15s, box-shadow 0.15s;
+  border-radius: 8px;
+}
+
+.discard-card:hover {
+  transform: translateY(-4px);
+}
+
+.discard-selected {
+  transform: translateY(-8px);
+  box-shadow: 0 0 12px rgba(218, 165, 32, 0.6);
+}
+
+.bidding-subtitle {
+  color: var(--text-secondary);
+  font-size: 13px;
+  margin-bottom: 12px;
 }
 
 /* ---- Score display ---- */

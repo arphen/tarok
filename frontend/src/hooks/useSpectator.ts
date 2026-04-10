@@ -106,7 +106,7 @@ function formatSpectatorEvent(
 
 export interface AgentConfig {
   name: string;
-  type: 'rl' | 'random';
+  type: 'rl' | 'random' | 'lookahead';
   checkpoint?: string;
 }
 
@@ -143,6 +143,12 @@ export function useSpectator() {
   const wsRef = useRef<WebSocket | null>(null);
   const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
+  // Tournament tracking
+  const [totalGames, setTotalGames] = useState(1);
+  const [currentGameNum, setCurrentGameNum] = useState(1);
+  const [cumulativeScores, setCumulativeScores] = useState<Record<string, number>>({});
+  const [gamesPlayed, setGamesPlayed] = useState(0);
+
   const disconnect = useCallback(() => {
     wsRef.current?.close();
     wsRef.current = null;
@@ -153,13 +159,19 @@ export function useSpectator() {
     setReplayName(null);
   }, []);
 
-  const startGame = useCallback(async (agents: AgentConfig[]) => {
+  const startGame = useCallback(async (agents: AgentConfig[], numGames?: number) => {
     setLoading(true);
     setTimeline([]);
     setCurrentIndex(0);
     setIsPlaying(false);
     setMode('live');
     setReplayName(null);
+    if (numGames !== undefined) {
+      setTotalGames(numGames);
+      setCurrentGameNum(1);
+      setCumulativeScores({});
+      setGamesPlayed(0);
+    }
 
     try {
       const res = await fetch('/api/spectate/new', {
@@ -285,6 +297,70 @@ export function useSpectator() {
   // Collect logs up to current index
   const logEntries = timeline.slice(0, currentIndex + 1).map(t => t.logEntry).filter(Boolean) as SpectatorLogEntry[];
 
+  // Accumulate scores when game ends and current index is at the end
+  const gameFinished = state.phase === 'finished' && state.scores !== null;
+
+  // Start next game in a tournament, accumulating current game scores first
+  const continueNextGame = useCallback(async (agents: AgentConfig[]) => {
+    if (!gameFinished || !state.scores) return;
+    // Accumulate
+    setCumulativeScores(prev => {
+      const updated = { ...prev };
+      Object.entries(state.scores!).forEach(([pid, score]) => {
+        updated[pid] = (updated[pid] ?? 0) + Number(score);
+      });
+      return updated;
+    });
+    setGamesPlayed(g => g + 1);
+    setCurrentGameNum(n => n + 1);
+
+    // Start fresh game without resetting tournament state
+    setLoading(true);
+    setTimeline([]);
+    setCurrentIndex(0);
+    setIsPlaying(false);
+
+    try {
+      const res = await fetch('/api/spectate/new', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ agents, delay: 0 }),
+      });
+      const data = await res.json();
+      const id = data.game_id;
+      setGameId(id);
+
+      const protocol = window.location.protocol === 'https:' ? 'wss' : 'ws';
+      const ws = new WebSocket(`${protocol}://${window.location.host}/ws/spectate/${id}`);
+
+      ws.onopen = () => setConnected(true);
+
+      ws.onmessage = (e) => {
+        const msg: SpectatorEvent = JSON.parse(e.data);
+        const evNames = msg.state.player_names.length > 0
+          ? msg.state.player_names
+          : ['Agent-0', 'Agent-1', 'Agent-2', 'Agent-3'];
+        const entry = formatSpectatorEvent(msg.event, msg.data, evNames);
+        const enrichedState: SpectatorState = {
+          ...msg.state,
+          score_breakdown: msg.event === 'game_end' ? (msg.data.breakdown as ScoreBreakdown) ?? null : null,
+          trick_summary: msg.event === 'game_end' ? (msg.data.trick_summary as TrickSummaryEntry[]) ?? null : null,
+        };
+        setTimeline(prev => {
+          const newState = [...prev, { state: enrichedState, eventName: msg.event, logEntry: entry }];
+          if (newState.length === 1) setIsPlaying(true);
+          return newState;
+        });
+      };
+
+      ws.onclose = () => setConnected(false);
+      ws.onerror = () => setConnected(false);
+      wsRef.current = ws;
+    } finally {
+      setLoading(false);
+    }
+  }, [gameFinished, state.scores]);
+
   return {
     state,
     gameId,
@@ -309,5 +385,14 @@ export function useSpectator() {
     jumpToIndex,
     playbackSpeed,
     setPlaybackSpeed,
+
+    // Tournament
+    totalGames,
+    setTotalGames,
+    currentGameNum,
+    cumulativeScores,
+    gamesPlayed,
+    gameFinished,
+    continueNextGame,
   };
 }
