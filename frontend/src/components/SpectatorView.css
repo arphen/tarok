@@ -243,18 +243,17 @@
   margin-left: 0;
 }
 
-/* Vertical labels for top/bottom players in spectator mode */
-.spectator-table .hand-bottom .hand-label {
+/* Vertical labels for left/right players in spectator mode */
+.spectator-table .hand-left .hand-label {
   writing-mode: vertical-rl;
   text-orientation: upright;
   letter-spacing: 2px;
 }
 
-.spectator-table .hand-top .hand-label {
-  writing-mode: vertical-rl;
+.spectator-table .hand-right .hand-label {
+  writing-mode: vertical-lr;
   text-orientation: upright;
   letter-spacing: 2px;
-  transform: rotate(180deg);
 }
 
 .spectator-board .game-info-bar {

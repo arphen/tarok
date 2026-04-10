@@ -1,7 +1,7 @@
 import React, { useEffect, useState } from 'react';
 import { useSpectator } from '../hooks/useSpectator';
 import type { AgentConfig } from '../hooks/useSpectator';
-import type { CardData, CompletedTrick, ScoreBreakdown, TrickSummaryEntry, RoundResult, MatchInfo } from '../types/game';
+import type { CardData, CompletedTrick, ScoreBreakdown, TrickSummaryEntry, RoundResult, MatchInfo, TrickCard } from '../types/game';
 import { CONTRACT_NAMES, SUIT_SYMBOLS } from '../types/game';
 import Hand from './Hand';
 import TrickArea from './TrickArea';
@@ -38,6 +38,10 @@ const DEFAULT_AGENTS: AgentSetup[] = [
   { name: 'Agent-2', type: 'rl', checkpoint: '' },
   { name: 'Agent-3', type: 'rl', checkpoint: '' },
 ];
+
+const SOLO_CONTRACTS = new Set([-3, -2, -1, 0, -100, -101]);
+
+type TeamRole = 'declarer' | 'defender' | null;
 
 export default function SpectatorView({ onBack, checkpoints }: SpectatorViewProps) {
   const spectator = useSpectator();
@@ -241,6 +245,25 @@ export default function SpectatorView({ onBack, checkpoints }: SpectatorViewProp
     );
   }
 
+  // Team role computation (same logic as GameBoard)
+  const isSolo = state.contract !== null && SOLO_CONTRACTS.has(state.contract);
+  const getTeamRole = (playerIdx: number): TeamRole => {
+    if (state.contract === null || state.contract === -99) return null;
+    if (state.declarer === null) return null;
+    if (playerIdx === state.declarer) return 'declarer';
+    if (!isSolo && state.partner_revealed && state.partner === playerIdx) return 'declarer';
+    return 'defender';
+  };
+
+  // Trick-won animation: when timeline is at a trick_won event, show sweep animation
+  const isTrickWon = spectator.currentEventName === 'trick_won';
+  const lastCompletedTrick = state.completed_tricks.length > 0
+    ? state.completed_tricks[state.completed_tricks.length - 1]
+    : null;
+  const trickWinner = isTrickWon && lastCompletedTrick ? lastCompletedTrick.winner : null;
+  const trickWinCards: TrickCard[] = isTrickWon && lastCompletedTrick ? lastCompletedTrick.cards : [];
+  const showTrickAnimation = trickWinner != null && trickWinCards.length > 0;
+
   // Active spectator view
   const viewingTrick = selectedTrick !== null && selectedTrick < state.completed_tricks.length
     ? state.completed_tricks[selectedTrick]
@@ -317,6 +340,8 @@ export default function SpectatorView({ onBack, checkpoints }: SpectatorViewProp
                 cards={state.hands[2] ?? []}
                 position="top"
                 label={`${names[2]}${roleLabel(state.roles['2'])}`}
+                teamRole={getTeamRole(2)}
+                isSolo={isSolo}
               />
             </div>
 
@@ -326,6 +351,8 @@ export default function SpectatorView({ onBack, checkpoints }: SpectatorViewProp
                 cards={state.hands[1] ?? []}
                 position="left"
                 label={`${names[1]}${roleLabel(state.roles['1'])}`}
+                teamRole={getTeamRole(1)}
+                isSolo={isSolo}
               />
             </div>
 
@@ -343,6 +370,8 @@ export default function SpectatorView({ onBack, checkpoints }: SpectatorViewProp
                     trickCards={viewingTrick.cards}
                     playerNames={names}
                     playerIndex={0}
+                    getTeamRole={(idx) => getTeamRole(idx)}
+                    isSolo={isSolo}
                   />
                   <div className="trick-replay-winner">
                     Winner: {names[viewingTrick.winner]}
@@ -350,11 +379,14 @@ export default function SpectatorView({ onBack, checkpoints }: SpectatorViewProp
                 </div>
               ) : (
                 <>
-                  {state.phase === 'trick_play' && (
+                  {(state.phase === 'trick_play' || showTrickAnimation) && (
                     <TrickArea
-                      trickCards={state.current_trick}
+                      trickCards={showTrickAnimation ? trickWinCards : state.current_trick}
                       playerNames={names}
                       playerIndex={0}
+                      getTeamRole={(idx) => getTeamRole(idx)}
+                      isSolo={isSolo}
+                      trickWinner={trickWinner}
                     />
                   )}
 
@@ -537,6 +569,8 @@ export default function SpectatorView({ onBack, checkpoints }: SpectatorViewProp
                 cards={state.hands[3] ?? []}
                 position="right"
                 label={`${names[3]}${roleLabel(state.roles['3'])}`}
+                teamRole={getTeamRole(3)}
+                isSolo={isSolo}
               />
             </div>
 
@@ -546,6 +580,8 @@ export default function SpectatorView({ onBack, checkpoints }: SpectatorViewProp
                 cards={state.hands[0] ?? []}
                 position="bottom"
                 label={`${names[0]}${roleLabel(state.roles['0'])}`}
+                teamRole={getTeamRole(0)}
+                isSolo={isSolo}
               />
             </div>
           </div>
