@@ -15,7 +15,7 @@ interface SpectatorViewProps {
   checkpoints: { filename: string; episode: number; win_rate: number; model_name?: string; is_hof?: boolean }[];
 }
 
-type AgentType = 'rl' | 'random' | 'lookahead';
+type AgentType = string;
 
 interface AgentSetup {
   name: string;
@@ -46,6 +46,7 @@ type TeamRole = 'declarer' | 'defender' | null;
 export default function SpectatorView({ onBack, checkpoints }: SpectatorViewProps) {
   const spectator = useSpectator();
   const [agents, setAgents] = useState<AgentSetup[]>(DEFAULT_AGENTS);
+  const [stockskisTypes, setStockskisTypes] = useState<string[]>(['stockskis_v2', 'stockskis_v3', 'stockskis_v4', 'stockskis_v5']);
   const [selectedTrick, setSelectedTrick] = useState<number | null>(null);
   const [replays, setReplays] = useState<ReplayOption[]>([]);
   const [selectedReplay, setSelectedReplay] = useState('');
@@ -67,6 +68,18 @@ export default function SpectatorView({ onBack, checkpoints }: SpectatorViewProp
       })
       .catch(() => {});
   }, [selectedReplay]);
+
+  useEffect(() => {
+    fetch('/api/agents/stockskis')
+      .then(r => r.json())
+      .then(data => {
+        const types = (data?.types ?? []) as unknown;
+        if (Array.isArray(types) && types.every(t => typeof t === 'string') && types.length > 0) {
+          setStockskisTypes(types);
+        }
+      })
+      .catch(() => {});
+  }, []);
 
   const isSetup = !spectator.gameId;
   const { state } = spectator;
@@ -167,7 +180,11 @@ export default function SpectatorView({ onBack, checkpoints }: SpectatorViewProp
                   >
                     <option value="rl">RL Agent (trained)</option>
                     <option value="random">Random Agent</option>
-                    <option value="lookahead">Lookahead (Monte Carlo)</option>
+                    {stockskisTypes.map(t => (
+                      <option key={t} value={t}>
+                        StockŠkis (heuristic) {t.replace('stockskis_', '').toUpperCase()}
+                      </option>
+                    ))}
                   </select>
                 </label>
 

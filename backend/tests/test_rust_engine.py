@@ -2,24 +2,24 @@
 
 import pytest
 
+# Skip the whole module unless the Rust extension is installed.
+te = pytest.importorskip("tarok_engine")
+
 # ---- Extension import ----
 
 
 def test_tarok_engine_importable():
     """The Rust extension should be importable after `make build-engine`."""
-    import tarok_engine as te
     assert te is not None
 
 
 def test_tarok_engine_has_rust_game_state():
     """RustGameState class must be exposed."""
-    import tarok_engine as te
     assert hasattr(te, "RustGameState")
 
 
 def test_tarok_engine_has_phase_constants():
     """Phase constants (u8) must be accessible."""
-    import tarok_engine as te
     for attr in ("PHASE_BIDDING", "PHASE_TRICK_PLAY", "PHASE_SCORING",
                  "PHASE_ANNOUNCEMENTS"):
         assert hasattr(te, attr), f"Missing {attr}"
@@ -27,7 +27,6 @@ def test_tarok_engine_has_phase_constants():
 
 def test_tarok_engine_has_decision_constants():
     """Decision-type constants must be accessible."""
-    import tarok_engine as te
     for attr in ("DT_BID", "DT_CARD_PLAY"):
         assert hasattr(te, attr), f"Missing {attr}"
 
@@ -37,7 +36,6 @@ def test_tarok_engine_has_decision_constants():
 
 def test_rust_game_state_deal():
     """Create a RustGameState and deal cards."""
-    import tarok_engine as te
     gs = te.RustGameState(0)
     gs.deal()
     # Each player should have 12 cards
@@ -48,7 +46,6 @@ def test_rust_game_state_deal():
 
 def test_rust_game_state_total_cards():
     """After deal, 48 cards in hands + 6 in talon = 54."""
-    import tarok_engine as te
     gs = te.RustGameState(0)
     gs.deal()
     hand_cards = sum(len(gs.hand(p)) for p in range(4))
@@ -57,7 +54,6 @@ def test_rust_game_state_total_cards():
 
 def test_rust_game_state_legal_bids():
     """legal_bids should return a non-empty list for the first bidder."""
-    import tarok_engine as te
     gs = te.RustGameState(0)
     gs.deal()
     first_bidder = 1  # dealer is 0, next player bids first
@@ -69,7 +65,6 @@ def test_rust_game_state_legal_bids():
 def test_rust_game_state_encode_state():
     """encode_state should return a numpy array with the expected size."""
     import numpy as np
-    import tarok_engine as te
     gs = te.RustGameState(0)
     gs.deal()
     state = gs.encode_state(0, te.DT_BID)
@@ -81,7 +76,6 @@ def test_rust_game_state_encode_state():
 def test_rust_game_state_legal_plays_mask():
     """legal_plays_mask should return a 54-element float array."""
     import numpy as np
-    import tarok_engine as te
     gs = te.RustGameState(0)
     gs.deal()
     mask = gs.legal_plays_mask(0)
