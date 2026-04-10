@@ -1398,10 +1398,11 @@ async def lab_self_play(req: dict = {}):
         stockskis_ratio=req.get("stockskis_ratio", 0.0),
         fsp_ratio=req.get("fsp_ratio", 0.3),
         pbt_enabled=req.get("pbt_enabled", False),
-        population_size=req.get("population_size", 6),
+        population_size=req.get("population_size", 4),
         exploit_top_ratio=req.get("exploit_top_ratio", 0.25),
         exploit_bottom_ratio=req.get("exploit_bottom_ratio", 0.25),
         mutation_scale=req.get("mutation_scale", 1.0),
+        time_limit_minutes=req.get("time_limit_minutes", 5.0),
     )
     return {"status": "started"}
 
@@ -1441,10 +1442,11 @@ async def lab_overnight(req: dict = {}):
         stockskis_ratio=req.get("stockskis_ratio", 0.0),
         fsp_ratio=req.get("fsp_ratio", 0.3),
         pbt_enabled=req.get("pbt_enabled", True),
-        population_size=req.get("population_size", 15),
+        population_size=req.get("population_size", 4),
         exploit_top_ratio=req.get("exploit_top_ratio", 0.2),
         exploit_bottom_ratio=req.get("exploit_bottom_ratio", 0.3),
         mutation_scale=req.get("mutation_scale", 0.8),
+        time_limit_minutes=req.get("time_limit_minutes", 480),
     )
     return {"status": "started", "mode": "overnight", "num_sessions": req.get("num_sessions", 10000)}
 

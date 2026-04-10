@@ -155,10 +155,11 @@ export default function TrainingLab({ onBack }: Props) {
   const [spLearningRate, setSpLearningRate] = useState(0.0003);
   const [spFspRatio, setSpFspRatio] = useState(0.3);
   const [pbtEnabled, setPbtEnabled] = useState(true);
-  const [pbtPopulationSize, setPbtPopulationSize] = useState(6);
+  const [pbtPopulationSize, setPbtPopulationSize] = useState(4);
   const [pbtTopRatio, setPbtTopRatio] = useState(0.25);
   const [pbtBottomRatio, setPbtBottomRatio] = useState(0.25);
   const [pbtMutationScale, setPbtMutationScale] = useState(1.0);
+  const [timeLimitMinutes, setTimeLimitMinutes] = useState(5);
   const [smoothing, setSmoothing] = useState(0.6);
 
   const [tab, setTab] = useState<'progress' | 'population' | 'live' | 'winrate' | 'scores' | 'hof'>('progress');
@@ -243,6 +244,7 @@ export default function TrainingLab({ onBack }: Props) {
         exploit_top_ratio: pbtTopRatio,
         exploit_bottom_ratio: pbtBottomRatio,
         mutation_scale: pbtMutationScale,
+        time_limit_minutes: pbtEnabled ? timeLimitMinutes : 0,
       }),
     });
     poll();
@@ -521,7 +523,7 @@ export default function TrainingLab({ onBack }: Props) {
               <label className="lab-field">
                 <span>Mode</span>
                 <select value={pbtEnabled ? 'pbt' : 'single'} onChange={e => setPbtEnabled(e.target.value === 'pbt')}>
-                  <option value="pbt">Population Based Training</option>
+                  <option value="pbt">Island Model (parallel)</option>
                   <option value="single">Single Agent PPO</option>
                 </select>
               </label>
@@ -553,19 +555,14 @@ export default function TrainingLab({ onBack }: Props) {
               {pbtEnabled && (
                 <>
                   <label className="lab-field">
-                    <span>Population</span>
+                    <span>Islands</span>
                     <input type="number" value={pbtPopulationSize} onChange={e => setPbtPopulationSize(Number(e.target.value))}
-                      min={2} max={16} />
+                      min={2} max={8} />
                   </label>
                   <label className="lab-field">
-                    <span>Top %</span>
-                    <input type="number" value={pbtTopRatio} onChange={e => setPbtTopRatio(Number(e.target.value))}
-                      min={0.1} max={0.5} step={0.05} />
-                  </label>
-                  <label className="lab-field">
-                    <span>Bottom %</span>
-                    <input type="number" value={pbtBottomRatio} onChange={e => setPbtBottomRatio(Number(e.target.value))}
-                      min={0.1} max={0.5} step={0.05} />
+                    <span>Time (min)</span>
+                    <input type="number" value={timeLimitMinutes} onChange={e => setTimeLimitMinutes(Number(e.target.value))}
+                      min={1} max={480} />
                   </label>
                   <label className="lab-field">
                     <span>Mutation</span>
@@ -576,7 +573,7 @@ export default function TrainingLab({ onBack }: Props) {
               )}
             </div>
             <button className="btn-gold btn-lab" onClick={startSelfPlay}>
-              <span className="btn-icon">🎮</span> Start {pbtEnabled ? 'PBT Self-Play' : 'Self-Play Training'}
+              <span className="btn-icon">🎮</span> Start {pbtEnabled ? 'Island Training' : 'Self-Play Training'}
             </button>
             <button className="btn-gold btn-lab" onClick={startOvernight} style={{ marginLeft: 8, background: 'linear-gradient(135deg, #1a237e, #4a148c)' }}>
               <span className="btn-icon">🌙</span> Run Overnight
@@ -625,14 +622,16 @@ export default function TrainingLab({ onBack }: Props) {
             </div>
           </div>
           <span className="lab-progress-text">
-            {state?.active_program === 'self_play_pbt' ? 'Generation' : state?.active_program === 'self_play' ? 'Session' : 'Round'}{' '}
-            {state?.training_sessions_done ?? 0}/{state?.total_training_sessions ?? 0}
+            {state?.active_program === 'self_play_pbt' ? 'Time' : state?.active_program === 'self_play' ? 'Session' : 'Round'}{' '}
+            {state?.active_program === 'self_play_pbt'
+              ? `${state?.training_sessions_done ?? 0}/${state?.total_training_sessions ?? 0} min`
+              : `${state?.training_sessions_done ?? 0}/${state?.total_training_sessions ?? 0}`}
             {state?.active_program === 'imitation' && state?.expert_games_generated
               ? ` · ${(state.expert_games_generated / 1000).toFixed(0)}K expert games` : ''}
             {state?.active_program === 'self_play' && state?.self_play_games
               ? ` · ${state.self_play_games} self-play games` : ''}
-            {state?.active_program === 'self_play_pbt' && state?.pbt_member_total
-              ? ` · member ${state.pbt_member_index}/${state.pbt_member_total} · ${state.self_play_games} self-play games` : ''}
+            {state?.active_program === 'self_play_pbt' && state?.self_play_games
+              ? ` · ${state.pbt_population_size} islands · ${state.self_play_games.toLocaleString()} games · ${(state.sp_games_per_second ?? 0).toFixed(0)} gps` : ''}
           </span>
         </div>
       )}
@@ -665,9 +664,9 @@ export default function TrainingLab({ onBack }: Props) {
             color="#ff9800"
           />
           <StatCard
-            label={state?.pbt_enabled ? 'Population' : 'Age'}
+            label={state?.pbt_enabled ? 'Islands' : 'Age'}
             value={state?.pbt_enabled ? `${state?.pbt_population_size ?? 0}` : `${persona?.age ?? 0}`}
-            sublabel={state?.pbt_enabled ? 'Concurrent Members' : 'Training Rounds'}
+            sublabel={state?.pbt_enabled ? 'Parallel Trainers' : 'Training Rounds'}
             color="#d4a843"
           />
           <StatCard
@@ -727,7 +726,7 @@ export default function TrainingLab({ onBack }: Props) {
           <div className="lab-tabs">
             {(['progress', ...(state?.pbt_enabled ? ['population'] as const : []), ...(hasSelfPlayData ? ['live'] as const : []), 'winrate', 'scores', 'hof'] as const).map(t => (
               <button key={t} className={`lab-tab ${tab === t ? 'active' : ''}`} onClick={() => setTab(t)}>
-                {t === 'progress' ? '📈 Progress' : t === 'population' ? '🧬 Population' : t === 'live' ? '🎮 Live Metrics' : t === 'winrate' ? '🎯 Win Rates' : t === 'scores' ? '📊 Scores' : '🏆 Hall of Fame'}
+                {t === 'progress' ? '📈 Progress' : t === 'population' ? '🏝️ Islands' : t === 'live' ? '🎮 Live Metrics' : t === 'winrate' ? '🎯 Win Rates' : t === 'scores' ? '📊 Scores' : '🏆 Hall of Fame'}
               </button>
             ))}
           </div>
@@ -801,63 +800,45 @@ export default function TrainingLab({ onBack }: Props) {
 
             {tab === 'population' && state?.pbt_enabled && (
               <div className="lab-charts">
-                <ChartCard title="Current Population" wide>
+                <ChartCard title="Island Training Loops" wide>
                   {populationData.length === 0 ? (
                     <p style={{ color: '#666', textAlign: 'center', padding: 20 }}>
-                      Population state will appear after the first training batch starts.
+                      Island status will appear once training processes start.
                     </p>
                   ) : (
                     <div style={{ overflowX: 'auto' }}>
                       <table className="lab-table">
                         <thead>
                           <tr>
-                            <th>Rank</th>
-                            <th>Member</th>
-                            <th>Fitness</th>
-                            <th>Batch Reward</th>
-                            <th>vs V3</th>
+                            <th>Island</th>
                             <th>Status</th>
-                            <th>Copied</th>
-                            <th>Mutations</th>
+                            <th>Gen</th>
+                            <th>Games</th>
+                            <th>Games/sec</th>
+                            <th>Fitness</th>
+                            <th>vs V1</th>
+                            <th>vs V3</th>
+                            <th>Loss</th>
                             <th>Hyperparameters</th>
                           </tr>
                         </thead>
                         <tbody>
                           {populationData.map((member, idx) => (
                             <tr key={member.index} className={idx === 0 ? 'lab-row-baseline' : ''}>
-                              <td>{idx + 1}</td>
-                              <td>
-                                <div>{member.label}</div>
-                                <div style={{ color: '#666', fontSize: 11, fontFamily: 'monospace' }}>#{member.model_hash.slice(0, 8)}</div>
-                              </td>
-                              <td style={{ color: '#d4a843' }}>{member.fitness.toFixed(4)}</td>
-                              <td>{member.batch_avg_reward.toFixed(3)}</td>
-                              <td>{formatPercent(member.vs_v3)}</td>
+                              <td style={{ fontWeight: 'bold' }}>🏝️ {member.index}</td>
                               <td>{member.status}</td>
-                              <td>{member.copied_from === null ? '—' : `M${member.copied_from + 1}`}</td>
-                              <td>{member.mutations}</td>
+                              <td>{(member as any).generation ?? 0}</td>
+                              <td>{(member.games ?? 0).toLocaleString()}</td>
+                              <td>{((member as any).games_per_sec ?? 0).toFixed(1)}</td>
+                              <td style={{ color: '#d4a843' }}>{member.fitness.toFixed(4)}</td>
+                              <td>{formatPercent(member.vs_v1)}</td>
+                              <td>{formatPercent(member.vs_v3)}</td>
+                              <td>{member.loss.toFixed(4)}</td>
                               <td style={{ maxWidth: 320 }}>{formatHparams(member)}</td>
                             </tr>
                           ))}
                         </tbody>
                       </table>
-                    </div>
-                  )}
-                </ChartCard>
-
-                <ChartCard title="Exploit / Explore Events">
-                  {(state.population_events?.length ?? 0) === 0 ? (
-                    <p style={{ color: '#666', textAlign: 'center', padding: 20 }}>
-                      Exploit events will show up after the first generation ranking.
-                    </p>
-                  ) : (
-                    <div style={{ display: 'grid', gap: 10 }}>
-                      {[...state.population_events].slice(-8).reverse().map((event, idx) => (
-                        <div key={idx} style={{ padding: 12, border: '1px solid rgba(255,255,255,0.08)', borderRadius: 10, background: 'rgba(255,255,255,0.02)' }}>
-                          <div style={{ color: '#d4a843', marginBottom: 4 }}>Generation {event.generation}</div>
-                          <div style={{ color: '#ddd' }}>Member {event.target + 1} copied Member {event.source + 1}, then mutated its learning settings.</div>
-                        </div>
-                      ))}
                     </div>
                   )}
                 </ChartCard>
