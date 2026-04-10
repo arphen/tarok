@@ -667,6 +667,7 @@ pub fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(py_run_benchmark, m)?)?;
     m.add_function(wrap_pyfunction!(py_eval_vs_bots, m)?)?;
     m.add_function(wrap_pyfunction!(py_generate_expert_data_v2v3, m)?)?;
+    m.add_function(wrap_pyfunction!(py_generate_expert_data_v2v3v5, m)?)?;
 
     Ok(())
 }
@@ -698,6 +699,7 @@ fn py_eval_vs_bots(py: Python<'_>, num_games: usize) -> PyResult<PyObject> {
         ("vs_v2", [BotVersion::V2, BotVersion::V2, BotVersion::V2, BotVersion::V2]),
         ("vs_v3", [BotVersion::V3, BotVersion::V3, BotVersion::V3, BotVersion::V3]),
         ("vs_v4", [BotVersion::V4, BotVersion::V4, BotVersion::V4, BotVersion::V4]),
+        ("vs_v5", [BotVersion::V5, BotVersion::V5, BotVersion::V5, BotVersion::V5]),
     ] {
         let stats = run_eval_config(versions, num_games);
         let inner = pyo3::types::PyDict::new(py);
@@ -720,6 +722,41 @@ fn py_eval_vs_bots(py: Python<'_>, num_games: usize) -> PyResult<PyObject> {
 #[pyo3(signature = (num_games, include_oracle=false))]
 fn py_generate_expert_data_v2v3(py: Python<'_>, num_games: usize, include_oracle: bool) -> PyResult<PyObject> {
     let batch = crate::expert_games_v2v3::generate_expert_batch_v2v3(num_games, include_oracle);
+    let n_exp = batch.rewards.len();
+
+    let dict = pyo3::types::PyDict::new(py);
+
+    let states = numpy::PyArray2::<f32>::from_vec2(
+        py,
+        &batch.states.chunks(batch.state_size).map(|c| c.to_vec()).collect::<Vec<_>>(),
+    ).map_err(|e| pyo3::exceptions::PyValueError::new_err(format!("states: {e}")))?;
+    dict.set_item("states", states)?;
+
+    if include_oracle && !batch.oracle_states.is_empty() {
+        let oracle = numpy::PyArray2::<f32>::from_vec2(
+            py,
+            &batch.oracle_states.chunks(batch.oracle_state_size).map(|c| c.to_vec()).collect::<Vec<_>>(),
+        ).map_err(|e| pyo3::exceptions::PyValueError::new_err(format!("oracle: {e}")))?;
+        dict.set_item("oracle_states", oracle)?;
+    } else {
+        dict.set_item("oracle_states", py.None())?;
+    }
+
+    dict.set_item("decision_types", numpy::PyArray1::<u8>::from_vec(py, batch.decision_types))?;
+    dict.set_item("actions", numpy::PyArray1::<u16>::from_vec(py, batch.actions))?;
+    dict.set_item("rewards", numpy::PyArray1::<f32>::from_vec(py, batch.rewards))?;
+    dict.set_item("legal_masks", numpy::PyArray1::<u8>::from_vec(py, batch.legal_masks))?;
+    dict.set_item("num_experiences", n_exp)?;
+
+    Ok(dict.into())
+}
+
+/// Generate expert data from v2, v3, and v5 bots playing against each other
+/// (mixed tables with strongest bot for richer training signal).
+#[pyfunction]
+#[pyo3(signature = (num_games, include_oracle=false))]
+fn py_generate_expert_data_v2v3v5(py: Python<'_>, num_games: usize, include_oracle: bool) -> PyResult<PyObject> {
+    let batch = crate::expert_games_v2v3v5::generate_expert_batch_v2v3v5(num_games, include_oracle);
     let n_exp = batch.rewards.len();
 
     let dict = pyo3::types::PyDict::new(py);

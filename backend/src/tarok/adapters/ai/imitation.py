@@ -71,7 +71,7 @@ def imitation_pretrain(
     device: str = "cpu",
     include_oracle: bool = False,
     progress_callback: Callable[[dict], None] | None = None,
-    use_v2v3: bool = False,
+    expert_source: str = "v2v3v5",
 ) -> dict:
     """Pre-train both policy and value heads from StockŠkis expert games.
 
@@ -113,10 +113,14 @@ def imitation_pretrain(
 
         # Generate expert experiences in Rust
         gen_t0 = time.perf_counter()
-        if use_v2v3 and hasattr(te, 'py_generate_expert_data_v2v3'):
+        if expert_source == "v2v3v5" and hasattr(te, 'py_generate_expert_data_v2v3v5'):
+            data = te.py_generate_expert_data_v2v3v5(n, include_oracle=include_oracle)
+        elif expert_source in ("v2v3", "v2v3v5") and hasattr(te, 'py_generate_expert_data_v2v3'):
             data = te.py_generate_expert_data_v2v3(n, include_oracle=include_oracle)
-        else:
+        elif hasattr(te, "generate_expert_data"):
             data = te.generate_expert_data(n, include_oracle=include_oracle)
+        else:
+            data = te.py_generate_expert_data_v2v3(n, include_oracle=include_oracle)
         gen_elapsed = time.perf_counter() - gen_t0
 
         n_exp = data["num_experiences"]

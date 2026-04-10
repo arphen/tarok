@@ -1367,6 +1367,7 @@ async def lab_start(req: dict = {}):
 
     await start_lab_training(
         expert_games=req.get("expert_games", 500_000),
+        expert_source=req.get("expert_source", "v2v3v5"),
         training_epochs=req.get("training_epochs", 3),
         eval_games=req.get("eval_games", 500),
         num_rounds=req.get("num_rounds", 10),

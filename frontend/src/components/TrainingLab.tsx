@@ -144,6 +144,7 @@ export default function TrainingLab({ onBack }: Props) {
   const [selectedCheckpoint, setSelectedCheckpoint] = useState('');
   // Imitation learning config
   const [expertGames, setExpertGames] = useState(500000);
+  const [expertSource, setExpertSource] = useState("v2v3v5");
   const [numRounds, setNumRounds] = useState(10);
   const [evalGames, setEvalGames] = useState(100);
   const [hiddenSize, setHiddenSize] = useState(256);
@@ -220,6 +221,7 @@ export default function TrainingLab({ onBack }: Props) {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         expert_games: expertGames,
+        expert_source: expertSource,
         num_rounds: numRounds,
         eval_games: evalGames,
         learning_rate: ilLearningRate,
@@ -480,10 +482,17 @@ export default function TrainingLab({ onBack }: Props) {
               <span className="lab-program-icon">📚</span>
               <div>
                 <h3>Imitation Learning</h3>
-                <p>Learn by watching v2/v3 expert bots play</p>
+                <p>Learn by watching expert bots play</p>
               </div>
             </div>
             <div className="lab-program-fields">
+              <label className="lab-field">
+                <span>Expert Source</span>
+                <select value={expertSource} onChange={e => setExpertSource(e.target.value)}>
+                  <option value="v2v3">v2 & v3 Mix</option>
+                  <option value="v2v3v5">v2, v3 & v5 Mix</option>
+                </select>
+              </label>
               <label className="lab-field">
                 <span>Expert Games</span>
                 <input type="number" value={expertGames} onChange={e => setExpertGames(Number(e.target.value))}
