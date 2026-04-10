@@ -3,6 +3,7 @@ import GameBoard from './components/GameBoard';
 import GameLog from './components/GameLog';
 import Scoreboard from './components/Scoreboard';
 import GameInfoDrawer from './components/GameInfoDrawer';
+import ModelLeaderboard from './components/ModelLeaderboard';
 import { useGame } from './hooks/useGame';
 import type { CardData } from './types/game';
 import './App.css';
@@ -144,6 +145,7 @@ export default function App() {
             <span><strong>Start Game</strong></span>
           </button>
         </div>
+        <ModelLeaderboard />
       </div>
     );
   }
@@ -213,11 +215,10 @@ export default function App() {
             </div>
           </div>
         </div>
+        <ModelLeaderboard />
       </div>
     );
   }
-
-  // Home page
   return (
     <div className="app">
       <div className="home-page">

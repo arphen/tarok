@@ -7,6 +7,7 @@ import type {
 } from '../hooks/useTournament';
 import { useTournament } from '../hooks/useTournament';
 import './TournamentBracket.css';
+import ModelLeaderboard from './ModelLeaderboard';
 
 interface TournamentBracketProps {
   checkpoints: { filename: string; episode: number; win_rate: number }[];
@@ -188,6 +189,7 @@ export default function TournamentBracket({ checkpoints: initialCheckpoints, onB
             </button>
           )}
         </div>
+        <ModelLeaderboard />
       </div>
     );
   }
@@ -259,6 +261,7 @@ export default function TournamentBracket({ checkpoints: initialCheckpoints, onB
             </table>
           )}
         </div>
+        <ModelLeaderboard />
       </div>
     );
   }
@@ -334,6 +337,7 @@ export default function TournamentBracket({ checkpoints: initialCheckpoints, onB
           </div>
         )}
       </div>
+      <ModelLeaderboard />
     </div>
   );
 }

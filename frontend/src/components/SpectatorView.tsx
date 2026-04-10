@@ -9,6 +9,7 @@ import Card from './Card';
 import TalonDrawer from './TalonDrawer';
 import Scoreboard from './Scoreboard';
 import './SpectatorView.css';
+import ModelLeaderboard from './ModelLeaderboard';
 
 interface SpectatorViewProps {
   onBack: () => void;
@@ -258,6 +259,7 @@ export default function SpectatorView({ onBack, checkpoints }: SpectatorViewProp
             {spectator.loading ? 'Starting…' : 'Start Game'}
           </button>
         </div>
+        <ModelLeaderboard />
       </div>
     );
   }
@@ -703,6 +705,7 @@ export default function SpectatorView({ onBack, checkpoints }: SpectatorViewProp
           </div>
         </div>
       </div>
+      <ModelLeaderboard />
     </div>
   );
 }

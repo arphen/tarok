@@ -28,18 +28,18 @@ def load_results(path: Path | None = None) -> dict[str, Any]:
 def top_models(results: dict[str, Any], n: int = 3) -> list[str]:
     """Return the *n* best model names by combined average placement.
 
-    Only models that appear in **all** tournaments are ranked.
+    All RL models are ranked; models in more tournaments are not penalised.
     """
     model_placements: dict[str, list[float]] = {}
     for t in results["tournaments"]:
         for s in t["standings"]:
+            if s.get("type") == "random":
+                continue
             model_placements.setdefault(s["model"], []).append(s["avg_placement"])
 
-    num_tournaments = len(results["tournaments"])
     combined = {
         m: sum(avgs) / len(avgs)
         for m, avgs in model_placements.items()
-        if len(avgs) == num_tournaments
     }
     ranked = sorted(combined, key=lambda m: combined[m])
     return ranked[:n]

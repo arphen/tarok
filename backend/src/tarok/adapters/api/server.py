@@ -643,6 +643,18 @@ def _build_agent(cfg: dict, idx: int):
         return agent
 
 
+@app.get("/api/tournament/results")
+async def tournament_results():
+    """Return stored tournament results for the leaderboard drawer."""
+    from tarok.adapters.ai.tournament_results import load_results, top_models
+    try:
+        data = load_results()
+        best = top_models(data, n=5)
+        return {"tournaments": data["tournaments"], "top_models": best}
+    except FileNotFoundError:
+        return {"tournaments": [], "top_models": []}
+
+
 @app.post("/api/tournament/match")
 async def tournament_match(req: TournamentMatchRequest):
     """Run N games between 4 agents and return cumulative scores."""
