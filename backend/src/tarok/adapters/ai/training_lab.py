@@ -16,8 +16,11 @@ import copy
 import hashlib
 import json
 import math
+import multiprocessing as mp
+import os
 import random
 import time
+from concurrent.futures import ProcessPoolExecutor
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -52,6 +55,14 @@ from tarok.adapters.ai.stockskis_v3 import StockSkisPlayerV3
 from tarok.adapters.ai.stockskis_v4 import StockSkisPlayerV4
 from tarok.adapters.api.spectator_observer import SpectatorObserver
 from tarok.use_cases.game_loop import GameLoop
+
+try:
+    from tarok.adapters.ai.batch_game_runner import BatchGameRunner, GameResult, GameExperience
+    from tarok.adapters.ai.compute import ComputeBackend, create_backend
+    import tarok_engine as _te_check
+    _HAS_RUST = _te_check is not None
+except Exception:
+    _HAS_RUST = False
 
 # ---------------------------------------------------------------------------
 # Persona naming — random female name + surname + age
@@ -244,6 +255,138 @@ class LabState:
 # Global lab state
 _lab = LabState()
 _lab_task: asyncio.Task | None = None
+
+# Process pool for background evaluation (uses idle CPU cores)
+_eval_pool: ProcessPoolExecutor | None = None
+
+
+def _get_eval_pool() -> ProcessPoolExecutor:
+    global _eval_pool
+    if _eval_pool is None:
+        workers = max(2, (os.cpu_count() or 4) // 2)
+        _eval_pool = ProcessPoolExecutor(
+            max_workers=workers,
+            mp_context=mp.get_context("spawn"),
+        )
+    return _eval_pool
+
+
+def _eval_member_in_process(
+    state_dict: dict, hidden_size: int, eval_games: int,
+) -> dict:
+    """Run in a subprocess: evaluate one network snapshot against v1/v2/v3."""
+    net = TarokNet(hidden_size=hidden_size)
+    net.load_state_dict(state_dict)
+    net.eval()
+    return {
+        "vs_v1": _evaluate_vs_bots_sync(net, eval_games, "v1"),
+        "vs_v2": _evaluate_vs_bots_sync(net, eval_games, "v2"),
+        "vs_v3": _evaluate_vs_bots_sync(net, eval_games, "v3"),
+    }
+
+
+# Training pool — runs member self-play + PPO in parallel on idle CPU cores
+_train_pool: ProcessPoolExecutor | None = None
+
+
+def _get_train_pool() -> ProcessPoolExecutor:
+    global _train_pool
+    if _train_pool is None:
+        workers = max(2, (os.cpu_count() or 4) // 2)
+        _train_pool = ProcessPoolExecutor(
+            max_workers=workers,
+            mp_context=mp.get_context("spawn"),
+        )
+    return _train_pool
+
+
+def _train_member_in_process(
+    network_state: dict,
+    optimizer_state: dict,
+    hparams: dict[str, Any],
+    hidden_size: int,
+    num_sessions: int,
+    games_per_session: int,
+    start_game_index: int,
+) -> dict[str, Any]:
+    """Run in a subprocess: self-play + PPO for one population member.
+
+    Returns updated network/optimizer state_dicts and training metrics.
+    """
+    from tarok.adapters.ai.agent import RLAgent
+    from tarok.adapters.ai.trainer import PPOTrainer
+
+    agents = [
+        RLAgent(name=f"P{s}", hidden_size=hidden_size, device="cpu",
+                explore_rate=float(hparams.get("explore_rate", 0.1)))
+        for s in range(4)
+    ]
+    agents[0].network.load_state_dict(network_state)
+    for a in agents[1:]:
+        a.network = agents[0].network
+
+    trainer = PPOTrainer(
+        agents=agents,
+        lr=float(hparams.get("lr", 3e-4)),
+        gamma=float(hparams["gamma"]),
+        gae_lambda=float(hparams["gae_lambda"]),
+        clip_epsilon=float(hparams["clip_epsilon"]),
+        value_coef=float(hparams["value_coef"]),
+        entropy_coef=float(hparams["entropy_coef"]),
+        epochs_per_update=int(hparams["epochs_per_update"]),
+        batch_size=int(hparams["batch_size"]),
+        games_per_session=games_per_session,
+        device="cpu",
+        stockskis_ratio=0.0,
+        fsp_ratio=0.0,
+        use_rust_engine=True,
+        save_dir="/tmp/pbt_worker",
+        batch_concurrency=32,
+        value_clip=0.2,
+    )
+    trainer.optimizer.load_state_dict(optimizer_state)
+    trainer._running = True
+
+    import time as _time
+
+    total_rewards = 0.0
+    total_wins = 0.0
+    total_scores = 0.0
+    games_played = 0
+    all_experiences: list = []
+
+    loop = asyncio.new_event_loop()
+    try:
+        for session_offset in range(num_sessions):
+            exps, stats, sk_exps, sk_stats = loop.run_until_complete(
+                trainer._play_session_batched(
+                    session_offset, start_game_index + games_played, _time.time(),
+                )
+            )
+            all_experiences.extend(exps)
+            all_experiences.extend(sk_exps)
+            for stat in stats + sk_stats:
+                raw_score = stat["raw_score"]
+                total_scores += raw_score
+                total_rewards += raw_score / 100.0
+                total_wins += 1.0 if raw_score > 0 else 0.0
+                games_played += 1
+            trainer.metrics.session += 1
+    finally:
+        loop.close()
+
+    loss_info = trainer._ppo_update(all_experiences) if all_experiences else {}
+    n = max(games_played, 1)
+
+    return {
+        "network_state": trainer.shared_network.state_dict(),
+        "optimizer_state": trainer.optimizer.state_dict(),
+        "avg_reward": total_rewards / n,
+        "win_rate": total_wins / n,
+        "avg_score": total_scores / n,
+        "loss": loss_info.get("policy_loss", 0.0),
+        "games": games_played,
+    }
 
 
 _PBT_HPARAM_SPACE: dict[str, dict[str, Any]] = {
@@ -451,15 +594,12 @@ def _make_opponents(version: str) -> list:
         return [StockSkisPlayer(name=f"V1-{i}", strength=1.0) for i in range(3)]
 
 
-async def _evaluate_vs_bots(
+def _evaluate_vs_bots_sync(
     network: TarokNet,
     num_games: int = 100,
     version: str = "v1",
 ) -> dict:
-    """Play real games with the NN agent vs heuristic bots.
-
-    Returns win rate, average score, and number of games played.
-    """
+    """Synchronous eval — can run in a thread pool."""
     network.eval()
     agent = _make_eval_agent(network)
     opponents = _make_opponents(version)
@@ -467,40 +607,50 @@ async def _evaluate_vs_bots(
     wins = 0
     total_diff = 0
 
-    for g in range(num_games):
-        players = [agent] + opponents
-        game = GameLoop(players, rng=random.Random(g))
-        _state, scores = await game.run(dealer=g % 4)
+    loop = asyncio.new_event_loop()
+    try:
+        for g in range(num_games):
+            players = [agent] + opponents
+            game = GameLoop(players, rng=random.Random(g))
+            _state, scores = loop.run_until_complete(game.run(dealer=g % 4))
 
-        raw_score = scores.get(0, 0)
-        # Score differential: agent score minus average opponent score
-        opp_avg = sum(scores.get(i, 0) for i in range(1, 4)) / 3
-        total_diff += raw_score - opp_avg
+            raw_score = scores.get(0, 0)
+            opp_avg = sum(scores.get(i, 0) for i in range(1, 4)) / 3
+            total_diff += raw_score - opp_avg
 
-        # Win = positive score (same logic as trainer)
-        is_klop = _state.contract is not None and _state.contract.is_klop
-        if is_klop:
-            won = raw_score > 0
-        elif _state.declarer == 0:
-            won = raw_score > 0
-        else:
-            declarer_score = scores.get(_state.declarer, 0) if _state.declarer is not None else 0
-            won = declarer_score < 0
+            is_klop = _state.contract is not None and _state.contract.is_klop
+            if is_klop:
+                won = raw_score > 0
+            elif _state.declarer == 0:
+                won = raw_score > 0
+            else:
+                declarer_score = scores.get(_state.declarer, 0) if _state.declarer is not None else 0
+                won = declarer_score < 0
 
-        if won:
-            wins += 1
-
-        # Clear experiences to avoid memory buildup
-        agent.clear_experiences()
+            if won:
+                wins += 1
+            agent.clear_experiences()
+    finally:
+        loop.close()
 
     win_rate = wins / max(num_games, 1)
     avg_score = total_diff / max(num_games, 1)
-
     return {
         "win_rate": round(win_rate, 4),
         "avg_score": round(avg_score, 2),
         "games": num_games,
     }
+
+
+async def _evaluate_vs_bots(
+    network: TarokNet,
+    num_games: int = 100,
+    version: str = "v1",
+) -> dict:
+    """Evaluate NN agent vs heuristic bots, running in a thread to keep the event loop responsive."""
+    return await asyncio.get_event_loop().run_in_executor(
+        None, _evaluate_vs_bots_sync, network, num_games, version,
+    )
 
 
 async def _save_sample_replay(network: TarokNet, generation: int, member: dict[str, Any]) -> None:
@@ -755,6 +905,7 @@ async def _run_population_member(
     total_scores = 0.0
     games_played = 0
     policy_losses: list[float] = []
+    accumulated_experiences: list = []
 
     can_batch = (
         trainer.use_rust_engine
@@ -838,16 +989,19 @@ async def _run_population_member(
                 if games_played % 4 == 0 or game_offset == games_per_session - 1:
                     await asyncio.sleep(0)
 
-        if all_experiences:
-            loss_info = trainer._ppo_update(all_experiences)
-            policy_losses.append(loss_info.get("policy_loss", 0.0))
-            member["loss"] = loss_info.get("policy_loss", 0.0)
+        accumulated_experiences.extend(all_experiences)
 
         trainer.metrics.session += 1
         if trainer.fsp_ratio > 0 and trainer.metrics.session % trainer.bank_save_interval == 0:
             trainer.network_bank.push(copy.deepcopy(trainer.shared_network.state_dict()))
 
         await asyncio.sleep(0)
+
+    # Single PPO update on all accumulated experiences (fewer, larger updates)
+    if accumulated_experiences:
+        loss_info = trainer._ppo_update(accumulated_experiences)
+        policy_losses.append(loss_info.get("policy_loss", 0.0))
+        member["loss"] = loss_info.get("policy_loss", 0.0)
 
     batch_games = max(games_played, 1)
     summary = {
@@ -862,9 +1016,11 @@ async def _run_population_member(
 
 async def _evaluate_population_member(member: dict[str, Any], eval_games: int) -> dict[str, float]:
     network = member["trainer"].shared_network
-    v1 = await _evaluate_vs_bots(network, eval_games, "v1")
-    v2 = await _evaluate_vs_bots(network, eval_games, "v2")
-    v3 = await _evaluate_vs_bots(network, eval_games, "v3")
+    v1, v2, v3 = await asyncio.gather(
+        _evaluate_vs_bots(network, eval_games, "v1"),
+        _evaluate_vs_bots(network, eval_games, "v2"),
+        _evaluate_vs_bots(network, eval_games, "v3"),
+    )
 
     avg_reward_norm = max(0.0, min(1.0, (member.get("batch_avg_reward", 0.0) + 1.0) / 2.0))
     fitness = (
@@ -891,6 +1047,103 @@ def _set_best_member(best_member: dict[str, Any], generation: int) -> None:
     _lab.persona["age"] = generation
     _lab.model_hash = _model_hash(_lab.network)
     _lab.display_name = f"{_lab.persona['first_name']} {_lab.persona['last_name']} (age {_lab.persona['age']}) #{_lab.model_hash}"
+
+
+async def _background_pbt_eval(
+    member_snapshots: list[dict[str, Any]],
+    eval_games: int,
+    generation: int,
+    persona_snapshot: dict,
+) -> None:
+    """Fire-and-forget: evaluate population in background processes, update _lab when done.
+
+    Runs eval in a ProcessPoolExecutor so it uses idle CPU cores without
+    blocking the training loop.  Results are written to _lab.eval_history
+    and _lab.pbt_generation_history for the dashboard.
+    """
+    global _lab
+    try:
+        pool = _get_eval_pool()
+        loop = asyncio.get_event_loop()
+        futures = [
+            loop.run_in_executor(
+                pool, _eval_member_in_process,
+                snap["state_dict"], snap["hidden_size"], eval_games,
+            )
+            for snap in member_snapshots
+        ]
+        results = await asyncio.gather(*futures)
+
+        best_snap = None
+        best_fitness = -1.0
+        gen_fitnesses: list[float] = []
+        gen_v3s: list[float] = []
+
+        for snap, result in zip(member_snapshots, results):
+            avg_reward_norm = max(0.0, min(1.0, (snap["batch_avg_reward"] + 1.0) / 2.0))
+            fitness = (
+                0.45 * result["vs_v3"]["win_rate"]
+                + 0.25 * result["vs_v2"]["win_rate"]
+                + 0.15 * result["vs_v1"]["win_rate"]
+                + 0.15 * avg_reward_norm
+            )
+            gen_fitnesses.append(fitness)
+            gen_v3s.append(result["vs_v3"]["win_rate"])
+            if fitness > best_fitness:
+                best_fitness = fitness
+                best_snap = {**snap, **result, "fitness": fitness}
+
+        if not best_snap:
+            return
+
+        avg_fitness = sum(gen_fitnesses) / max(len(gen_fitnesses), 1)
+
+        _lab.pbt_generation_history.append({
+            "generation": generation,
+            "avg_fitness": round(avg_fitness, 4),
+            "min_fitness": round(min(gen_fitnesses), 4),
+            "max_fitness": round(max(gen_fitnesses), 4),
+            "avg_v3": round(sum(gen_v3s) / max(len(gen_v3s), 1), 4),
+            "best_index": best_snap["index"],
+            "best_label": best_snap["label"],
+            "best_vs_v1": round(best_snap["vs_v1"]["win_rate"], 4),
+            "best_vs_v2": round(best_snap["vs_v2"]["win_rate"], 4),
+            "best_vs_v3": round(best_snap["vs_v3"]["win_rate"], 4),
+            "best_batch_reward": round(best_snap.get("batch_avg_reward", 0.0), 4),
+        })
+
+        _lab.eval_history.append({
+            "step": len(_lab.eval_history),
+            "label": f"PBT Gen {generation}",
+            "program": "self_play_pbt",
+            "vs_v1": best_snap["vs_v1"]["win_rate"],
+            "vs_v2": best_snap["vs_v2"]["win_rate"],
+            "vs_v3": best_snap["vs_v3"]["win_rate"],
+            "avg_score_v1": best_snap["vs_v1"]["avg_score"],
+            "avg_score_v2": best_snap["vs_v2"]["avg_score"],
+            "avg_score_v3": best_snap["vs_v3"]["avg_score"],
+            "loss": best_snap.get("loss", 0.0),
+            "experiences": 0,
+            "games": _lab.self_play_games,
+            "generation": generation,
+            "best_fitness": round(best_snap["fitness"], 4),
+            "avg_fitness": round(avg_fitness, 4),
+        })
+
+        # Save best to HoF
+        net = TarokNet(hidden_size=best_snap["hidden_size"])
+        net.load_state_dict(best_snap["state_dict"])
+        persona_for_hof = dict(persona_snapshot)
+        persona_for_hof["age"] = generation
+        info = save_to_hof(net, persona_for_hof, list(_lab.eval_history), phase_label=f"pbt-g{generation}")
+        _lab.snapshots.append(info)
+
+        # Save sample replay
+        await _save_sample_replay(net, generation, {"label": best_snap["label"], "index": best_snap["index"]})
+
+    except Exception:
+        import traceback
+        traceback.print_exc()
 
 
 async def _run_pbt_self_play_session(
@@ -920,7 +1173,9 @@ async def _run_pbt_self_play_session(
         _lab.pbt_total_generations = total_generations
 
         hidden_size = _lab.network.shared[0].out_features
-        device = _detect_self_play_device()
+        # CPU is faster than MPS for this model size (256 hidden dims)
+        # due to GPU transfer overhead dominating small batch inference
+        device = "cpu"
         _lab.network = _lab.network.to(torch.device(device))
 
         members = _build_pbt_population(
@@ -955,94 +1210,74 @@ async def _run_pbt_self_play_session(
                 break
 
             for member in members:
-                if not _lab.running:
-                    break
-                _lab.pbt_member_index = member["index"] + 1
-                _lab.pbt_member_total = len(members)
                 member["status"] = "training"
-                _sync_population_state(members)
+            _lab.pbt_member_index = len(members)
+            _lab.pbt_member_total = len(members)
+            _sync_population_state(members)
 
-                batch_summary, global_game_index = await _run_population_member(
-                    member,
-                    num_sessions=sessions_this_generation,
-                    games_per_session=games_per_session,
-                    start_game_index=global_game_index,
+            # Parallel training: submit all members to process pool
+            pool = _get_train_pool()
+            loop = asyncio.get_event_loop()
+            train_futures = [
+                loop.run_in_executor(
+                    pool, _train_member_in_process,
+                    m["trainer"].shared_network.state_dict(),
+                    m["trainer"].optimizer.state_dict(),
+                    dict(m["hparams"]),
+                    hidden_size,
+                    sessions_this_generation,
+                    games_per_session,
+                    global_game_index + m["index"] * sessions_this_generation * games_per_session,
                 )
-                member["batch_avg_reward"] = batch_summary["avg_reward"]
-                member["batch_win_rate"] = batch_summary["win_rate"]
-                member["loss"] = batch_summary["loss"]
-                member["games"] += int(batch_summary["games"])
+                for m in members
+            ]
+            train_results = await asyncio.gather(*train_futures)
+
+            for member, result in zip(members, train_results):
+                member["trainer"].shared_network.load_state_dict(result["network_state"])
+                member["trainer"].optimizer.load_state_dict(result["optimizer_state"])
+                # Sync agents to updated network
+                for agent in member["agents"]:
+                    agent.network = member["trainer"].shared_network
+                member["batch_avg_reward"] = result["avg_reward"]
+                member["batch_win_rate"] = result["win_rate"]
+                member["loss"] = result["loss"]
+                member["games"] += result["games"]
                 member["model_hash"] = _model_hash(member["trainer"].shared_network)
                 member["status"] = "trained"
-                _lab.self_play_games += int(batch_summary["games"])
-                _sync_population_state(members)
-                await asyncio.sleep(0)
+                _lab.self_play_games += result["games"]
+                global_game_index += result["games"]
+            _sync_population_state(members)
 
             sessions_completed += sessions_this_generation
             _lab.self_play_sessions = sessions_completed
-            _lab.phase = "evaluating"
 
-            for member in members:
-                if not _lab.running:
-                    break
-                member["status"] = "evaluating"
-                _sync_population_state(members)
-                eval_summary = await _evaluate_population_member(member, eval_games)
-                member["fitness"] = eval_summary["fitness"]
-                member["best_eval"] = eval_summary
-                member["model_hash"] = _model_hash(member["trainer"].shared_network)
-                member["status"] = "ranked"
-                _sync_population_state(members)
-
-            ranked = sorted(members, key=lambda item: item["fitness"], reverse=True)
+            # Rank by training metrics (instant, no eval needed)
+            ranked = sorted(members, key=lambda m: m.get("batch_avg_reward", 0.0), reverse=True)
             best_member = ranked[0]
-            avg_fitness = sum(member["fitness"] for member in members) / max(len(members), 1)
-            min_fitness = min(member["fitness"] for member in members)
-            max_fitness = max(member["fitness"] for member in members)
-            avg_v3 = sum((member.get("best_eval") or {}).get("vs_v3", 0.0) for member in members) / max(len(members), 1)
-
-            _lab.pbt_generation_history.append({
-                "generation": generation,
-                "avg_fitness": round(avg_fitness, 4),
-                "min_fitness": round(min_fitness, 4),
-                "max_fitness": round(max_fitness, 4),
-                "avg_v3": round(avg_v3, 4),
-                "best_index": best_member["index"],
-                "best_label": best_member["label"],
-                "best_vs_v1": round(best_member["best_eval"]["vs_v1"], 4),
-                "best_vs_v2": round(best_member["best_eval"]["vs_v2"], 4),
-                "best_vs_v3": round(best_member["best_eval"]["vs_v3"], 4),
-                "best_batch_reward": round(best_member.get("batch_avg_reward", 0.0), 4),
-            })
+            for member in members:
+                member["fitness"] = max(0.0, min(1.0, (member.get("batch_avg_reward", 0.0) + 1.0) / 2.0))
+                member["status"] = "ranked"
+            _sync_population_state(members)
 
             _set_best_member(best_member, generation)
             _lab.current_loss = float(best_member.get("loss", 0.0))
-            _lab.eval_history.append({
-                "step": len(_lab.eval_history),
-                "label": f"PBT Gen {generation}",
-                "program": "self_play_pbt",
-                "vs_v1": best_member["best_eval"]["vs_v1"],
-                "vs_v2": best_member["best_eval"]["vs_v2"],
-                "vs_v3": best_member["best_eval"]["vs_v3"],
-                "avg_score_v1": best_member["best_eval"]["avg_score_v1"],
-                "avg_score_v2": best_member["best_eval"]["avg_score_v2"],
-                "avg_score_v3": best_member["best_eval"]["avg_score_v3"],
-                "loss": _lab.current_loss,
-                "experiences": 0,
-                "games": _lab.self_play_games,
-                "generation": generation,
-                "best_fitness": round(best_member["fitness"], 4),
-                "avg_fitness": round(avg_fitness, 4),
-            })
 
-            info = save_to_hof(
-                _lab.network,
-                _lab.persona,
-                _lab.eval_history,
-                phase_label=f"pbt-g{generation}",
-            )
-            _lab.snapshots.append(info)
-            await _save_sample_replay(_lab.network, generation, best_member)
+            # Snapshot weights and fire-and-forget eval in background processes
+            member_snapshots = [
+                {
+                    "state_dict": {k: v.clone() for k, v in m["trainer"].shared_network.state_dict().items()},
+                    "hidden_size": m["trainer"].shared_network.shared[0].out_features,
+                    "index": m["index"],
+                    "label": m["label"],
+                    "batch_avg_reward": m.get("batch_avg_reward", 0.0),
+                    "loss": m.get("loss", 0.0),
+                }
+                for m in members
+            ]
+            asyncio.create_task(_background_pbt_eval(
+                member_snapshots, eval_games, generation, dict(_lab.persona),
+            ))
 
             elite_count = max(1, int(round(len(members) * exploit_top_ratio)))
             replace_count = max(1, int(round(len(members) * exploit_bottom_ratio)))
@@ -1122,7 +1357,9 @@ async def _run_self_play_session(
         # Create 4 agents sharing the lab network
         hidden_size = _lab.network.shared[0].out_features
         agents = []
-        dev = _detect_self_play_device()
+        # CPU is faster than MPS for this model size (256 hidden dims)
+        # due to GPU transfer overhead per batch step
+        dev = "cpu"
         _lab.network = _lab.network.to(torch.device(dev))
         for i in range(4):
             agent = RLAgent(name=f"Lab-{i}", hidden_size=hidden_size, device=dev, explore_rate=0.1)
@@ -1149,6 +1386,12 @@ async def _run_self_play_session(
 
         trainer._running = True
 
+        # Detect if batched runner is available (Rust engine required)
+        can_batch = _HAS_RUST
+        if can_batch:
+            compute = create_backend(dev)
+            _lab.network = compute.prepare_network(_lab.network)
+
         for session_idx in range(num_sessions):
             if not _lab.running:
                 break
@@ -1161,54 +1404,111 @@ async def _run_self_play_session(
             _lab.self_play_sessions = session_idx + 1
             await asyncio.sleep(0)
 
-            # Run one session (games_per_session games + PPO update)
-            for agent in agents:
-                agent.set_training(True)
-                agent.clear_experiences()
-
-            all_experiences = []
-            session_scores = []
+            all_experiences: list = []
+            session_scores: list[int] = []
             session_wins = 0
             session_bids = 0
             session_klops = 0
             session_solos = 0
             session_start = time.time()
 
-            for g in range(games_per_session):
-                if not _lab.running:
-                    break
+            if can_batch:
+                # ── Batched self-play (all games at once) ──
+                runner = BatchGameRunner(
+                    network=_lab.network,
+                    concurrency=min(32, games_per_session),
+                    oracle=_lab.network.oracle_critic_enabled,
+                    compute=compute,
+                )
+                game_offset = session_idx * games_per_session
+                results = runner.run(
+                    total_games=games_per_session,
+                    explore_rate=0.1,
+                    dealer_offset=game_offset,
+                    game_id_offset=game_offset,
+                )
 
+                for result in results:
+                    scores = result.scores
+                    raw_score = scores.get(0, 0)
+
+                    # Convert GameExperience → Experience with terminal reward
+                    from tarok.adapters.ai.agent import Experience
+                    game_exps: list = []
+                    for gexp in result.experiences:
+                        game_exps.append(Experience(
+                            state=gexp.state,
+                            action=gexp.action,
+                            log_prob=gexp.log_prob,
+                            value=gexp.value,
+                            decision_type=gexp.decision_type,
+                            reward=0.0,
+                            done=False,
+                            oracle_state=gexp.oracle_state,
+                            legal_mask=gexp.legal_mask,
+                            game_id=gexp.game_id,
+                            step_in_game=gexp.step_in_game,
+                        ))
+                    if game_exps:
+                        game_exps[-1].reward = raw_score / 100.0
+                        game_exps[-1].done = True
+                    all_experiences.extend(game_exps)
+
+                    session_scores.append(raw_score)
+                    _lab.self_play_games += 1
+
+                    # Track per-game stats
+                    _, win = _score_game(result.py_state, scores, player_idx=0)
+                    session_wins += int(win)
+                    if result.is_klop:
+                        session_klops += 1
+                    if result.declarer_p0:
+                        session_bids += 1
+                    if result.is_solo and result.declarer_p0:
+                        session_solos += 1
+
+                # Yield to API
+                await asyncio.sleep(0)
+
+            else:
+                # ── Fallback: sequential GameLoop (no Rust engine) ──
                 for agent in agents:
+                    agent.set_training(True)
                     agent.clear_experiences()
 
-                game = GameLoop(agents)
-                state, scores = await game.run(dealer=(session_idx * games_per_session + g) % 4)
+                for g in range(games_per_session):
+                    if not _lab.running:
+                        break
 
-                raw_score = scores.get(0, 0)
-                for i, agent in enumerate(agents):
-                    reward = scores.get(i, 0) / 100.0
-                    agent.finalize_game(reward)
-                    all_experiences.extend(agent.experiences)
+                    for agent in agents:
+                        agent.clear_experiences()
 
-                session_scores.append(raw_score)
-                _lab.self_play_games += 1
+                    game = GameLoop(agents)
+                    state, scores = await game.run(dealer=(session_idx * games_per_session + g) % 4)
 
-                # Track per-game stats for agent 0
-                _, win = _score_game(state, scores, player_idx=0)
-                session_wins += int(win)
-                is_klop = state.contract is not None and state.contract.is_klop
-                did_bid = state.declarer == 0
-                is_solo = state.contract is not None and state.contract.is_solo and state.declarer == 0
-                if did_bid:
-                    session_bids += 1
-                if is_klop:
-                    session_klops += 1
-                if is_solo:
-                    session_solos += 1
+                    raw_score = scores.get(0, 0)
+                    for i, agent in enumerate(agents):
+                        reward = scores.get(i, 0) / 100.0
+                        agent.finalize_game(reward)
+                        all_experiences.extend(agent.experiences)
 
-                # Yield between games so the API can serve fresh lab state.
-                if (g + 1) % 5 == 0 or g == games_per_session - 1:
-                    await asyncio.sleep(0)
+                    session_scores.append(raw_score)
+                    _lab.self_play_games += 1
+
+                    _, win = _score_game(state, scores, player_idx=0)
+                    session_wins += int(win)
+                    is_klop = state.contract is not None and state.contract.is_klop
+                    did_bid = state.declarer == 0
+                    is_solo = state.contract is not None and state.contract.is_solo and state.declarer == 0
+                    if did_bid:
+                        session_bids += 1
+                    if is_klop:
+                        session_klops += 1
+                    if is_solo:
+                        session_solos += 1
+
+                    if (g + 1) % 5 == 0 or g == games_per_session - 1:
+                        await asyncio.sleep(0)
 
             if not _lab.running or not all_experiences:
                 break
