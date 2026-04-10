@@ -4,7 +4,7 @@
 /// Python code calls these functions with plain ints/lists and gets back
 /// plain lists/dicts.
 
-use numpy::{PyArray1, PyArray2};
+use numpy::{PyArray1, PyArrayMethods};
 use pyo3::prelude::*;
 use rand::prelude::*;
 use rand::rng;
@@ -829,25 +829,30 @@ fn py_generate_expert_data_v2v3v5(py: Python<'_>, num_games: usize, include_orac
 }
 
 /// Generate expert data from v5-only bot games.
+///
+/// Releases the GIL during Rust computation and uses Rayon parallelism
+/// for significantly better throughput with the more expensive v5 bot.
 #[pyfunction]
 #[pyo3(signature = (num_games, include_oracle=false))]
 fn py_generate_expert_data_v5(py: Python<'_>, num_games: usize, include_oracle: bool) -> PyResult<PyObject> {
-    let batch = crate::expert_games_v5::generate_expert_batch_v5(num_games, include_oracle);
+    // Release the GIL while running the CPU-intensive Rust computation
+    let batch = py.allow_threads(|| {
+        crate::expert_games_v5::generate_expert_batch_v5(num_games, include_oracle)
+    });
     let n_exp = batch.rewards.len();
 
     let dict = pyo3::types::PyDict::new(py);
 
-    let states = numpy::PyArray2::<f32>::from_vec2(
-        py,
-        &batch.states.chunks(batch.state_size).map(|c| c.to_vec()).collect::<Vec<_>>(),
-    ).map_err(|e| pyo3::exceptions::PyValueError::new_err(format!("states: {e}")))?;
+    // Use from_slice + reshape for zero-copy numpy array creation
+    let states = PyArray1::<f32>::from_vec(py, batch.states)
+        .reshape([n_exp, batch.state_size])
+        .map_err(|e| pyo3::exceptions::PyValueError::new_err(format!("states reshape: {e}")))?;
     dict.set_item("states", states)?;
 
     if include_oracle && !batch.oracle_states.is_empty() {
-        let oracle = numpy::PyArray2::<f32>::from_vec2(
-            py,
-            &batch.oracle_states.chunks(batch.oracle_state_size).map(|c| c.to_vec()).collect::<Vec<_>>(),
-        ).map_err(|e| pyo3::exceptions::PyValueError::new_err(format!("oracle: {e}")))?;
+        let oracle = PyArray1::<f32>::from_vec(py, batch.oracle_states)
+            .reshape([n_exp, batch.oracle_state_size])
+            .map_err(|e| pyo3::exceptions::PyValueError::new_err(format!("oracle reshape: {e}")))?;
         dict.set_item("oracle_states", oracle)?;
     } else {
         dict.set_item("oracle_states", py.None())?;

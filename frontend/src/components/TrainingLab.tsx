@@ -22,6 +22,25 @@ interface EvalPoint {
   avg_score_v3?: number;
   avg_score_v4?: number;
   avg_score_v5?: number;
+  avg_points_v5?: number;
+  avg_place_v5?: number;
+  bid_rate_v5?: number;
+  decl_win_rate_v5?: number;
+  def_win_rate_v5?: number;
+  decl_avg_points_v5?: number;
+  def_avg_points_v5?: number;
+  eval_signal_v5?: number;
+  contract_stats_v5?: Record<string, {
+    games: number;
+    win_rate: number;
+    avg_points: number;
+    decl_games: number;
+    decl_win_rate: number;
+    decl_avg_points: number;
+    def_games: number;
+    def_win_rate: number;
+    def_avg_points: number;
+  }>;
   loss: number;
   experiences?: number;
   games?: number;
@@ -166,7 +185,7 @@ export default function TrainingLab({ onBack }: Props) {
   // Imitation learning config
   const [expertGames, setExpertGames] = useState(500000);
   const [expertSource, setExpertSource] = useState("v2v3v5");
-  const [evalBots, setEvalBots] = useState<string[]>(['v1', 'v2', 'v3']);
+  const [evalBots, setEvalBots] = useState<string[]>(['v1', 'v2', 'v3', 'v5']);
   const [numRounds, setNumRounds] = useState(10);
   const [evalGames, setEvalGames] = useState(100);
   const [hiddenSize, setHiddenSize] = useState(256);
@@ -177,7 +196,7 @@ export default function TrainingLab({ onBack }: Props) {
   const [spEvalInterval, setSpEvalInterval] = useState(5);
   const [spLearningRate, setSpLearningRate] = useState(0.0003);
   const [spFspRatio, setSpFspRatio] = useState(0.3);
-  const [pbtEnabled, setPbtEnabled] = useState(true);
+  const [pbtEnabled, setPbtEnabled] = useState(false);
   const [pbtPopulationSize, setPbtPopulationSize] = useState(4);
   const [pbtTopRatio, setPbtTopRatio] = useState(0.25);
   const [pbtBottomRatio, setPbtBottomRatio] = useState(0.25);
@@ -254,24 +273,27 @@ export default function TrainingLab({ onBack }: Props) {
   };
 
   const startSelfPlay = async () => {
+    const params: Record<string, unknown> = {
+      num_sessions: spSessions,
+      games_per_session: spGamesPerSession,
+      eval_games: evalGames,
+      eval_bots: evalBots,
+      eval_interval: spEvalInterval,
+      learning_rate: spLearningRate,
+      fsp_ratio: spFspRatio,
+      pbt_enabled: pbtEnabled,
+    };
+    if (pbtEnabled) {
+      params.population_size = pbtPopulationSize;
+      params.exploit_top_ratio = pbtTopRatio;
+      params.exploit_bottom_ratio = pbtBottomRatio;
+      params.mutation_scale = pbtMutationScale;
+      params.time_limit_minutes = timeLimitMinutes;
+    }
     await fetch(`${API}/api/lab/self-play`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        num_sessions: spSessions,
-        games_per_session: spGamesPerSession,
-        eval_games: evalGames,
-        eval_bots: evalBots,
-        eval_interval: spEvalInterval,
-        learning_rate: spLearningRate,
-        fsp_ratio: spFspRatio,
-        pbt_enabled: pbtEnabled,
-        population_size: pbtPopulationSize,
-        exploit_top_ratio: pbtTopRatio,
-        exploit_bottom_ratio: pbtBottomRatio,
-        mutation_scale: pbtMutationScale,
-        time_limit_minutes: pbtEnabled ? timeLimitMinutes : 0,
-      }),
+      body: JSON.stringify(params),
     });
     poll();
   };
@@ -313,9 +335,42 @@ export default function TrainingLab({ onBack }: Props) {
         const sc = (e as Record<string, unknown>)[`avg_score_${v}`];
         if (sc != null) row[`avg_score_${sk}`] = sc;
       }
+      row.avg_points_v5 = (e as Record<string, unknown>).avg_points_v5;
+      row.avg_place_v5 = (e as Record<string, unknown>).avg_place_v5;
+      row.bid_rate_v5_pct = ((e as Record<string, unknown>).bid_rate_v5 as number | undefined) != null
+        ? +(((e as Record<string, unknown>).bid_rate_v5 as number) * 100).toFixed(1)
+        : undefined;
+      row.decl_win_rate_v5_pct = ((e as Record<string, unknown>).decl_win_rate_v5 as number | undefined) != null
+        ? +(((e as Record<string, unknown>).decl_win_rate_v5 as number) * 100).toFixed(1)
+        : undefined;
+      row.def_win_rate_v5_pct = ((e as Record<string, unknown>).def_win_rate_v5 as number | undefined) != null
+        ? +(((e as Record<string, unknown>).def_win_rate_v5 as number) * 100).toFixed(1)
+        : undefined;
+      row.eval_signal_v5_pct = ((e as Record<string, unknown>).eval_signal_v5 as number | undefined) != null
+        ? +(((e as Record<string, unknown>).eval_signal_v5 as number) * 100).toFixed(1)
+        : undefined;
       return row;
     });
   }, [state?.eval_history]);
+
+  const latestEval = state?.eval_history?.length ? state.eval_history[state.eval_history.length - 1] : null;
+
+  const v5ContractRows = useMemo(() => {
+    const cs = latestEval?.contract_stats_v5;
+    if (!cs) return [];
+    return Object.entries(cs)
+      .filter(([, v]) => v.games > 0)
+      .map(([name, v]) => ({
+        name,
+        games: v.games,
+        winRate: +(v.win_rate * 100).toFixed(1),
+        avgPoints: +v.avg_points.toFixed(1),
+        declGames: v.decl_games,
+        declWinRate: +(v.decl_win_rate * 100).toFixed(1),
+        defGames: v.def_games,
+        defWinRate: +(v.def_win_rate * 100).toFixed(1),
+      }));
+  }, [latestEval]);
 
   const lossData = useMemo(() => {
     if (!state?.eval_history?.length) return [];
@@ -570,15 +625,15 @@ export default function TrainingLab({ onBack }: Props) {
               <span className="lab-program-icon">🎮</span>
               <div>
                 <h3>Self-Play (PPO)</h3>
-                <p>Run single-policy PPO or Population Based Training with periodic exploit / explore generations</p>
+                <p>Train the agent by playing against itself using PPO reinforcement learning</p>
               </div>
             </div>
             <div className="lab-program-fields">
               <label className="lab-field">
                 <span>Mode</span>
                 <select value={pbtEnabled ? 'pbt' : 'single'} onChange={e => setPbtEnabled(e.target.value === 'pbt')}>
-                  <option value="pbt">Island Model (parallel)</option>
-                  <option value="single">Single Agent PPO</option>
+                  <option value="single">Self-Play PPO</option>
+                  <option value="pbt">Island Model (experimental, parallel)</option>
                 </select>
               </label>
               <label className="lab-field">
@@ -629,9 +684,11 @@ export default function TrainingLab({ onBack }: Props) {
             <button className="btn-gold btn-lab" onClick={startSelfPlay}>
               <span className="btn-icon">🎮</span> Start {pbtEnabled ? 'Island Training' : 'Self-Play Training'}
             </button>
-            <button className="btn-gold btn-lab" onClick={startOvernight} style={{ marginLeft: 8, background: 'linear-gradient(135deg, #1a237e, #4a148c)' }}>
-              <span className="btn-icon">🌙</span> Run Overnight
-            </button>
+            {pbtEnabled && (
+              <button className="btn-gold btn-lab" onClick={startOvernight} style={{ marginLeft: 8, background: 'linear-gradient(135deg, #1a237e, #4a148c)' }}>
+                <span className="btn-icon">🌙</span> Run Overnight
+              </button>
+            )}
           </div>
         </div>
       )}
@@ -936,6 +993,58 @@ export default function TrainingLab({ onBack }: Props) {
                   </ResponsiveContainer>
                 </ChartCard>
 
+                <ChartCard title="V5 Detailed Signal" wide>
+                  <ResponsiveContainer width="100%" height={300}>
+                    <LineChart data={evalData}>
+                      <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.08)" />
+                      <XAxis dataKey="label" stroke="#666" fontSize={11} />
+                      <YAxis stroke="#666" fontSize={11} />
+                      <Tooltip {...tooltipStyle} />
+                      <Legend />
+                      <ReferenceLine y={0} stroke="rgba(255,255,255,0.2)" />
+                      <Line type="monotone" dataKey="avg_points_v5" stroke="#f44336" strokeWidth={2} dot={{ r: 4 }} name="V5 Avg Points" connectNulls />
+                      <Line type="monotone" dataKey="avg_place_v5" stroke="#00bcd4" strokeWidth={2} dot={{ r: 4 }} name="V5 Avg Place (lower better)" connectNulls />
+                      <Line type="monotone" dataKey="bid_rate_v5_pct" stroke="#ff9800" strokeWidth={2} dot={{ r: 4 }} name="V5 Bid Rate %" connectNulls />
+                      <Line type="monotone" dataKey="eval_signal_v5_pct" stroke="#8bc34a" strokeWidth={3} dot={{ r: 4 }} name="V5 Eval Signal %" connectNulls />
+                    </LineChart>
+                  </ResponsiveContainer>
+                </ChartCard>
+
+                {v5ContractRows.length > 0 && (
+                  <ChartCard title="Latest V5 Contract Breakdown" wide>
+                    <div style={{ overflowX: 'auto' }}>
+                      <table className="lab-table">
+                        <thead>
+                          <tr>
+                            <th>Contract</th>
+                            <th>Games</th>
+                            <th>Win %</th>
+                            <th>Avg Points</th>
+                            <th>Decl Games</th>
+                            <th>Decl Win %</th>
+                            <th>Def Games</th>
+                            <th>Def Win %</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {v5ContractRows.map((row) => (
+                            <tr key={row.name}>
+                              <td>{row.name}</td>
+                              <td>{row.games}</td>
+                              <td>{row.winRate}%</td>
+                              <td>{row.avgPoints.toFixed(1)}</td>
+                              <td>{row.declGames}</td>
+                              <td>{row.declWinRate}%</td>
+                              <td>{row.defGames}</td>
+                              <td>{row.defWinRate}%</td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                  </ChartCard>
+                )}
+
                 <ChartCard title="Evaluation History" wide>
                   <div style={{ overflowX: 'auto' }}>
                     <table className="lab-table">
@@ -949,6 +1058,12 @@ export default function TrainingLab({ onBack }: Props) {
                           {ALL_BOT_VERSIONS.map(v => (
                             <th key={`sc-${v}`}>Score {BOT_LABELS[v]}</th>
                           ))}
+                          <th>V5 Points</th>
+                          <th>V5 Place</th>
+                          <th>V5 Bid %</th>
+                          <th>V5 Decl WR</th>
+                          <th>V5 Def WR</th>
+                          <th>V5 Signal</th>
                           <th>Loss</th>
                         </tr>
                       </thead>
@@ -969,6 +1084,12 @@ export default function TrainingLab({ onBack }: Props) {
                               const sc = e[`avg_score_${sanitizeKey(v)}`];
                               return <td key={`sc-${v}`}>{sc != null ? (sc as number).toFixed(1) : '—'}</td>;
                             })}
+                            <td>{e.avg_points_v5 != null ? (e.avg_points_v5 as number).toFixed(1) : '—'}</td>
+                            <td>{e.avg_place_v5 != null ? (e.avg_place_v5 as number).toFixed(2) : '—'}</td>
+                            <td>{e.bid_rate_v5 != null ? `${((e.bid_rate_v5 as number) * 100).toFixed(1)}%` : '—'}</td>
+                            <td>{e.decl_win_rate_v5 != null ? `${((e.decl_win_rate_v5 as number) * 100).toFixed(1)}%` : '—'}</td>
+                            <td>{e.def_win_rate_v5 != null ? `${((e.def_win_rate_v5 as number) * 100).toFixed(1)}%` : '—'}</td>
+                            <td>{e.eval_signal_v5 != null ? `${((e.eval_signal_v5 as number) * 100).toFixed(1)}%` : '—'}</td>
                             <td>{(e.loss as number) ? (e.loss as number).toFixed(4) : '—'}</td>
                           </tr>
                         ))}

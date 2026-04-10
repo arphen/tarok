@@ -38,6 +38,13 @@ from tarok.adapters.ai.lookahead_agent import LookaheadAgent
 from tarok.adapters.ai.network import TarokNet
 from tarok.adapters.ai.network_bank import NetworkBank
 from tarok.adapters.ai.stockskis_player import StockSkisPlayer
+from tarok.adapters.ai.stockskis_v2 import StockSkisPlayerV2
+from tarok.adapters.ai.stockskis_v3 import StockSkisPlayerV3
+from tarok.adapters.ai.stockskis_v4 import StockSkisPlayerV4
+try:
+    from tarok.adapters.ai.stockskis_v5 import StockSkisPlayerV5
+except Exception:
+    StockSkisPlayerV5 = None
 from tarok.use_cases.game_loop import GameLoop
 
 import math
@@ -106,6 +113,70 @@ class ContractStats:
         }
 
 
+@dataclass
+class OpponentStats:
+    """Aggregate stats against a specific opponent pool."""
+    games: int = 0
+    wins: int = 0
+    total_score: int = 0
+    total_place: float = 0.0
+    bids: int = 0
+    decl_games: int = 0
+    decl_wins: int = 0
+    decl_total_score: int = 0
+    def_games: int = 0
+    def_wins: int = 0
+    def_total_score: int = 0
+
+    @property
+    def win_rate(self) -> float:
+        return self.wins / max(self.games, 1)
+
+    @property
+    def avg_score(self) -> float:
+        return self.total_score / max(self.games, 1)
+
+    @property
+    def avg_place(self) -> float:
+        return self.total_place / max(self.games, 1)
+
+    @property
+    def bid_rate(self) -> float:
+        return self.bids / max(self.games, 1)
+
+    @property
+    def decl_win_rate(self) -> float:
+        return self.decl_wins / max(self.decl_games, 1)
+
+    @property
+    def decl_avg_score(self) -> float:
+        return self.decl_total_score / max(self.decl_games, 1)
+
+    @property
+    def def_win_rate(self) -> float:
+        return self.def_wins / max(self.def_games, 1)
+
+    @property
+    def def_avg_score(self) -> float:
+        return self.def_total_score / max(self.def_games, 1)
+
+    def to_dict(self) -> dict:
+        return {
+            "games": self.games,
+            "wins": self.wins,
+            "win_rate": round(self.win_rate, 4),
+            "avg_score": round(self.avg_score, 2),
+            "avg_place": round(self.avg_place, 2),
+            "bid_rate": round(self.bid_rate, 4),
+            "decl_games": self.decl_games,
+            "decl_win_rate": round(self.decl_win_rate, 4),
+            "decl_avg_score": round(self.decl_avg_score, 2),
+            "def_games": self.def_games,
+            "def_win_rate": round(self.def_win_rate, 4),
+            "def_avg_score": round(self.def_avg_score, 2),
+        }
+
+
 # Contract names we individually track
 _TRACKED_CONTRACTS = ["klop", "three", "two", "one", "solo_three", "solo_two", "solo_one", "solo", "berac"]
 
@@ -150,6 +221,16 @@ class TrainingMetrics:
     tarok_count_bids: dict[int, dict[str, int]] = field(
         default_factory=lambda: {i: {} for i in range(13)}
     )
+    # Evaluation signal and detailed breakdown against StockSkis v5 opponents
+    vs_v5: OpponentStats = field(default_factory=OpponentStats)
+    vs_v5_contract_stats: dict[str, OpponentStats] = field(
+        default_factory=lambda: {c: OpponentStats() for c in _TRACKED_CONTRACTS}
+    )
+    vs_v5_win_rate_history: list[float] = field(default_factory=list)
+    vs_v5_avg_score_history: list[float] = field(default_factory=list)
+    vs_v5_avg_place_history: list[float] = field(default_factory=list)
+    vs_v5_bid_rate_history: list[float] = field(default_factory=list)
+    vs_v5_eval_signal_history: list[float] = field(default_factory=list)
 
     def to_dict(self) -> dict:
         return {
@@ -187,6 +268,15 @@ class TrainingMetrics:
             "tarok_count_bids": {
                 str(k): v for k, v in self.tarok_count_bids.items()
             },
+            "vs_v5": self.vs_v5.to_dict(),
+            "vs_v5_contract_stats": {
+                k: v.to_dict() for k, v in self.vs_v5_contract_stats.items()
+            },
+            "vs_v5_win_rate_history": self.vs_v5_win_rate_history[-500:],
+            "vs_v5_avg_score_history": self.vs_v5_avg_score_history[-500:],
+            "vs_v5_avg_place_history": self.vs_v5_avg_place_history[-500:],
+            "vs_v5_bid_rate_history": self.vs_v5_bid_rate_history[-500:],
+            "vs_v5_eval_signal_history": self.vs_v5_eval_signal_history[-500:],
         }
 
 
@@ -221,6 +311,7 @@ class PPOTrainer:
         # --- StockŠkis opponents ---
         stockskis_ratio: float = 0.0,
         stockskis_strength: float = 1.0,
+        stockskis_version: int = 5,
         # --- Lookahead opponents ---
         lookahead_ratio: float = 0.0,
         lookahead_sims: int = 20,
@@ -292,10 +383,26 @@ class PPOTrainer:
 
         # --- StockŠkis opponents ---
         self.stockskis_ratio = stockskis_ratio
+        self.stockskis_version = max(1, min(5, int(stockskis_version)))
         self._stockskis_opponents: list[StockSkisPlayer] | None = None
         if stockskis_ratio > 0:
+            cls = StockSkisPlayer
+            if self.stockskis_version == 2:
+                cls = StockSkisPlayerV2
+            elif self.stockskis_version == 3:
+                cls = StockSkisPlayerV3
+            elif self.stockskis_version == 4:
+                cls = StockSkisPlayerV4
+            elif self.stockskis_version == 5:
+                if StockSkisPlayerV5 is not None:
+                    cls = StockSkisPlayerV5
+                else:
+                    log.warning("StockSkis v5 unavailable; falling back to v4 opponents")
+                    cls = StockSkisPlayerV4
+                    self.stockskis_version = 4
+
             self._stockskis_opponents = [
-                StockSkisPlayer(name=f"StockŠkis-{i}", strength=stockskis_strength)
+                cls(name=f"StockŠkis-v{self.stockskis_version}-{i}", strength=stockskis_strength)
                 for i in range(3)
             ]
 
@@ -372,6 +479,60 @@ class PPOTrainer:
         for i in range(4):
             self.agents[i] = original_agents[i]
 
+    @staticmethod
+    def _eval_signal(stats: OpponentStats) -> float:
+        """Scalar evaluation signal from win rate + score + placement.
+
+        Returns approximately in [0, 1] where higher is better.
+        """
+        wr = stats.win_rate
+        # Scores are usually within a few hundred points; scale to [-1, 1] range.
+        score_term = max(-1.0, min(1.0, stats.avg_score / 120.0))
+        # Placement is 1 (best) to 4 (worst); convert to [0, 1].
+        place_term = max(0.0, min(1.0, (4.0 - stats.avg_place) / 3.0))
+        return 0.55 * wr + 0.30 * ((score_term + 1.0) / 2.0) + 0.15 * place_term
+
+    @staticmethod
+    def _update_opponent_stats(
+        stats: OpponentStats,
+        contract_stats: dict[str, OpponentStats],
+        contract_name: str,
+        raw_score: int,
+        won: bool,
+        bid: bool,
+        place: float,
+        declarer_p0: bool,
+    ) -> None:
+        stats.games += 1
+        stats.wins += 1 if won else 0
+        stats.total_score += raw_score
+        stats.total_place += place
+        stats.bids += 1 if bid else 0
+        if declarer_p0:
+            stats.decl_games += 1
+            stats.decl_wins += 1 if won else 0
+            stats.decl_total_score += raw_score
+        else:
+            stats.def_games += 1
+            stats.def_wins += 1 if won else 0
+            stats.def_total_score += raw_score
+
+        if contract_name in contract_stats:
+            cs = contract_stats[contract_name]
+            cs.games += 1
+            cs.wins += 1 if won else 0
+            cs.total_score += raw_score
+            cs.total_place += place
+            cs.bids += 1 if bid else 0
+            if declarer_p0:
+                cs.decl_games += 1
+                cs.decl_wins += 1 if won else 0
+                cs.decl_total_score += raw_score
+            else:
+                cs.def_games += 1
+                cs.def_wins += 1 if won else 0
+                cs.def_total_score += raw_score
+
     def _enter_fsp_mode(self) -> None:
         """Switch opponents (agents 1-3) to historical weights for FSP."""
         snap = self.network_bank.sample()
@@ -438,6 +599,10 @@ class PPOTrainer:
             session_stockskis_places: list[float] = []
             session_lookahead_scores: list[int] = []
             session_lookahead_bids: list[float] = []
+            session_v5 = OpponentStats()
+            session_v5_contracts: dict[str, OpponentStats] = {
+                c: OpponentStats() for c in _TRACKED_CONTRACTS
+            }
 
             # --- Batched self-play (Rust engine only) ---
             # Split games into batched NN games and sequential StockŠkis games
@@ -558,6 +723,20 @@ class PPOTrainer:
                     b = 1.0 if agent0_bids else 0.0
                     k = 1.0 if is_klop else 0.0
                     s = 1.0 if is_solo else 0.0
+
+                    if self.stockskis_version == 5:
+                        agent_place = float(result.get("agent_place", 4.0))
+                        self._update_opponent_stats(
+                            session_v5,
+                            session_v5_contracts,
+                            contract_name=contract_name,
+                            raw_score=raw_score,
+                            won=(w > 0),
+                            bid=bool(agent0_bids),
+                            place=agent_place,
+                            declarer_p0=declarer_p0,
+                        )
+
                     recent_rewards.append(r); recent_wins.append(w)
                     recent_bids.append(b); recent_klops.append(k); recent_solos.append(s)
                     recent_games.append((contract_name, declarer_p0, raw_score, w > 0))
@@ -643,14 +822,6 @@ class PPOTrainer:
                         and self.network_bank.is_ready
                         and self._rng.random() < self.fsp_ratio
                     )
-                    # Lookahead mode: use Monte Carlo search opponents
-                    use_lookahead = (
-                        not use_stockskis
-                        and not use_fsp
-                        and self.lookahead_ratio > 0
-                        and self._lookahead_opponents is not None
-                        and self._rng.random() < self.lookahead_ratio
-                    )
                     external_opponents = use_fsp or use_stockskis or use_lookahead
 
                     original_agents = None
@@ -698,13 +869,17 @@ class PPOTrainer:
                         places = {p: rank + 1 for rank, p in enumerate(sorted_players)}
                         avg_sk_place = sum(places[p] for p in range(1, 4)) / 3.0
                         session_stockskis_places.append(avg_sk_place)
-
-                    # Track lookahead finishing scores and bid rates
-                    if use_lookahead:
-                        session_lookahead_scores.append(raw_score)
-                        session_lookahead_bids.append(
-                            1.0 if agent0_bids else 0.0
-                        )
+                        if self.stockskis_version == 5:
+                            self._update_opponent_stats(
+                                session_v5,
+                                session_v5_contracts,
+                                contract_name=contract_name,
+                                raw_score=raw_score,
+                                won=(w > 0),
+                                bid=bool(agent0_bids),
+                                place=float(places[0]),
+                                declarer_p0=declarer_p0,
+                            )
 
                     # Track tarok count vs contract for player 0
                     if state.initial_tarok_counts:
@@ -837,6 +1012,17 @@ class PPOTrainer:
                 self.metrics.lookahead_bid_rate_history.append(
                     round(sum(session_lookahead_bids) / len(session_lookahead_bids), 4)
                 )
+
+            # Update v5 evaluation block (can be used as a learning/eval signal)
+            self.metrics.vs_v5 = session_v5
+            self.metrics.vs_v5_contract_stats = session_v5_contracts
+            self.metrics.vs_v5_win_rate_history.append(round(session_v5.win_rate, 4))
+            self.metrics.vs_v5_avg_score_history.append(round(session_v5.avg_score, 2))
+            self.metrics.vs_v5_avg_place_history.append(round(session_v5.avg_place, 2))
+            self.metrics.vs_v5_bid_rate_history.append(round(session_v5.bid_rate, 4))
+            self.metrics.vs_v5_eval_signal_history.append(
+                round(self._eval_signal(session_v5), 4)
+            )
 
             # --- Append per-session history for charts ---
             self.metrics.reward_history.append(self.metrics.avg_reward)
@@ -1013,6 +1199,7 @@ class PPOTrainer:
                     "declarer_p0": declarer_p0,
                     "agent0_bids": bool(agent0_bids_list),
                     "declarer_lost": declarer_lost,
+                    "agent_place": places.get(0, 4),
                     "stockskis_place": avg_sk_place,
                     "initial_tarok_counts": state.initial_tarok_counts if hasattr(state, 'initial_tarok_counts') else {},
                 })

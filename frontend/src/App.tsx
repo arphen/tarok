@@ -3,7 +3,6 @@ import GameBoard from './components/GameBoard';
 import GameLog from './components/GameLog';
 import Scoreboard from './components/Scoreboard';
 import GameInfoDrawer from './components/GameInfoDrawer';
-import ModelLeaderboard from './components/ModelLeaderboard';
 import { useGame } from './hooks/useGame';
 import type { CardData } from './types/game';
 import './App.css';
@@ -22,6 +21,7 @@ type Page = 'home' | 'training' | 'lab' | 'play' | 'lobby' | 'camera' | 'spectat
 export default function App() {
   const [page, setPage] = useState<Page>('home');
   const [checkpoints, setCheckpoints] = useState<{ filename: string; episode: number; win_rate: number; session?: number; model_name?: string; is_hof?: boolean }[]>([]);
+  const [agents, setAgents] = useState<{ id: string; name: string; description: string; category: string }[]>([]);
   const [opponents, setOpponents] = useState<[string, string, string]>(['latest', 'latest', 'latest']);
   const [numRounds, setNumRounds] = useState(1);
   const [playSidebarOpen, setPlaySidebarOpen] = useState(false);
@@ -32,6 +32,10 @@ export default function App() {
     fetch('/api/checkpoints')
       .then(r => r.json())
       .then(data => setCheckpoints(data.checkpoints ?? []))
+      .catch(() => {});
+    fetch('/api/agents')
+      .then(r => r.json())
+      .then(data => setAgents(data.agents ?? []))
       .catch(() => {});
   }, [page]);
 
@@ -104,14 +108,50 @@ export default function App() {
                   value={opponents[i]}
                   onChange={e => setOpponent(i, e.target.value)}
                 >
-                  <option value="latest">Latest trained model</option>
-                  <option value="random">Random (untrained)</option>
-                  <option value="lookahead">Lookahead (Monte Carlo search)</option>
-                  {checkpoints.map(cp => (
-                    <option key={cp.filename} value={cp.filename}>
-                      {ckptLabel(cp.filename)}
-                    </option>
-                  ))}
+                  {/* Neural network models */}
+                  <optgroup label="Neural Network">
+                    <option value="latest">Latest trained model</option>
+                    {checkpoints.map(cp => (
+                      <option key={cp.filename} value={cp.filename}>
+                        {ckptLabel(cp.filename)}
+                      </option>
+                    ))}
+                  </optgroup>
+
+                  {/* Heuristic bots (StockŠkis v1-v5+ from registry) */}
+                  {agents.filter(a => a.category === 'heuristic').length > 0 && (
+                    <optgroup label="Heuristic Bots (StockŠkis)">
+                      {agents.filter(a => a.category === 'heuristic').map(a => (
+                        <option key={a.id} value={a.id} title={a.description}>
+                          {a.name}
+                        </option>
+                      ))}
+                    </optgroup>
+                  )}
+
+                  {/* Search-based agents */}
+                  {agents.filter(a => a.category === 'search').length > 0 && (
+                    <optgroup label="Search">
+                      {agents.filter(a => a.category === 'search').map(a => (
+                        <option key={a.id} value={a.id} title={a.description}>
+                          {a.name}
+                        </option>
+                      ))}
+                    </optgroup>
+                  )}
+
+                  {/* Baseline agents */}
+                  <optgroup label="Baseline">
+                    {agents.filter(a => a.category === 'baseline').map(a => (
+                      <option key={a.id} value={a.id} title={a.description}>
+                        {a.name}
+                      </option>
+                    ))}
+                    {/* Fallback if agents haven't loaded yet */}
+                    {agents.filter(a => a.category === 'baseline').length === 0 && (
+                      <option value="random">Random (untrained)</option>
+                    )}
+                  </optgroup>
                 </select>
               </div>
             ))}
@@ -145,7 +185,6 @@ export default function App() {
             <span><strong>Start Game</strong></span>
           </button>
         </div>
-        <ModelLeaderboard />
       </div>
     );
   }
@@ -215,10 +254,11 @@ export default function App() {
             </div>
           </div>
         </div>
-        <ModelLeaderboard />
       </div>
     );
   }
+
+  // Home page
   return (
     <div className="app">
       <div className="home-page">
@@ -237,8 +277,8 @@ export default function App() {
           <button className="btn-gold btn-large" onClick={() => setPage('training')}>
             <span className="btn-icon">🧠</span>
             <span>
-              <strong>Train AI Agents</strong>
-              <small>Watch agents learn through self-play</small>
+              <strong>Quick Train</strong>
+              <small>Simple PPO self-play training with live charts</small>
             </span>
           </button>
 
@@ -246,7 +286,7 @@ export default function App() {
             <span className="btn-icon">🧪</span>
             <span>
               <strong>Training Lab</strong>
-              <small>Create a fresh NN and watch it learn from expert bots</small>
+              <small>Imitation learning + self-play PPO pipeline</small>
             </span>
           </button>
 
