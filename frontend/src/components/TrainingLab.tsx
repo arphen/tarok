@@ -518,6 +518,7 @@ export default function TrainingLab({ onBack }: Props) {
               <label className="lab-field">
                 <span>Expert Source</span>
                 <select value={expertSource} onChange={e => setExpertSource(e.target.value)}>
+                  <option value="v5">v5 Only</option>
                   <option value="v2v3">v2 & v3 Mix</option>
                   <option value="v2v3v5">v2, v3 & v5 Mix</option>
                 </select>

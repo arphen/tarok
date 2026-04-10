@@ -3,6 +3,7 @@ pub mod encoding;
 pub mod expert_games;
 pub mod expert_games_v2v3;
 pub mod expert_games_v2v3v5;
+pub mod expert_games_v5;
 pub mod game_state;
 pub mod legal_moves;
 pub mod scoring;

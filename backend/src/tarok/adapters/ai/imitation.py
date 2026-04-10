@@ -113,9 +113,11 @@ def imitation_pretrain(
 
         # Generate expert experiences in Rust
         gen_t0 = time.perf_counter()
-        if expert_source == "v2v3v5" and hasattr(te, 'py_generate_expert_data_v2v3v5'):
+        if expert_source == "v5" and hasattr(te, 'py_generate_expert_data_v5'):
+            data = te.py_generate_expert_data_v5(n, include_oracle=include_oracle)
+        elif expert_source == "v2v3v5" and hasattr(te, 'py_generate_expert_data_v2v3v5'):
             data = te.py_generate_expert_data_v2v3v5(n, include_oracle=include_oracle)
-        elif expert_source in ("v2v3", "v2v3v5") and hasattr(te, 'py_generate_expert_data_v2v3'):
+        elif expert_source in ("v2v3", "v2v3v5", "v5") and hasattr(te, 'py_generate_expert_data_v2v3'):
             data = te.py_generate_expert_data_v2v3(n, include_oracle=include_oracle)
         elif hasattr(te, "generate_expert_data"):
             data = te.generate_expert_data(n, include_oracle=include_oracle)
