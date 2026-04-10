@@ -43,8 +43,10 @@ class TarokNet(nn.Module):
         # Actor backbone (imperfect info — only sees own hand)
         self.shared = nn.Sequential(
             nn.Linear(STATE_SIZE, hidden_size),
+            nn.LayerNorm(hidden_size),
             nn.ReLU(),
             nn.Linear(hidden_size, hidden_size),
+            nn.LayerNorm(hidden_size),
             nn.ReLU(),
         )
 
@@ -81,8 +83,10 @@ class TarokNet(nn.Module):
         if oracle_critic:
             self.critic_backbone = nn.Sequential(
                 nn.Linear(ORACLE_STATE_SIZE, hidden_size),
+                nn.LayerNorm(hidden_size),
                 nn.ReLU(),
                 nn.Linear(hidden_size, hidden_size),
+                nn.LayerNorm(hidden_size),
                 nn.ReLU(),
             )
 
@@ -100,6 +104,44 @@ class TarokNet(nn.Module):
             DecisionType.CARD_PLAY: self.card_head,
             DecisionType.ANNOUNCE: self.announce_head,
         }
+
+    # ------------------------------------------------------------------
+    # Auto-migration: pad old 267-dim checkpoints to 270-dim
+    # ------------------------------------------------------------------
+    def load_state_dict(self, state_dict, strict=True, assign=False):
+        _OLD_STATE_SIZE = 267
+        _OLD_ORACLE_SIZE = 267 + 3 * 54  # 429
+
+        # --- Migrate old 2-layer (no LayerNorm) checkpoints to new layout ---
+        # Old: shared.0=Linear, shared.1=ReLU, shared.2=Linear, shared.3=ReLU
+        # New: shared.0=Linear, shared.1=LN, shared.2=ReLU, shared.3=Linear, shared.4=LN, shared.5=ReLU
+        _LAYER_REMAP = {
+            "shared.2.weight": "shared.3.weight",
+            "shared.2.bias": "shared.3.bias",
+        }
+        _CRITIC_REMAP = {
+            "critic_backbone.2.weight": "critic_backbone.3.weight",
+            "critic_backbone.2.bias": "critic_backbone.3.bias",
+        }
+        needs_ln_migration = "shared.0.weight" in state_dict and "shared.1.weight" not in state_dict
+        if needs_ln_migration:
+            new_sd = {}
+            for key, val in state_dict.items():
+                new_key = _LAYER_REMAP.get(key, _CRITIC_REMAP.get(key, key))
+                new_sd[new_key] = val
+            state_dict = new_sd
+            # Let strict=False so missing LayerNorm params get default-initialized
+            strict = False
+
+        for key in ["shared.0.weight", "critic_backbone.0.weight"]:
+            if key not in state_dict:
+                continue
+            w = state_dict[key]
+            expected = ORACLE_STATE_SIZE if "critic" in key else STATE_SIZE
+            if w.shape[1] < expected:
+                pad = torch.zeros(w.shape[0], expected - w.shape[1], dtype=w.dtype, device=w.device)
+                state_dict[key] = torch.cat([w, pad], dim=1)
+        return super().load_state_dict(state_dict, strict=strict, assign=assign)
 
     def forward(
         self,

@@ -23,9 +23,10 @@ CONTRACT_MAP = {
 
 @given("a game in bidding phase", target_fixture="bidding_state")
 def bidding_state():
-    state = GameState(phase=Phase.BIDDING)
-    state.current_bidder = 0
-    state.current_player = 0
+    state = GameState(phase=Phase.BIDDING, dealer=0)
+    # Forehand (obvezen) = dealer+1 = 1; first bidder = dealer+2 = 2
+    state.current_bidder = 2
+    state.current_player = 2
     return state
 
 
@@ -36,24 +37,32 @@ def first_player_turn(bidding_state):
 
 @then("the legal bids should include pass and all contracts")
 def all_bids_legal(first_player_state):
-    legal = first_player_state.legal_bids(0)
-    assert None in legal  # pass
+    # Forehand (player 1) gets all bids including THREE
+    forehand = first_player_state.forehand  # player 1
+    legal_fh = first_player_state.legal_bids(forehand)
+    assert None in legal_fh  # pass
     for c in Contract:
         if c.is_biddable:
-            assert c in legal, f"Missing contract: {c}"
+            assert c in legal_fh, f"Forehand missing contract: {c}"
+    # Non-forehand (player 2) should NOT see THREE
+    legal_nonfh = first_player_state.legal_bids(2)
+    assert None in legal_nonfh
+    assert Contract.THREE not in legal_nonfh
+    assert Contract.TWO in legal_nonfh  # can bid two or higher
 
 
 # --- Later bids higher than current ---
 
 @given(parsers.parse('a game where "{contract}" has been bid'), target_fixture="after_first_bid")
 def after_first_bid(contract):
-    state = GameState(phase=Phase.BIDDING)
-    state.current_bidder = 0
-    state.current_player = 0
+    state = GameState(phase=Phase.BIDDING, dealer=0)
+    # Player 2 (non-forehand) made the first bid
+    state.current_bidder = 2
     c = CONTRACT_MAP[contract]
-    state.bids.append(Bid(player=0, contract=c))
-    state.current_bidder = 1
-    state.current_player = 1
+    state.bids.append(Bid(player=2, contract=c))
+    # Next bidder is player 3 (also non-forehand)
+    state.current_bidder = 3
+    state.current_player = 3
     return state
 
 
@@ -64,7 +73,8 @@ def next_player(after_first_bid):
 
 @then(parsers.parse('only contracts higher than "{contract}" should be available'))
 def higher_contracts_only(next_player_state, contract):
-    legal = next_player_state.legal_bids(1)
+    # Player 3 is non-forehand, must bid strictly higher
+    legal = next_player_state.legal_bids(3)
     threshold = CONTRACT_MAP[contract].strength
     for bid in legal:
         if bid is not None:
@@ -78,11 +88,10 @@ def higher_contracts_only(next_player_state, contract):
 @when("all four players pass", target_fixture="all_passed")
 def all_pass(bidding_state):
     state = bidding_state
-    for p in range(4):
+    # Bidding order: 2, 3, 0, 1 (forehand last)
+    for p in [2, 3, 0, 1]:
         if state.phase != Phase.BIDDING:
             break
-        state.current_bidder = p
-        state.current_player = p
         state = place_bid(state, p, None)
     return state
 
@@ -97,20 +106,21 @@ def game_enters_klop(all_passed):
 
 @given(parsers.parse('a game where 3 players passed and 1 bid "{contract}"'), target_fixture="single_bidder")
 def single_bidder(contract):
-    state = GameState(phase=Phase.BIDDING)
-    state.current_bidder = 0
-    state.current_player = 0
-    # Player 0 bids, players 1,2,3 pass
-    state = place_bid(state, 0, CONTRACT_MAP[contract])
-    state = place_bid(state, 1, None)
-    state = place_bid(state, 2, None)
+    state = GameState(phase=Phase.BIDDING, dealer=0)
+    # Bidding order: 2, 3, 0, then forehand (1)
+    state.current_bidder = 2
+    state.current_player = 2
+    # Player 2 bids, players 3, 0, 1 (forehand) pass
+    state = place_bid(state, 2, CONTRACT_MAP[contract])
     state = place_bid(state, 3, None)
+    state = place_bid(state, 0, None)
+    state = place_bid(state, 1, None)  # forehand passes
     return state
 
 
 @then("that player should be the declarer")
 def is_declarer(single_bidder):
-    assert single_bidder.declarer == 0
+    assert single_bidder.declarer == 2
 
 
 @then(parsers.parse('the contract should be "{contract}"'))

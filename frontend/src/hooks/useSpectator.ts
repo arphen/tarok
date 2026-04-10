@@ -110,6 +110,25 @@ export interface AgentConfig {
   checkpoint?: string;
 }
 
+function toTimelineItem(msg: SpectatorEvent) {
+  const names = msg.state.player_names.length > 0
+    ? msg.state.player_names
+    : ['Agent-0', 'Agent-1', 'Agent-2', 'Agent-3'];
+  const entry = formatSpectatorEvent(msg.event, msg.data, names);
+
+  const enrichedState: SpectatorState = {
+    ...msg.state,
+    score_breakdown: msg.event === 'game_end'
+      ? (msg.data.breakdown as ScoreBreakdown) ?? null
+      : null,
+    trick_summary: msg.event === 'game_end'
+      ? (msg.data.trick_summary as TrickSummaryEntry[]) ?? null
+      : null,
+  };
+
+  return { state: enrichedState, eventName: msg.event, logEntry: entry };
+}
+
 export function useSpectator() {
   const [timeline, setTimeline] = useState<{ state: SpectatorState; eventName: string; logEntry: SpectatorLogEntry | null }[]>([]);
   const [currentIndex, setCurrentIndex] = useState(0);
@@ -119,14 +138,28 @@ export function useSpectator() {
   const [gameId, setGameId] = useState<string | null>(null);
   const [connected, setConnected] = useState(false);
   const [loading, setLoading] = useState(false);
+  const [mode, setMode] = useState<'live' | 'replay'>('live');
+  const [replayName, setReplayName] = useState<string | null>(null);
   const wsRef = useRef<WebSocket | null>(null);
   const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
+
+  const disconnect = useCallback(() => {
+    wsRef.current?.close();
+    wsRef.current = null;
+    setConnected(false);
+    setGameId(null);
+    setIsPlaying(false);
+    setMode('live');
+    setReplayName(null);
+  }, []);
 
   const startGame = useCallback(async (agents: AgentConfig[]) => {
     setLoading(true);
     setTimeline([]);
     setCurrentIndex(0);
     setIsPlaying(false);
+    setMode('live');
+    setReplayName(null);
 
     try {
       const res = await fetch('/api/spectate/new', {
@@ -146,24 +179,8 @@ export function useSpectator() {
 
       ws.onmessage = (e) => {
         const msg: SpectatorEvent = JSON.parse(e.data);
-        const names = msg.state.player_names.length > 0
-          ? msg.state.player_names
-          : ['Agent-0', 'Agent-1', 'Agent-2', 'Agent-3'];
-        const entry = formatSpectatorEvent(msg.event, msg.data, names);
-
-        // Attach breakdown data from game_end event to state
-        const enrichedState: SpectatorState = {
-          ...msg.state,
-          score_breakdown: msg.event === 'game_end'
-            ? (msg.data.breakdown as ScoreBreakdown) ?? null
-            : null,
-          trick_summary: msg.event === 'game_end'
-            ? (msg.data.trick_summary as TrickSummaryEntry[]) ?? null
-            : null,
-        };
-
         setTimeline(prev => {
-          const newState = [...prev, { state: enrichedState, eventName: msg.event, logEntry: entry }];
+          const newState = [...prev, toTimelineItem(msg)];
           if (newState.length === 1) {
             setIsPlaying(true);
           }
@@ -180,13 +197,27 @@ export function useSpectator() {
     }
   }, []);
 
-  const disconnect = useCallback(() => {
-    wsRef.current?.close();
-    wsRef.current = null;
-    setConnected(false);
-    setGameId(null);
-    setIsPlaying(false);
-  }, []);
+  const loadReplay = useCallback(async (filename: string) => {
+    setLoading(true);
+    disconnect();
+    setTimeline([]);
+    setCurrentIndex(0);
+
+    try {
+      const res = await fetch(`/api/replays/${encodeURIComponent(filename)}`);
+      const payload = await res.json();
+      const replayTimeline = ((payload.timeline ?? []) as SpectatorEvent[]).map(toTimelineItem);
+      setTimeline(replayTimeline);
+      setGameId(`replay:${filename}`);
+      setMode('replay');
+      setReplayName(filename);
+      if (replayTimeline.length > 0) {
+        setIsPlaying(true);
+      }
+    } finally {
+      setLoading(false);
+    }
+  }, [disconnect]);
 
   // Playback control
   useEffect(() => {
@@ -259,8 +290,11 @@ export function useSpectator() {
     gameId,
     connected,
     loading,
+    mode,
+    replayName,
     logEntries,
     startGame,
+    loadReplay,
     disconnect,
     
     // Playback

@@ -1,15 +1,15 @@
 /// State encoding — writes features directly into a numpy buffer.
 ///
-/// Matches the Python STATE_SIZE = 267 layout exactly so that neural
+/// Matches the Python STATE_SIZE = 270 layout exactly so that neural
 /// network weights trained in Python work with the Rust encoder.
 
 use crate::card::*;
 use crate::game_state::*;
 use crate::trick_eval::evaluate_trick;
 
-pub const STATE_SIZE: usize = 267;
+pub const STATE_SIZE: usize = 270;
 pub const ORACLE_EXTRA: usize = 3 * DECK_SIZE; // 162
-pub const ORACLE_STATE_SIZE: usize = STATE_SIZE + ORACLE_EXTRA; // 429
+pub const ORACLE_STATE_SIZE: usize = STATE_SIZE + ORACLE_EXTRA; // 432
 
 /// Decision type codes matching Python DecisionType enum.
 pub const DT_BID: u8 = 0;
@@ -172,6 +172,21 @@ pub fn encode_state(buf: &mut [f32], state: &GameState, player: u8, decision_typ
         buf[o + i] = (level.multiplier() as f32 - 1.0) / 7.0;
     }
     o += 5;
+
+    // Role one-hot (3 features: is_declarer, is_partner, is_opposition)
+    if let Some(decl) = state.declarer {
+        if player == decl {
+            buf[o] = 1.0;     // is_declarer
+        } else if state.partner == Some(player) {
+            buf[o + 1] = 1.0; // is_partner (revealed)
+        } else if state.get_team(player) == Team::DeclarerTeam {
+            buf[o + 1] = 1.0; // is_partner (hidden — we know our own role)
+        } else {
+            buf[o + 2] = 1.0; // is_opposition
+        }
+    }
+    // During bidding (no declarer yet), all three stay 0 — role unknown
+    o += 3;
 
     debug_assert_eq!(o, STATE_SIZE);
 }

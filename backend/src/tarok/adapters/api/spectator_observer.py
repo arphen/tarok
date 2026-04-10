@@ -3,6 +3,10 @@
 from __future__ import annotations
 
 import asyncio
+import json
+import re
+import time
+from pathlib import Path
 from typing import Any
 
 from fastapi import WebSocket
@@ -10,6 +14,62 @@ from fastapi import WebSocket
 from tarok.entities.card import Card
 from tarok.entities.game_state import Contract, GameState, Trick
 from tarok.entities.scoring import score_game_breakdown
+
+
+BACKEND_ROOT = Path(__file__).resolve().parents[4]
+REPLAYS_DIR = BACKEND_ROOT / "checkpoints" / "replays"
+
+
+def _ensure_replays_dir() -> None:
+    REPLAYS_DIR.mkdir(parents=True, exist_ok=True)
+
+
+def _sanitize_replay_name(name: str) -> str:
+    cleaned = re.sub(r"[^A-Za-z0-9_.-]+", "-", name).strip(".-")
+    return cleaned or f"replay-{int(time.time())}"
+
+
+def _resolve_replay_path(name: str) -> Path:
+    _ensure_replays_dir()
+    filename = _sanitize_replay_name(name)
+    if not filename.endswith(".json"):
+        filename = f"{filename}.json"
+    path = (REPLAYS_DIR / filename).resolve()
+    if not path.is_relative_to(REPLAYS_DIR.resolve()):
+        raise ValueError("replay must stay inside checkpoints/replays")
+    return path
+
+
+def list_replays() -> list[dict[str, Any]]:
+    _ensure_replays_dir()
+    items: list[dict[str, Any]] = []
+    for replay_file in sorted(REPLAYS_DIR.glob("*.json"), key=lambda item: item.stat().st_mtime, reverse=True):
+        try:
+            payload = json.loads(replay_file.read_text())
+            timeline = payload.get("timeline") or []
+            items.append({
+                "filename": replay_file.name,
+                "created_at": payload.get("created_at", replay_file.stat().st_mtime),
+                "source": payload.get("source", "spectate"),
+                "label": payload.get("label", replay_file.stem),
+                "player_names": payload.get("player_names", []),
+                "events": len(timeline),
+            })
+        except Exception:
+            items.append({
+                "filename": replay_file.name,
+                "created_at": replay_file.stat().st_mtime,
+                "source": "unknown",
+                "label": replay_file.stem,
+                "player_names": [],
+                "events": 0,
+            })
+    return items
+
+
+def load_replay(name: str) -> dict[str, Any]:
+    path = _resolve_replay_path(name)
+    return json.loads(path.read_text())
 
 
 def _card_to_dict(card: Card) -> dict:
@@ -86,11 +146,28 @@ class SpectatorObserver:
         websockets: list[WebSocket],
         player_names: list[str],
         delay: float = 1.0,
+        replay_name: str | None = None,
+        replay_metadata: dict[str, Any] | None = None,
     ):
         self._websockets = websockets
         self._player_names = player_names
         self._delay = delay
         self.next_trick_event = asyncio.Event()
+        self._replay_name = replay_name
+        self._replay_metadata = replay_metadata or {}
+        self._timeline: list[dict[str, Any]] = []
+
+    def _save_replay(self) -> None:
+        if not self._replay_name or not self._timeline:
+            return
+        payload = {
+            "filename": _resolve_replay_path(self._replay_name).name,
+            "created_at": time.time(),
+            "player_names": self._player_names,
+            "timeline": self._timeline,
+            **self._replay_metadata,
+        }
+        _resolve_replay_path(self._replay_name).write_text(json.dumps(payload))
 
     async def _broadcast(self, event: str, data: Any, state: GameState) -> None:
         msg = {
@@ -98,6 +175,7 @@ class SpectatorObserver:
             "data": data,
             "state": _full_state(state, self._player_names),
         }
+        self._timeline.append(msg)
         dead = []
         for ws in self._websockets:
             try:
@@ -184,3 +262,4 @@ class SpectatorObserver:
             "breakdown": breakdown_data["breakdown"],
             "trick_summary": breakdown_data["trick_summary"],
         }, state)
+        self._save_replay()

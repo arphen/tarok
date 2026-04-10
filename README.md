@@ -88,3 +88,10 @@ Open http://localhost:3000
 
 This project is licensed under the [MIT License](LICENSE).
 
+
+## Checkpoints
+
+### Ema
+The `hof_Ema_Mlakar_age316_d3f9ae44.pt` checkpoint is included in the repository.
+- **Instruct + ~500k self-play games**: This model was initially trained using imitation learning on a dataset of expert games, then fine-tuned through approximately 500,000 games of self-play.
+- **Winrates**: Capable of achieving over 90% winrate vs V1 and ~65% vs V3 of the StockŠkis heuristic bot.

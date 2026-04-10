@@ -1,5 +1,6 @@
 .PHONY: run backend frontend test train clean install test-e2e setup setup-hooks \
-       test-backend test-frontend test-coverage check-coverage
+	test-backend test-frontend test-coverage check-coverage \
+	pipeline imitation-pretrain generate-expert-data build-engine kill stop
 
 UV_RUN = cd backend && PYTHONPATH=src uv run --default-index https://pypi.org/simple
 
@@ -120,6 +121,36 @@ train-bred:
 	$(UV_RUN) python -m tarok train-bred
 
 # ──────────────────────────────────────────────
+# 3-Phase Training Pipeline
+# ──────────────────────────────────────────────
+
+# Build the Rust engine (required before training)
+build-engine:
+	cd backend && uv run --default-index https://pypi.org/simple maturin develop --release --manifest-path ../engine-rs/Cargo.toml
+
+# Generate expert data from StockŠkis bots (standalone benchmark)
+generate-expert-data:
+	$(UV_RUN) python -m tarok generate-expert-data --games 1000000
+
+# Imitation pre-train from StockŠkis expert games (policy + value)
+imitation-pretrain:
+	$(UV_RUN) python -m tarok imitation-pretrain --games 1000000
+
+# Full 3-phase pipeline: imitation → StockŠkis PPO → self-play
+# Phase 1: Supervised pre-training from 1M StockŠkis expert games
+# Phase 2: PPO fine-tuning vs StockŠkis bots (auto plateau detection)
+# Phase 3: Fictitious self-play for GTO convergence
+pipeline:
+	$(UV_RUN) python -m tarok pipeline
+
+# Pipeline with custom parameters (example with larger budget)
+pipeline-large:
+	$(UV_RUN) python -m tarok pipeline \
+		--p1-games 5000000 \
+		--p2-sessions 500 --p2-games 100 \
+		--p3-sessions 1000 --p3-games 100
+
+# ──────────────────────────────────────────────
 # Housekeeping
 # ──────────────────────────────────────────────
 clean:
@@ -128,6 +159,23 @@ clean:
 	rm -rf backend/.venv frontend/node_modules
 	rm -f backend/coverage.json
 
-stop:
-	-pkill -f "uvicorn tarok" 2>/dev/null || true
-	-pkill -f "vite" 2>/dev/null || true
+kill:
+	@echo "==> Killing dev servers on ports 8000 and 3000..."
+	@PIDS="$$(lsof -ti tcp:8000 -ti tcp:3000 2>/dev/null | sort -u)"; \
+	if [ -n "$$PIDS" ]; then \
+		echo "Killing PIDs: $$PIDS"; \
+		kill $$PIDS 2>/dev/null || true; \
+		sleep 1; \
+		STILL_RUNNING="$$(lsof -ti tcp:8000 -ti tcp:3000 2>/dev/null | sort -u)"; \
+		if [ -n "$$STILL_RUNNING" ]; then \
+			echo "Force killing PIDs: $$STILL_RUNNING"; \
+			kill -9 $$STILL_RUNNING 2>/dev/null || true; \
+		fi; \
+	else \
+		echo "No dev servers found on ports 8000 or 3000."; \
+	fi
+	@pkill -f "uvicorn tarok.adapters.api.server:app" 2>/dev/null || true
+	@pkill -f "npm run dev" 2>/dev/null || true
+	@pkill -f "vite" 2>/dev/null || true
+
+stop: kill

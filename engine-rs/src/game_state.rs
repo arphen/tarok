@@ -375,7 +375,8 @@ impl GameState {
             hands: [CardSet::EMPTY; NUM_PLAYERS],
             talon: CardSet::EMPTY,
             bids: Vec::new(),
-            current_bidder: (dealer + 1) % NUM_PLAYERS as u8,
+            // Forehand (obvezen) goes last; start bidding at dealer+2
+            current_bidder: (dealer + 2) % NUM_PLAYERS as u8,
             declarer: None,
             contract: None,
             called_king: None,
@@ -392,6 +393,11 @@ impl GameState {
             dealer,
             scores: [0; NUM_PLAYERS],
         }
+    }
+
+    /// The forehand / obvezen player (first after dealer).
+    pub fn forehand(&self) -> u8 {
+        (self.dealer + 1) % NUM_PLAYERS as u8
     }
 
     pub fn get_team(&self, player: u8) -> Team {
@@ -464,5 +470,38 @@ impl GameState {
     /// Whether the state is effectively solo (solo contract or partner is None).
     pub fn is_effectively_solo(&self) -> bool {
         self.contract.map_or(false, |c| c.is_solo()) || self.partner.is_none()
+    }
+
+    /// Generate a legal-bid mask for a given player.
+    ///
+    /// Index 0 = pass, indices 1..=8 map to Contract::BIDDABLE.
+    /// Enforces forehand (obvezen) rules:
+    ///  - Only forehand can bid THREE.
+    ///  - Forehand can *match* the current highest (>=), others must outbid (>).
+    pub fn legal_bid_mask(&self, player: u8) -> [u8; 9] {
+        let mut mask = [0u8; 9];
+        mask[0] = 1; // pass always legal
+
+        let is_forehand = player == self.forehand();
+        let highest = self
+            .bids
+            .iter()
+            .filter_map(|b| b.contract)
+            .max_by_key(|c| c.strength());
+
+        for (idx, &contract) in Contract::BIDDABLE.iter().enumerate() {
+            if contract == Contract::Three && !is_forehand {
+                continue;
+            }
+            let legal = match highest {
+                Some(h) if is_forehand => contract.strength() >= h.strength(),
+                Some(h) => contract.strength() > h.strength(),
+                None => true,
+            };
+            if legal {
+                mask[idx + 1] = 1;
+            }
+        }
+        mask
     }
 }

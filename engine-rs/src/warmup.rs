@@ -59,21 +59,13 @@ pub fn generate_warmup_batch(
         }
         state.phase = Phase::Bidding;
 
-        // --- Bidding ---
-        let mut passed = [false; NUM_PLAYERS];
+        // --- Bidding (single round, forehand last with priority) ---
         let mut highest: Option<Contract> = None;
         let mut winning_player: Option<u8> = None;
-        let mut bidder = state.current_bidder;
+        let mut bidder = state.current_bidder; // starts at dealer+2
+        let forehand = state.forehand();
 
-        for _round in 0..20 {
-            let active_count = passed.iter().filter(|&&p| !p).count();
-            if active_count <= 1 && winning_player.is_some() {
-                break;
-            }
-            if active_count == 0 {
-                break;
-            }
-
+        for _seat in 0..NUM_PLAYERS {
             // Record bid decision experience
             let mut exp_state = [0.0f32; encoding::STATE_SIZE];
             encoding::encode_state(&mut exp_state, &state, bidder, encoding::DT_BID);
@@ -88,20 +80,27 @@ pub fn generate_warmup_batch(
                 player: bidder,
             });
 
-            // Random bid: 50% pass, 50% bid something legal
+            let is_fh = bidder == forehand;
+
+            // Random bid: 60% pass, 40% bid something legal
             let do_pass = r.random_bool(0.6);
             if do_pass || highest == Some(Contract::Berac) {
-                passed[bidder as usize] = true;
                 state.bids.push(Bid { player: bidder, contract: None });
             } else {
-                // Pick a random legal contract (stronger than current highest)
+                // Pick a random legal contract using forehand rules
                 let legal: Vec<Contract> = Contract::BIDDABLE
                     .iter()
                     .copied()
-                    .filter(|c| highest.map_or(true, |h| c.strength() > h.strength()))
+                    .filter(|&c| {
+                        if c == Contract::Three && !is_fh { return false; }
+                        match highest {
+                            Some(h) if is_fh => c.strength() >= h.strength(),
+                            Some(h) => c.strength() > h.strength(),
+                            None => true,
+                        }
+                    })
                     .collect();
                 if legal.is_empty() {
-                    passed[bidder as usize] = true;
                     state.bids.push(Bid { player: bidder, contract: None });
                 } else {
                     let &choice = legal.choose(&mut r).unwrap();
@@ -111,17 +110,14 @@ pub fn generate_warmup_batch(
                 }
             }
 
-            // Next bidder
-            loop {
-                bidder = (bidder + 1) % NUM_PLAYERS as u8;
-                if !passed[bidder as usize] {
-                    break;
-                }
-                // Check if we've gone all the way around
-                let active = passed.iter().filter(|&&p| !p).count();
-                if active <= 1 {
-                    break;
-                }
+            bidder = (bidder + 1) % NUM_PLAYERS as u8;
+        }
+
+        // Resolve bidding — forehand wins ties
+        if let Some(h) = highest {
+            let forehand_bid = state.bids.iter().find(|b| b.player == forehand && b.contract == Some(h));
+            if forehand_bid.is_some() {
+                winning_player = Some(forehand);
             }
         }
 

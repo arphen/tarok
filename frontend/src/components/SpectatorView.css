@@ -95,6 +95,33 @@
   margin-bottom: 24px;
 }
 
+.replay-config {
+  margin-bottom: 24px;
+  padding: 18px;
+  border-radius: 12px;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  background: rgba(0, 0, 0, 0.22);
+  text-align: left;
+}
+
+.replay-config h3 {
+  margin: 0 0 6px;
+  font-size: 18px;
+  color: var(--accent-gold);
+}
+
+.replay-actions {
+  display: flex;
+  gap: 12px;
+  align-items: end;
+  flex-wrap: wrap;
+}
+
+.replay-select-field {
+  flex: 1 1 320px;
+  margin-bottom: 0;
+}
+
 .config-field-inline {
   flex-direction: row;
   align-items: center;

@@ -352,6 +352,12 @@ impl CardSet {
         self.0 & SUIT_MASKS[suit as usize] != 0
     }
 
+    /// Number of cards of a specific suit.
+    #[inline]
+    pub fn suit_count(self, suit: Suit) -> u32 {
+        self.suit(suit).len()
+    }
+
     #[inline]
     pub fn has_taroks(self) -> bool {
         self.0 & TAROK_MASK != 0

@@ -4,10 +4,11 @@ from __future__ import annotations
 
 import asyncio
 import base64
+import time
 from contextlib import asynccontextmanager
 from pathlib import Path
 
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect
+from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 
@@ -15,7 +16,7 @@ from tarok.adapters.ai.agent import RLAgent
 from tarok.adapters.ai.random_agent import RandomPlayer
 from tarok.adapters.ai.trainer import PPOTrainer, TrainingMetrics
 from tarok.adapters.api.human_player import HumanPlayer
-from tarok.adapters.api.spectator_observer import SpectatorObserver
+from tarok.adapters.api.spectator_observer import SpectatorObserver, list_replays, load_replay
 from tarok.adapters.api.ws_observer import WebSocketObserver
 from tarok.adapters.api.schemas import (
     NewGameRequest,
@@ -131,9 +132,10 @@ async def training_status():
 
 @app.get("/api/checkpoints")
 async def list_checkpoints():
-    """List all saved checkpoint files (both training and breeding)."""
+    """List all saved checkpoint files (training, breeding, and HOF)."""
     ckpt_dir = Path("checkpoints")
     breed_dir = Path("checkpoints/breeding_results")
+    hof_dir = Path("checkpoints/hall_of_fame")
     
     result = []
     # Always include "latest" if the file exists
@@ -150,15 +152,18 @@ async def list_checkpoints():
                 "avg_reward": meta.get("metrics", {}).get("avg_reward", 0),
                 "model_name": meta.get("model_name", None),
                 "is_bred": False,
+                "is_hof": False,
             })
         except Exception:
-            result.append({"filename": "tarok_agent_latest.pt", "episode": 0, "is_bred": False})
+            result.append({"filename": "tarok_agent_latest.pt", "episode": 0, "is_bred": False, "is_hof": False})
 
     if not ckpt_dir.exists():
         return {"checkpoints": result}
     files = [f for f in ckpt_dir.glob("tarok_agent_*.pt") if f.name != "tarok_agent_latest.pt"]
     if breed_dir.exists():
         files.extend([f for f in breed_dir.glob("bred_model_*.pt")])
+    if hof_dir.exists():
+        files.extend([f for f in hof_dir.glob("hof_*.pt")])
 
     files = sorted(files, key=lambda x: x.stat().st_mtime, reverse=True)
     result = []
@@ -166,22 +171,26 @@ async def list_checkpoints():
         import torch as _torch
         try:
             meta = _torch.load(f, map_location="cpu", weights_only=False)
-            model_name = meta.get("model_name", None)
+            model_name = meta.get("model_name", None) or meta.get("display_name", None)
+            is_hof = "hof_" in f.name
             
             result.append({
-                "filename": str(f.relative_to(ckpt_dir)) if breed_dir in f.parents else f.name,
+                "filename": str(f.relative_to(ckpt_dir)),
                 "episode": meta.get("episode", 0),
                 "session": meta.get("session", 0),
                 "win_rate": meta.get("metrics", {}).get("win_rate", 0),
                 "avg_reward": meta.get("metrics", {}).get("avg_reward", 0),
                 "model_name": model_name,
                 "is_bred": "bred_model" in f.name,
+                "is_hof": is_hof,
+                "persona": meta.get("persona") if is_hof else None,
             })
         except Exception:
             result.append({
-                "filename": str(f.relative_to(ckpt_dir)) if breed_dir in f.parents else f.name, 
+                "filename": str(f.relative_to(ckpt_dir)),
                 "episode": 0,
-                "is_bred": "bred_model" in f.name
+                "is_bred": "bred_model" in f.name,
+                "is_hof": "hof_" in f.name,
             })
     return {"checkpoints": result}
 
@@ -190,9 +199,8 @@ async def list_checkpoints():
 
 def _load_opponent(choice: str, index: int) -> RLAgent:
     """Load a single AI opponent from a checkpoint choice."""
-    name = f"AI-{index + 1}"
     if choice == "random":
-        agent = RLAgent(name=name)
+        agent = RLAgent(name=f"AI-{index + 1}")
         agent.set_training(False)
         return agent
 
@@ -201,7 +209,18 @@ def _load_opponent(choice: str, index: int) -> RLAgent:
     else:
         path = Path("checkpoints") / choice
 
+    # Try to extract a display name from HOF metadata
+    name = f"AI-{index + 1}"
     if path.exists():
+        try:
+            import torch as _torch
+            meta = _torch.load(path, map_location="cpu", weights_only=False)
+            if meta.get("display_name"):
+                name = meta["display_name"]
+            elif meta.get("model_name"):
+                name = meta["model_name"]
+        except Exception:
+            pass
         agent = RLAgent.from_checkpoint(path, name=name)
     else:
         agent = RLAgent(name=name)
@@ -314,6 +333,7 @@ class SpectateRequest(BaseModel):
 async def new_spectate(req: SpectateRequest):
     """Create a new 4-AI spectator game."""
     game_id = f"spectate-{len(_spectator_games)}"
+    replay_name = f"{game_id}-{int(time.time())}.json"
 
     agents = []
     for i, agent_cfg in enumerate(req.agents[:4]):
@@ -347,8 +367,9 @@ async def new_spectate(req: SpectateRequest):
         "delay": req.delay,
         "spectators": [],
         "game_task": None,
+        "replay_name": replay_name,
     }
-    return {"game_id": game_id}
+    return {"game_id": game_id, "replay_name": replay_name}
 
 
 @app.websocket("/ws/spectate/{game_id}")
@@ -372,6 +393,12 @@ async def spectate_websocket(ws: WebSocket, game_id: str):
             websockets=spectators,
             player_names=player_names,
             delay=game_info["delay"],
+            replay_name=game_info.get("replay_name"),
+            replay_metadata={
+                "source": "spectate",
+                "label": f"Spectate {game_id}",
+                "game_id": game_id,
+            },
         )
         game_loop = GameLoop(agents, observer=observer)
         game_info["observer"] = observer
@@ -415,6 +442,21 @@ async def training_websocket(ws: WebSocket):
 @app.get("/api/health")
 async def health():
     return {"status": "ok"}
+
+
+@app.get("/api/replays")
+async def get_replays():
+    return {"replays": list_replays()}
+
+
+@app.get("/api/replays/{replay_name}")
+async def get_replay(replay_name: str):
+    try:
+        return load_replay(replay_name)
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=404, detail="Replay not found") from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
 # ---- Camera Agent: analyze hand and recommend play ----
@@ -854,3 +896,154 @@ async def get_breed_progress() -> dict:
 async def breed_status():
     running = _breed_task is not None and not _breed_task.done()
     return {"running": running}
+
+
+# ---- Training Lab endpoints ----
+
+@app.post("/api/lab/create")
+async def lab_create(req: dict = {}):
+    """Create a fresh neural network for the training lab."""
+    from tarok.adapters.ai.training_lab import create_lab_network
+    hidden_size = req.get("hidden_size", 256) if isinstance(req, dict) else 256
+    create_lab_network(hidden_size)
+    return {"status": "created", "hidden_size": hidden_size}
+
+
+@app.post("/api/lab/load")
+async def lab_load(req: dict = {}):
+    """Load an existing checkpoint into the training lab."""
+    from tarok.adapters.ai.training_lab import _lab, load_lab_checkpoint
+
+    if _lab.running:
+        return {"status": "already_running"}
+
+    choice = req.get("checkpoint") if isinstance(req, dict) else None
+    if not choice:
+        return {"status": "missing_checkpoint"}
+
+    try:
+        info = load_lab_checkpoint(choice)
+    except FileNotFoundError:
+        return {"status": "not_found", "checkpoint": choice}
+    except ValueError as exc:
+        return {"status": "invalid", "error": str(exc)}
+
+    return {"status": "loaded", **info}
+
+
+@app.post("/api/lab/start")
+async def lab_start(req: dict = {}):
+    """Start the imitation learning pipeline."""
+    from tarok.adapters.ai.training_lab import start_lab_training, _lab
+
+    if _lab.running:
+        return {"status": "already_running"}
+
+    if _lab.network is None:
+        from tarok.adapters.ai.training_lab import create_lab_network
+        create_lab_network(req.get("hidden_size", 256))
+
+    await start_lab_training(
+        expert_games=req.get("expert_games", 500_000),
+        training_epochs=req.get("training_epochs", 3),
+        eval_games=req.get("eval_games", 500),
+        num_rounds=req.get("num_rounds", 10),
+        batch_size=req.get("batch_size", 2048),
+        learning_rate=req.get("learning_rate", 1e-3),
+        chunk_size=req.get("chunk_size", 50_000),
+    )
+    return {"status": "started"}
+
+
+@app.post("/api/lab/self-play")
+async def lab_self_play(req: dict = {}):
+    """Start self-play PPO training on the lab network."""
+    from tarok.adapters.ai.training_lab import start_self_play, _lab
+
+    if _lab.running:
+        return {"status": "already_running"}
+
+    if _lab.network is None:
+        from tarok.adapters.ai.training_lab import create_lab_network
+        create_lab_network(req.get("hidden_size", 256))
+
+    await start_self_play(
+        num_sessions=req.get("num_sessions", 50),
+        games_per_session=req.get("games_per_session", 20),
+        eval_games=req.get("eval_games", 100),
+        eval_interval=req.get("eval_interval", 5),
+        learning_rate=req.get("learning_rate", 3e-4),
+        stockskis_ratio=req.get("stockskis_ratio", 0.0),
+        fsp_ratio=req.get("fsp_ratio", 0.3),
+        pbt_enabled=req.get("pbt_enabled", False),
+        population_size=req.get("population_size", 6),
+        exploit_top_ratio=req.get("exploit_top_ratio", 0.25),
+        exploit_bottom_ratio=req.get("exploit_bottom_ratio", 0.25),
+        mutation_scale=req.get("mutation_scale", 1.0),
+    )
+    return {"status": "started"}
+
+
+@app.post("/api/lab/stop")
+async def lab_stop():
+    """Stop the training lab."""
+    from tarok.adapters.ai.training_lab import stop_lab
+    stop_lab()
+    return {"status": "stopped"}
+
+
+@app.post("/api/lab/overnight")
+async def lab_overnight(req: dict = {}):
+    """Start a long-running overnight training session.
+
+    Auto-configures PBT self-play for ~8-12 hours of continuous training.
+    Evaluates every 10 generations against V1/V2/V3 and saves snapshots.
+    Just hit Stop when you wake up.
+    """
+    from tarok.adapters.ai.training_lab import start_self_play, _lab
+
+    if _lab.running:
+        return {"status": "already_running"}
+
+    if _lab.network is None:
+        from tarok.adapters.ai.training_lab import create_lab_network
+        create_lab_network(req.get("hidden_size", 256))
+
+    # Sensible overnight defaults — large generation count, periodic eval
+    await start_self_play(
+        num_sessions=req.get("num_sessions", 10000),
+        games_per_session=req.get("games_per_session", 20),
+        eval_games=req.get("eval_games", 200),
+        eval_interval=req.get("eval_interval", 10),
+        learning_rate=req.get("learning_rate", 3e-4),
+        stockskis_ratio=req.get("stockskis_ratio", 0.0),
+        fsp_ratio=req.get("fsp_ratio", 0.3),
+        pbt_enabled=req.get("pbt_enabled", True),
+        population_size=req.get("population_size", 15),
+        exploit_top_ratio=req.get("exploit_top_ratio", 0.2),
+        exploit_bottom_ratio=req.get("exploit_bottom_ratio", 0.3),
+        mutation_scale=req.get("mutation_scale", 0.8),
+    )
+    return {"status": "started", "mode": "overnight", "num_sessions": req.get("num_sessions", 10000)}
+
+
+@app.post("/api/lab/reset")
+async def lab_reset():
+    """Reset the training lab to initial state."""
+    from tarok.adapters.ai.training_lab import reset_lab
+    reset_lab()
+    return {"status": "reset"}
+
+
+@app.get("/api/lab/state")
+async def lab_state():
+    """Get current training lab state."""
+    from tarok.adapters.ai.training_lab import get_lab_state
+    return get_lab_state()
+
+
+@app.get("/api/lab/hof")
+async def lab_hof():
+    """List all Hall of Fame models."""
+    from tarok.adapters.ai.training_lab import list_hof
+    return {"models": list_hof()}

@@ -2,6 +2,7 @@ import React, { useState, useEffect } from 'react';
 import GameBoard from './components/GameBoard';
 import GameLog from './components/GameLog';
 import TrainingDashboard from './components/TrainingDashboard';
+import TrainingLab from './components/TrainingLab';
 import EvoDashboard from './components/EvoDashboard';
 import BreedingDashboard from './components/BreedingDashboard';
 import CameraAgent from './components/CameraAgent';
@@ -10,11 +11,11 @@ import { useGame } from './hooks/useGame';
 import type { CardData } from './types/game';
 import './App.css';
 
-type Page = 'home' | 'training' | 'play' | 'lobby' | 'camera' | 'spectate' | 'evolve' | 'breed';
+type Page = 'home' | 'training' | 'lab' | 'play' | 'lobby' | 'camera' | 'spectate' | 'evolve' | 'breed';
 
 export default function App() {
   const [page, setPage] = useState<Page>('home');
-  const [checkpoints, setCheckpoints] = useState<{ filename: string; episode: number; win_rate: number; session?: number }[]>([]);
+  const [checkpoints, setCheckpoints] = useState<{ filename: string; episode: number; win_rate: number; session?: number; model_name?: string; is_hof?: boolean }[]>([]);
   const [opponents, setOpponents] = useState<[string, string, string]>(['latest', 'latest', 'latest']);
   const game = useGame();
 
@@ -32,6 +33,10 @@ export default function App() {
 
   if (page === 'training') {
     return <TrainingDashboard onBack={() => setPage('home')} />;
+  }
+
+  if (page === 'lab') {
+    return <TrainingLab onBack={() => setPage('home')} />;
   }
 
   if (page === 'evolve') {
@@ -62,6 +67,7 @@ export default function App() {
     const ckptLabel = (filename: string) => {
       const cp = checkpoints.find(c => c.filename === filename);
       if (!cp) return filename;
+      if (cp.model_name) return cp.model_name;
       const parts: string[] = [];
       if (cp.session) parts.push(`S${cp.session}`);
       if (cp.episode) parts.push(`Ep ${cp.episode}`);
@@ -164,6 +170,14 @@ export default function App() {
             <span>
               <strong>Train AI Agents</strong>
               <small>Watch agents learn through self-play</small>
+            </span>
+          </button>
+
+          <button className="btn-gold btn-large" onClick={() => setPage('lab')}>
+            <span className="btn-icon">🧪</span>
+            <span>
+              <strong>Training Lab</strong>
+              <small>Create a fresh NN and watch it learn from expert bots</small>
             </span>
           </button>
 

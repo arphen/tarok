@@ -43,16 +43,22 @@ def discard_cards(state: GameState, cards: list[Card]) -> GameState:
     assert state.contract is not None
     assert len(cards) == state.contract.talon_cards
 
+    # Collect non-king suit cards that will remain after discarding
+    discarding_suits = [
+        c for c in cards
+        if c.card_type != CardType.TAROK and not c.is_king
+    ]
     for card in cards:
         # Cannot discard kings
         assert not card.is_king, f"Cannot discard a king: {card}"
-        # Cannot discard taroks (unless hand is all taroks + kings)
+        # Cannot discard taroks unless all remaining suit cards are also being discarded
         if card.card_type == CardType.TAROK:
-            non_tarok_non_king = [
+            hand_suits = [
                 c for c in state.hands[state.declarer]
                 if c.card_type != CardType.TAROK and not c.is_king
             ]
-            assert len(non_tarok_non_king) == 0, "Cannot discard taroks if you have suit cards"
+            remaining_suits = len(hand_suits) - len(discarding_suits)
+            assert remaining_suits <= 0, "Cannot discard taroks if you have suit cards"
 
     hand = state.hands[state.declarer]
     for card in cards:

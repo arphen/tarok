@@ -49,6 +49,7 @@ class Experience:
     reward: float = 0.0
     done: bool = False
     oracle_state: torch.Tensor | None = None
+    legal_mask: torch.Tensor | None = None  # actual legal mask from game time
     game_id: int = 0          # which game this experience belongs to
     step_in_game: int = 0     # temporal position within game
 
@@ -187,6 +188,7 @@ class RLAgent:
                 value=value.squeeze(),
                 decision_type=decision_type,
                 oracle_state=oracle_tensor,
+                legal_mask=mask.detach(),
                 game_id=self._game_id,
                 step_in_game=self._step_counter,
             ))
@@ -230,6 +232,7 @@ class RLAgent:
                 value=value.detach() if isinstance(value, torch.Tensor) else torch.tensor(value),
                 decision_type=decision_type,
                 oracle_state=oracle_tensor.detach() if oracle_tensor is not None else None,
+                legal_mask=mask.detach(),
                 game_id=self._game_id,
                 step_in_game=self._step_counter,
             ))
@@ -278,13 +281,19 @@ class RLAgent:
     ) -> list[Card]:
         """Heuristic discard — kept out of RL due to combinatorial action space."""
         hand = state.hands[player_idx]
-        discardable = [
+        # Prefer discarding non-king suit cards (sorted cheapest first)
+        suit_cards = [
             c for c in hand if not c.is_king and c.card_type != CardType.TAROK
         ]
-        if len(discardable) < must_discard:
-            discardable = [c for c in hand if not c.is_king]
-        discardable.sort(key=lambda c: c.points)
-        return discardable[:must_discard]
+        suit_cards.sort(key=lambda c: c.points)
+        if len(suit_cards) >= must_discard:
+            return suit_cards[:must_discard]
+        # Not enough suit cards — take all suit cards first, then fill with taroks
+        # (taroks are only legal to discard when no suit cards remain in hand after)
+        taroks = [c for c in hand if c.card_type == CardType.TAROK and not c.is_king]
+        taroks.sort(key=lambda c: c.points)
+        result = suit_cards + taroks
+        return result[:must_discard]
 
     async def choose_announcements(
         self, state: GameState, player_idx: int
@@ -297,18 +306,11 @@ class RLAgent:
         """Choose a single announcement action (0=pass, 1-4=announce, 5-9=kontra).
 
         Called repeatedly by the game loop until the player passes.
-        During training, always pass — announcements add enormous variance
-        that destabilises early learning.  The model can learn to announce
-        once it has a solid base game.
+        Always pass — the ANNOUNCE head is not trained during self-play so
+        its weights are essentially random.  Using it in spectate / play
+        causes absurd valat and pagat ultimo calls every game.
         """
-        mask = encode_announce_mask(state, player_idx)
-        # If only pass is legal, just return pass without going through the network
-        if mask.sum().item() <= 1.0:
-            return ANNOUNCE_PASS
-        # During training: always pass on announcements
-        if self._training:
-            return ANNOUNCE_PASS
-        return self._decide(state, player_idx, mask, DecisionType.ANNOUNCE)
+        return ANNOUNCE_PASS
 
     async def choose_card(
         self, state: GameState, player_idx: int, legal_plays: list[Card]

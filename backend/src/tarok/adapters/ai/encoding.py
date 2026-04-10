@@ -196,6 +196,20 @@ def _encode_state_into(
         buf[o + i] = (level.value - 1) / 7.0  # 0→0, 1→0.14, 3→0.43, 7→1.0
     o += 5
 
+    # Role one-hot (3 features: is_declarer, is_partner, is_opposition)
+    if state.declarer is not None:
+        if player_idx == state.declarer:
+            buf[o] = 1.0      # is_declarer
+        elif state.partner is not None and player_idx == state.partner:
+            buf[o + 1] = 1.0  # is_partner
+        elif state.get_team(player_idx) == Team.DECLARER_TEAM:
+            # Partner not yet revealed but we ARE on declarer team (we're the hidden partner)
+            buf[o + 1] = 1.0  # is_partner
+        else:
+            buf[o + 2] = 1.0  # is_opposition
+    # During bidding (no declarer yet), all three stay 0 — role unknown
+    o += 3
+
 
 def encode_state(state: GameState, player_idx: int, decision_type: DecisionType = DecisionType.CARD_PLAY) -> torch.Tensor:
     """Encode visible game state for a specific player as a flat tensor.
@@ -224,11 +238,12 @@ STATE_SIZE = (
     4 +   # passed_players
     4 +   # hand_strength
     4 +   # announcements_made
-    5     # kontra_levels
-)  # = 267
+    5 +   # kontra_levels
+    3     # role (is_declarer, is_partner, is_opposition)
+)  # = 270
 # Oracle critic sees all opponent hands (Perfect Training, Imperfect Execution)
 ORACLE_EXTRA_SIZE = 3 * 54  # 3 opponent hand vectors
-ORACLE_STATE_SIZE = STATE_SIZE + ORACLE_EXTRA_SIZE  # 267 + 162 = 429
+ORACLE_STATE_SIZE = STATE_SIZE + ORACLE_EXTRA_SIZE  # 270 + 162 = 432
 
 # Pre-allocated encoding buffers (one per process, safe for async single-threaded use)
 _state_buf = torch.zeros(STATE_SIZE, dtype=torch.float32)

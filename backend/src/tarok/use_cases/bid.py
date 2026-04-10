@@ -23,38 +23,32 @@ def place_bid(state: GameState, player: int, contract: Contract | None) -> GameS
 
 
 def _next_bidder(state: GameState) -> int:
-    """Find next player who hasn't passed."""
-    passed = {b.player for b in state.bids if b.contract is None}
-    start = (state.current_bidder + 1) % state.num_players
-    for i in range(state.num_players):
-        candidate = (start + i) % state.num_players
-        if candidate not in passed:
-            return candidate
-    return state.current_bidder  # Shouldn't reach here
+    """Move to the next player clockwise (single-round, no skipping)."""
+    return (state.current_bidder + 1) % state.num_players
 
 
 def _bidding_complete(state: GameState) -> bool:
-    """Bidding ends when 3 players have passed (one winner) or all passed."""
+    """Bidding ends after all 4 players have acted (single round).
+
+    Forehand goes last and their decision is final (priority rule).
+    """
+    players_acted = {b.player for b in state.bids}
+    if len(players_acted) >= state.num_players:
+        return True
+
+    # Safety: everyone passed before a full round (shouldn't happen)
     passed = {b.player for b in state.bids if b.contract is None}
-    active_bidders = set(range(state.num_players)) - passed
-
-    # Everyone passed
     if len(passed) == state.num_players:
-        return True
-
-    # Only one bidder remains and at least one full round completed
-    if len(active_bidders) == 1 and len(state.bids) >= state.num_players:
-        return True
-
-    # All 4 have acted at least once, and 3 have passed
-    if len(passed) >= state.num_players - 1:
         return True
 
     return False
 
 
 def _resolve_bidding(state: GameState) -> None:
-    """Determine the winner and contract."""
+    """Determine the winner and contract.
+
+    When two players bid the same contract, forehand wins (priority).
+    """
     bids_with_contract = [b for b in state.bids if b.contract is not None]
 
     if not bids_with_contract:
@@ -67,8 +61,14 @@ def _resolve_bidding(state: GameState) -> None:
         state.current_player = (state.dealer + 1) % state.num_players
         return
 
-    # Highest bid wins
-    winning_bid = max(bids_with_contract, key=lambda b: b.contract.strength)  # type: ignore
+    # Highest bid wins; forehand wins ties
+    forehand = (state.dealer + 1) % state.num_players
+
+    def bid_priority(b: Bid) -> tuple[int, int]:
+        """(strength, forehand_bonus) — higher is better."""
+        return (b.contract.strength, 1 if b.player == forehand else 0)  # type: ignore
+
+    winning_bid = max(bids_with_contract, key=bid_priority)
     state.declarer = winning_bid.player
     state.contract = winning_bid.contract
     state.current_player = state.declarer

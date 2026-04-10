@@ -353,13 +353,24 @@ class GameState:
 
         return generate_legal_moves(ctx)
 
-    def legal_bids(self, player: int) -> list[Contract | None]:
-        """Which bids can this player make? None = pass."""
-        biddable = [c for c in Contract if c.is_biddable]
+    @property
+    def forehand(self) -> int:
+        """The obligated player (obvezen) — first player after the dealer."""
+        return (self.dealer + 1) % self.num_players
 
-        if not self.bids:
-            # First bidder can bid anything or pass
-            return [None] + biddable
+    def legal_bids(self, player: int) -> list[Contract | None]:
+        """Which bids can this player make? None = pass.
+
+        Obvezen (forehand) rules:
+        - Only forehand may bid THREE.
+        - Forehand can *match* the current highest bid (>= instead of >).
+        - Other players must strictly outbid (>).
+        """
+        is_forehand = player == self.forehand
+        biddable = [
+            c for c in Contract
+            if c.is_biddable and (c != Contract.THREE or is_forehand)
+        ]
 
         # Find the current highest bid
         highest = max(
@@ -370,7 +381,12 @@ class GameState:
 
         options: list[Contract | None] = [None]  # Can always pass
         for c in biddable:
-            if highest is None or c.strength > highest.strength:
+            if highest is None:
+                options.append(c)
+            elif is_forehand and c.strength >= highest.strength:
+                # Forehand can match the current highest bid
+                options.append(c)
+            elif c.strength > highest.strength:
                 options.append(c)
 
         return options

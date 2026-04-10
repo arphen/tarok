@@ -11,6 +11,7 @@ use rand::rng;
 
 use crate::card::*;
 use crate::encoding;
+use crate::expert_games;
 use crate::game_state::*;
 use crate::legal_moves;
 use crate::scoring;
@@ -179,8 +180,10 @@ impl PyGameState {
         });
     }
 
-    fn legal_bids(&self, _player: u8) -> Vec<Option<u8>> {
+    fn legal_bids(&self, player: u8) -> Vec<Option<u8>> {
         let mut result: Vec<Option<u8>> = vec![None]; // can always pass
+        let forehand = (self.state.dealer + 1) % NUM_PLAYERS as u8;
+        let is_forehand = player == forehand;
         let highest = self
             .state
             .bids
@@ -189,7 +192,23 @@ impl PyGameState {
             .max_by_key(|c| c.strength());
 
         for c in Contract::BIDDABLE {
-            if highest.map_or(true, |h| c.strength() > h.strength()) {
+            // THREE is forehand-only
+            if c == Contract::Three && !is_forehand {
+                continue;
+            }
+            if let Some(h) = highest {
+                if is_forehand {
+                    // Forehand can match (>=) the current highest
+                    if c.strength() >= h.strength() {
+                        result.push(Some(c as u8));
+                    }
+                } else {
+                    // Others must strictly outbid (>)
+                    if c.strength() > h.strength() {
+                        result.push(Some(c as u8));
+                    }
+                }
+            } else {
                 result.push(Some(c as u8));
             }
         }
@@ -342,7 +361,7 @@ impl PyGameState {
 
     // -- Encoding --
 
-    /// Encode state as a numpy array (STATE_SIZE=267).
+    /// Encode state as a numpy array (STATE_SIZE=270).
     fn encode_state<'py>(
         &self,
         py: Python<'py>,
@@ -354,7 +373,7 @@ impl PyGameState {
         PyArray1::from_slice(py, &buf)
     }
 
-    /// Encode oracle state as a numpy array (ORACLE_STATE_SIZE=429).
+    /// Encode oracle state as a numpy array (ORACLE_STATE_SIZE=432).
     fn encode_oracle_state<'py>(
         &self,
         py: Python<'py>,
@@ -531,9 +550,79 @@ fn generate_warmup_data(
     Ok(dict.into())
 }
 
+/// Generate expert experiences from StockŠkis bot games (imitation learning).
+///
+/// Returns dict with numpy arrays:
+///   states:         (N, STATE_SIZE) float32
+///   oracle_states:  (N, ORACLE_STATE_SIZE) float32  — None if include_oracle=False
+///   decision_types: (N,) uint8
+///   actions:        (N,) uint16  — the action index the bot chose
+///   rewards:        (N,) float32 — final game reward for the acting player
+///   legal_masks:    (N, action_size) uint8  — varies per decision type, flattened
+///   num_experiences: int
+#[pyfunction]
+#[pyo3(signature = (num_games, include_oracle=true))]
+fn generate_expert_data(
+    py: Python<'_>,
+    num_games: usize,
+    include_oracle: bool,
+) -> PyResult<PyObject> {
+    let batch = expert_games::generate_expert_batch(num_games, include_oracle);
+    let n = batch.rewards.len();
+
+    let dict = pyo3::types::PyDict::new(py);
+
+    let states = numpy::PyArray2::<f32>::from_vec2(
+        py,
+        &batch
+            .states
+            .chunks(batch.state_size)
+            .map(|c| c.to_vec())
+            .collect::<Vec<_>>(),
+    )
+    .map_err(|e| pyo3::exceptions::PyValueError::new_err(format!("states: {e}")))?;
+    dict.set_item("states", states)?;
+
+    if include_oracle && !batch.oracle_states.is_empty() {
+        let oracle = numpy::PyArray2::<f32>::from_vec2(
+            py,
+            &batch
+                .oracle_states
+                .chunks(batch.oracle_state_size)
+                .map(|c| c.to_vec())
+                .collect::<Vec<_>>(),
+        )
+        .map_err(|e| pyo3::exceptions::PyValueError::new_err(format!("oracle: {e}")))?;
+        dict.set_item("oracle_states", oracle)?;
+    } else {
+        dict.set_item("oracle_states", py.None())?;
+    }
+
+    dict.set_item(
+        "decision_types",
+        numpy::PyArray1::<u8>::from_vec(py, batch.decision_types),
+    )?;
+    dict.set_item(
+        "actions",
+        numpy::PyArray1::<u16>::from_vec(py, batch.actions),
+    )?;
+    dict.set_item(
+        "rewards",
+        numpy::PyArray1::<f32>::from_vec(py, batch.rewards),
+    )?;
+    dict.set_item(
+        "legal_masks",
+        numpy::PyArray1::<u8>::from_vec(py, batch.legal_masks),
+    )?;
+    dict.set_item("num_experiences", n)?;
+
+    Ok(dict.into())
+}
+
 pub fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<PyGameState>()?;
     m.add_function(wrap_pyfunction!(generate_warmup_data, m)?)?;
+    m.add_function(wrap_pyfunction!(generate_expert_data, m)?)?;
 
     // Expose constants
     m.add("STATE_SIZE", encoding::STATE_SIZE)?;
@@ -574,5 +663,88 @@ pub fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add("TEAM_DECLARER", Team::DeclarerTeam as u8)?;
     m.add("TEAM_OPPONENT", Team::OpponentTeam as u8)?;
 
+    // Benchmark function
+    m.add_function(wrap_pyfunction!(py_run_benchmark, m)?)?;
+    m.add_function(wrap_pyfunction!(py_eval_vs_bots, m)?)?;
+    m.add_function(wrap_pyfunction!(py_generate_expert_data_v2v3, m)?)?;
+
     Ok(())
+}
+
+/// Run StockŠkis v1/v2/v3/v4 benchmark from Python.
+#[pyfunction]
+#[pyo3(signature = (num_games=1000))]
+fn py_run_benchmark(num_games: usize) {
+    crate::benchmark::run_benchmark(num_games);
+}
+
+/// Evaluate "player 0" (stub — scores come from heuristic play) against bot opponents.
+/// Returns a dict with win_rate for each bot version opponent.
+/// `bot_version`: 1, 2, or 3 — the opponent bot version to test against.
+/// `num_games`: games to play per configuration.
+/// The "player 0" in this context uses the same bot version just to measure baseline;
+/// the caller (Python) replaces p0 with NN decisions.
+#[pyfunction]
+#[pyo3(signature = (num_games=500))]
+fn py_eval_vs_bots(py: Python<'_>, num_games: usize) -> PyResult<PyObject> {
+    use crate::benchmark::{run_eval_config, BotVersion};
+
+    let dict = pyo3::types::PyDict::new(py);
+
+    // Test each opponent version: NN (player 0) vs 3x V_i
+    // Since we can't run the NN here, we return stats for heuristic baselines
+    for (label, versions) in [
+        ("vs_v1", [BotVersion::V1, BotVersion::V1, BotVersion::V1, BotVersion::V1]),
+        ("vs_v2", [BotVersion::V2, BotVersion::V2, BotVersion::V2, BotVersion::V2]),
+        ("vs_v3", [BotVersion::V3, BotVersion::V3, BotVersion::V3, BotVersion::V3]),
+        ("vs_v4", [BotVersion::V4, BotVersion::V4, BotVersion::V4, BotVersion::V4]),
+    ] {
+        let stats = run_eval_config(versions, num_games);
+        let inner = pyo3::types::PyDict::new(py);
+        inner.set_item("games", stats.games)?;
+        inner.set_item("wins", stats.wins)?;
+        inner.set_item("win_rate", if stats.games > 0 { stats.wins as f64 / stats.games as f64 } else { 0.0 })?;
+        inner.set_item("avg_score", if stats.games > 0 { stats.total_score as f64 / stats.games as f64 } else { 0.0 })?;
+        inner.set_item("declarer_games", stats.declarer_games)?;
+        inner.set_item("declarer_wins", stats.declarer_wins)?;
+        inner.set_item("declarer_wr", if stats.declarer_games > 0 { stats.declarer_wins as f64 / stats.declarer_games as f64 } else { 0.0 })?;
+        dict.set_item(label, inner)?;
+    }
+
+    Ok(dict.into())
+}
+
+/// Generate expert data from v2 and v3 bots playing against each other
+/// (mixed tables for richer training signal).
+#[pyfunction]
+#[pyo3(signature = (num_games, include_oracle=false))]
+fn py_generate_expert_data_v2v3(py: Python<'_>, num_games: usize, include_oracle: bool) -> PyResult<PyObject> {
+    let batch = crate::expert_games_v2v3::generate_expert_batch_v2v3(num_games, include_oracle);
+    let n_exp = batch.rewards.len();
+
+    let dict = pyo3::types::PyDict::new(py);
+
+    let states = numpy::PyArray2::<f32>::from_vec2(
+        py,
+        &batch.states.chunks(batch.state_size).map(|c| c.to_vec()).collect::<Vec<_>>(),
+    ).map_err(|e| pyo3::exceptions::PyValueError::new_err(format!("states: {e}")))?;
+    dict.set_item("states", states)?;
+
+    if include_oracle && !batch.oracle_states.is_empty() {
+        let oracle = numpy::PyArray2::<f32>::from_vec2(
+            py,
+            &batch.oracle_states.chunks(batch.oracle_state_size).map(|c| c.to_vec()).collect::<Vec<_>>(),
+        ).map_err(|e| pyo3::exceptions::PyValueError::new_err(format!("oracle: {e}")))?;
+        dict.set_item("oracle_states", oracle)?;
+    } else {
+        dict.set_item("oracle_states", py.None())?;
+    }
+
+    dict.set_item("decision_types", numpy::PyArray1::<u8>::from_vec(py, batch.decision_types))?;
+    dict.set_item("actions", numpy::PyArray1::<u16>::from_vec(py, batch.actions))?;
+    dict.set_item("rewards", numpy::PyArray1::<f32>::from_vec(py, batch.rewards))?;
+    dict.set_item("legal_masks", numpy::PyArray1::<u8>::from_vec(py, batch.legal_masks))?;
+    dict.set_item("num_experiences", n_exp)?;
+
+    Ok(dict.into())
 }

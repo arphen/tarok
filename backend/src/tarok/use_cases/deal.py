@@ -34,7 +34,8 @@ def deal(state: GameState, rng: random.Random | None = None) -> GameState:
         sum(1 for c in h if c.card_type == CardType.TAROK) for h in hands
     ]
     state.phase = Phase.BIDDING
-    # First bidder is the player after the dealer (forehand)
-    state.current_bidder = (state.dealer + 1) % state.num_players
+    # Forehand (obvezen) is (dealer+1).  Other players bid first so that
+    # forehand can see all bids before deciding (priority / match right).
+    state.current_bidder = (state.dealer + 2) % state.num_players
     state.current_player = state.current_bidder
     return state

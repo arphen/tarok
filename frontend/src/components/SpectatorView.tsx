@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import { useSpectator } from '../hooks/useSpectator';
 import type { AgentConfig } from '../hooks/useSpectator';
 import type { CardData, CompletedTrick, ScoreBreakdown, TrickSummaryEntry } from '../types/game';
@@ -10,7 +10,7 @@ import './SpectatorView.css';
 
 interface SpectatorViewProps {
   onBack: () => void;
-  checkpoints: { filename: string; episode: number; win_rate: number }[];
+  checkpoints: { filename: string; episode: number; win_rate: number; model_name?: string; is_hof?: boolean }[];
 }
 
 type AgentType = 'rl' | 'random';
@@ -19,6 +19,15 @@ interface AgentSetup {
   name: string;
   type: AgentType;
   checkpoint: string;
+}
+
+interface ReplayOption {
+  filename: string;
+  created_at: number;
+  source: string;
+  label: string;
+  player_names: string[];
+  events: number;
 }
 
 const DEFAULT_AGENTS: AgentSetup[] = [
@@ -31,8 +40,22 @@ const DEFAULT_AGENTS: AgentSetup[] = [
 export default function SpectatorView({ onBack, checkpoints }: SpectatorViewProps) {
   const spectator = useSpectator();
   const [agents, setAgents] = useState<AgentSetup[]>(DEFAULT_AGENTS);
-  const [delay, setDelay] = useState(1.5);
   const [selectedTrick, setSelectedTrick] = useState<number | null>(null);
+  const [replays, setReplays] = useState<ReplayOption[]>([]);
+  const [selectedReplay, setSelectedReplay] = useState('');
+
+  useEffect(() => {
+    fetch('/api/replays')
+      .then(r => r.json())
+      .then(data => {
+        const items: ReplayOption[] = data.replays ?? [];
+        setReplays(items);
+        if (!selectedReplay && items.length > 0) {
+          setSelectedReplay(items[0].filename);
+        }
+      })
+      .catch(() => {});
+  }, [selectedReplay]);
 
   const isSetup = !spectator.gameId;
   const { state } = spectator;
@@ -49,6 +72,11 @@ export default function SpectatorView({ onBack, checkpoints }: SpectatorViewProp
 
   const updateAgent = (idx: number, patch: Partial<AgentSetup>) => {
     setAgents(prev => prev.map((a, i) => i === idx ? { ...a, ...patch } : a));
+  };
+
+  const handleLoadReplay = () => {
+    if (!selectedReplay) return;
+    spectator.loadReplay(selectedReplay);
   };
 
   // Setup screen — agent selection
@@ -102,7 +130,7 @@ export default function SpectatorView({ onBack, checkpoints }: SpectatorViewProp
                       <option value="">Latest</option>
                       {checkpoints.map(c => (
                         <option key={c.filename} value={c.filename}>
-                          {c.filename} (ep{c.episode}, {(c.win_rate * 100).toFixed(0)}% WR)
+                          {c.model_name || `${c.filename} (ep${c.episode}, ${(c.win_rate * 100).toFixed(0)}% WR)`}
                         </option>
                       ))}
                     </select>
@@ -126,6 +154,27 @@ export default function SpectatorView({ onBack, checkpoints }: SpectatorViewProp
             </label>
           </div>
 
+          <div className="replay-config">
+            <h3>Saved Replays</h3>
+            <p className="setup-subtitle">Load a saved spectate game or a sample replay exported from PBT generations.</p>
+            <div className="replay-actions">
+              <label className="config-field replay-select-field">
+                <span>Replay File</span>
+                <select value={selectedReplay} onChange={e => setSelectedReplay(e.target.value)} disabled={replays.length === 0}>
+                  <option value="">{replays.length === 0 ? 'No replays available yet' : 'Select replay'}</option>
+                  {replays.map(replay => (
+                    <option key={replay.filename} value={replay.filename}>
+                      {replay.label} ({replay.events} events)
+                    </option>
+                  ))}
+                </select>
+              </label>
+              <button className="btn-secondary btn-large" onClick={handleLoadReplay} disabled={!selectedReplay || spectator.loading}>
+                {spectator.loading ? 'Loading…' : 'Load Replay'}
+              </button>
+            </div>
+          </div>
+
           <button className="btn-gold btn-large" onClick={handleStart} disabled={spectator.loading}>
             {spectator.loading ? 'Starting…' : 'Start Game'}
           </button>
@@ -143,9 +192,9 @@ export default function SpectatorView({ onBack, checkpoints }: SpectatorViewProp
     <div className="spectator-view">
       <div className="app-bar">
         <button className="btn-secondary btn-sm" onClick={() => { spectator.disconnect(); }}>← Setup</button>
-        <span className="spectator-title">Spectating</span>
+        <span className="spectator-title">{spectator.mode === 'replay' ? 'Replay Viewer' : 'Spectating'}</span>
         <span className="connection-status">
-          {spectator.connected ? '🟢 Connected' : '🔴 Disconnected'}
+          {spectator.mode === 'replay' ? `📼 ${spectator.replayName}` : spectator.connected ? '🟢 Connected' : '🔴 Disconnected'}
         </span>
       </div>
 

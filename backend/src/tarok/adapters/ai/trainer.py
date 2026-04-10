@@ -35,6 +35,8 @@ from tarok.adapters.ai.network_bank import NetworkBank
 from tarok.adapters.ai.stockskis_player import StockSkisPlayer
 from tarok.use_cases.game_loop import GameLoop
 
+import math
+
 try:
     from tarok.adapters.ai.rust_game_loop import RustGameLoop
     import tarok_engine as _te_check
@@ -211,6 +213,12 @@ class PPOTrainer:
         # --- Rust engine ---
         use_rust_engine: bool = False,
         warmup_games: int = 0,
+        # --- Scheduling ---
+        lr_schedule: str = "cosine",       # "cosine" | "none"
+        lr_min_ratio: float = 0.1,         # min LR = lr * lr_min_ratio
+        entropy_schedule: str = "linear",  # "linear" | "none"
+        entropy_coef_end: float = 0.002,   # final entropy coef
+        value_clip: float = 0.0,           # >0 enables value function clipping
     ):
         self.agents = agents
         self.gamma = gamma
@@ -232,6 +240,15 @@ class PPOTrainer:
         # Sync all agents to use the same network
         for agent in agents:
             agent.network = self.shared_network
+
+        # --- Scheduling ---
+        self._lr_init = lr
+        self._lr_schedule = lr_schedule
+        self._lr_min_ratio = lr_min_ratio
+        self._entropy_coef_init = entropy_coef
+        self._entropy_schedule = entropy_schedule
+        self._entropy_coef_end = entropy_coef_end
+        self._value_clip = value_clip
 
         # --- Fictitious Self-Play ---
         self.fsp_ratio = fsp_ratio
@@ -267,6 +284,24 @@ class PPOTrainer:
 
     def add_metrics_callback(self, callback) -> None:
         self._metrics_callback.append(callback)
+
+    def _update_schedule(self, session_idx: int, total_sessions: int) -> None:
+        """Update LR and entropy coefficient based on training progress."""
+        progress = session_idx / max(total_sessions - 1, 1)  # 0.0 → 1.0
+
+        # Learning rate schedule
+        if self._lr_schedule == "cosine":
+            lr_min = self._lr_init * self._lr_min_ratio
+            lr = lr_min + 0.5 * (self._lr_init - lr_min) * (1 + math.cos(math.pi * progress))
+            for param_group in self.optimizer.param_groups:
+                param_group["lr"] = lr
+
+        # Entropy coefficient schedule
+        if self._entropy_schedule == "linear":
+            self.entropy_coef = (
+                self._entropy_coef_init
+                + (self._entropy_coef_end - self._entropy_coef_init) * progress
+            )
 
     def _enter_stockskis_mode(self) -> list:
         """Replace opponents (agents 1-3) with StockŠkis heuristic bots.
@@ -340,6 +375,9 @@ class PPOTrainer:
         for session_idx in range(num_sessions):
             if not self._running:
                 break
+
+            # Update LR and entropy schedules
+            self._update_schedule(session_idx, num_sessions)
 
             self.metrics.session = session_idx + 1
             all_experiences: list[Experience] = []
@@ -665,8 +703,14 @@ class PPOTrainer:
             if advantages.numel() > 1:
                 advantages = (advantages - advantages.mean()) / (advantages.std() + 1e-8)
 
-            # Legal masks (all-ones placeholder — actions were legal at play time)
-            legal_masks = torch.ones(len(dt_exps), action_size, dtype=torch.float32).to(self.device)
+            # Use stored legal masks from game time (fall back to all-ones for old experiences)
+            if dt_exps[0].legal_mask is not None:
+                legal_masks = torch.stack([e.legal_mask for e in dt_exps]).to(self.device)
+            else:
+                legal_masks = torch.ones(len(dt_exps), action_size, dtype=torch.float32).to(self.device)
+
+            # Old values for value clipping
+            old_values = torch.stack([e.value for e in dt_exps]).to(self.device)
 
             for _ in range(self.epochs_per_update):
                 indices = torch.randperm(len(dt_exps))
@@ -682,6 +726,7 @@ class PPOTrainer:
                     b_returns = returns[batch_idx]
                     b_masks = legal_masks[batch_idx]
                     b_oracle = oracle_states[batch_idx] if oracle_states is not None else None
+                    b_old_values = old_values[batch_idx]
 
                     new_log_probs, new_values, entropy = self.shared_network.evaluate_action(
                         b_states, b_actions, b_masks, dt,
@@ -696,7 +741,17 @@ class PPOTrainer:
                     ) * b_advantages
                     policy_loss = -torch.min(surr1, surr2).mean()
 
-                    value_loss = nn.functional.mse_loss(new_values, b_returns)
+                    # Value loss with optional clipping (PPO best practice)
+                    if self._value_clip > 0:
+                        v_clipped = b_old_values + torch.clamp(
+                            new_values - b_old_values,
+                            -self._value_clip, self._value_clip,
+                        )
+                        vl_unclipped = (new_values - b_returns) ** 2
+                        vl_clipped = (v_clipped - b_returns) ** 2
+                        value_loss = 0.5 * torch.max(vl_unclipped, vl_clipped).mean()
+                    else:
+                        value_loss = nn.functional.mse_loss(new_values, b_returns)
 
                     loss = (
                         policy_loss

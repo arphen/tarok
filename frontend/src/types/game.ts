@@ -58,6 +58,7 @@ export interface SnapshotInfo {
 }
 
 export interface TrainingMetrics {
+  run_id: string;
   episode: number;
   total_episodes: number;
   session: number;

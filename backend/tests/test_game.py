@@ -38,7 +38,8 @@ async def test_multiple_games():
         state, scores = await game.run()
 
         assert state.phase.value == "finished"
-        assert state.tricks_played == 12
+        if state.contract and not state.contract.is_berac:
+            assert state.tricks_played == 12
         # Only declarer team should score, opponents get 0
         if state.contract and not state.contract.is_klop:
             for p in range(4):

@@ -255,7 +255,8 @@ async def test_non_berac_games_unaffected():
         state, scores = await loop.run()
 
         assert state.phase == Phase.FINISHED
-        assert state.tricks_played == 12
+        if state.contract and not state.contract.is_berac:
+            assert state.tricks_played == 12
 
 
 @pytest.mark.asyncio
