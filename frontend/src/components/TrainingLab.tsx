@@ -15,9 +15,11 @@ interface EvalPoint {
   vs_v1: number;
   vs_v2: number;
   vs_v3: number;
+  'vs_v3.2': number;
   avg_score_v1: number;
   avg_score_v2: number;
   avg_score_v3: number;
+  'avg_score_v3.2': number;
   loss: number;
   experiences?: number;
   games?: number;
@@ -38,9 +40,11 @@ interface PopulationMember {
   vs_v1: number;
   vs_v2: number;
   vs_v3: number;
+  'vs_v3.2': number;
   avg_score_v1: number;
   avg_score_v2: number;
   avg_score_v3: number;
+  'avg_score_v3.2': number;
   loss: number;
   games: number;
   status: string;
@@ -62,6 +66,7 @@ interface GenerationPoint {
   best_vs_v1: number;
   best_vs_v2: number;
   best_vs_v3: number;
+  'best_vs_v3.2': number;
   best_batch_reward: number;
 }
 
@@ -285,6 +290,8 @@ export default function TrainingLab({ onBack }: Props) {
       vs_v1_pct: +(e.vs_v1 * 100).toFixed(1),
       vs_v2_pct: +(e.vs_v2 * 100).toFixed(1),
       vs_v3_pct: +(e.vs_v3 * 100).toFixed(1),
+      vs_v3_2_pct: +((e['vs_v3.2'] ?? 0) * 100).toFixed(1),
+      avg_score_v3_2: e['avg_score_v3.2'] ?? 0,
     }));
   }, [state?.eval_history]);
 
@@ -667,6 +674,12 @@ export default function TrainingLab({ onBack }: Props) {
             color="#9c27b0"
           />
           <StatCard
+            label="vs V3.2 Bots"
+            value={latest ? `${((latest['vs_v3.2'] ?? 0) * 100).toFixed(1)}%` : '—'}
+            sublabel="Win Rate"
+            color="#e91e63"
+          />
+          <StatCard
             label={state?.pbt_enabled ? 'Best Fitness' : 'Loss'}
             value={state?.pbt_enabled ? (latestGeneration ? latestGeneration.max_fitness.toFixed(4) : '—') : (state?.current_loss ? state.current_loss.toFixed(4) : '—')}
             sublabel={state?.pbt_enabled ? 'Generation Leader' : 'Policy Loss'}
@@ -759,6 +772,10 @@ export default function TrainingLab({ onBack }: Props) {
                           <stop offset="5%" stopColor="#9c27b0" stopOpacity={0.3} />
                           <stop offset="95%" stopColor="#9c27b0" stopOpacity={0} />
                         </linearGradient>
+                        <linearGradient id="gradV3_2" x1="0" y1="0" x2="0" y2="1">
+                          <stop offset="5%" stopColor="#e91e63" stopOpacity={0.3} />
+                          <stop offset="95%" stopColor="#e91e63" stopOpacity={0} />
+                        </linearGradient>
                       </defs>
                       <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.08)" />
                       <XAxis dataKey="label" stroke="#666" fontSize={11} />
@@ -769,6 +786,7 @@ export default function TrainingLab({ onBack }: Props) {
                       <Area type="monotone" dataKey="vs_v1_pct" stroke="#4caf50" fill="url(#gradV1)" strokeWidth={2} name="vs V1" />
                       <Area type="monotone" dataKey="vs_v2_pct" stroke="#2196f3" fill="url(#gradV2)" strokeWidth={2} name="vs V2" />
                       <Area type="monotone" dataKey="vs_v3_pct" stroke="#9c27b0" fill="url(#gradV3)" strokeWidth={2} name="vs V3" />
+                      <Area type="monotone" dataKey="vs_v3_2_pct" stroke="#e91e63" fill="url(#gradV3_2)" strokeWidth={2} name="vs V3.2" />
                     </AreaChart>
                   </ResponsiveContainer>
                 </ChartCard>
@@ -827,6 +845,7 @@ export default function TrainingLab({ onBack }: Props) {
                             <th>Fitness</th>
                             <th>vs V1</th>
                             <th>vs V3</th>
+                            <th>vs V3.2</th>
                             <th>Loss</th>
                             <th>Hyperparameters</th>
                           </tr>
@@ -842,6 +861,7 @@ export default function TrainingLab({ onBack }: Props) {
                               <td style={{ color: '#d4a843' }}>{member.fitness.toFixed(4)}</td>
                               <td>{formatPercent(member.vs_v1)}</td>
                               <td>{formatPercent(member.vs_v3)}</td>
+                              <td>{formatPercent(member['vs_v3.2'] ?? 0)}</td>
                               <td>{member.loss.toFixed(4)}</td>
                               <td style={{ maxWidth: 320 }}>{formatHparams(member)}</td>
                             </tr>
@@ -906,6 +926,23 @@ export default function TrainingLab({ onBack }: Props) {
                     </BarChart>
                   </ResponsiveContainer>
                 </ChartCard>
+
+                <ChartCard title="Win Rate vs V3.2 (Hybrid)">
+                  <ResponsiveContainer width="100%" height={280}>
+                    <BarChart data={evalData}>
+                      <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.08)" />
+                      <XAxis dataKey="label" stroke="#666" fontSize={11} />
+                      <YAxis stroke="#666" fontSize={11} domain={[0, 100]} unit="%" />
+                      <Tooltip {...tooltipStyle} />
+                      <ReferenceLine y={25} stroke="rgba(255,255,255,0.2)" strokeDasharray="5 5" />
+                      <Bar dataKey="vs_v3_2_pct" name="Win % vs V3.2" radius={[4, 4, 0, 0]}>
+                        {evalData.map((e, i) => (
+                          <Cell key={i} fill={e.program === 'self_play' ? '#e040fb' : i === 0 ? '#555' : `hsl(${340 + 20 * ((e as any).vs_v3_2_pct / 50)}, 70%, 45%)`} />
+                        ))}
+                      </Bar>
+                    </BarChart>
+                  </ResponsiveContainer>
+                </ChartCard>
               </div>
             )}
 
@@ -923,6 +960,7 @@ export default function TrainingLab({ onBack }: Props) {
                       <Line type="monotone" dataKey="avg_score_v1" stroke="#4caf50" strokeWidth={2} dot={{ r: 4 }} name="vs V1 Score" />
                       <Line type="monotone" dataKey="avg_score_v2" stroke="#2196f3" strokeWidth={2} dot={{ r: 4 }} name="vs V2 Score" />
                       <Line type="monotone" dataKey="avg_score_v3" stroke="#9c27b0" strokeWidth={2} dot={{ r: 4 }} name="vs V3 Score" />
+                      <Line type="monotone" dataKey="avg_score_v3_2" stroke="#e91e63" strokeWidth={2} dot={{ r: 4 }} name="vs V3.2 Score" />
                     </LineChart>
                   </ResponsiveContainer>
                 </ChartCard>
@@ -937,9 +975,11 @@ export default function TrainingLab({ onBack }: Props) {
                           <th>vs V1 WR</th>
                           <th>vs V2 WR</th>
                           <th>vs V3 WR</th>
+                          <th>vs V3.2 WR</th>
                           <th>Score V1</th>
                           <th>Score V2</th>
                           <th>Score V3</th>
+                          <th>Score V3.2</th>
                           <th>Loss</th>
                         </tr>
                       </thead>
@@ -955,9 +995,11 @@ export default function TrainingLab({ onBack }: Props) {
                             <td style={{ color: '#4caf50' }}>{e.vs_v1_pct}%</td>
                             <td style={{ color: '#2196f3' }}>{e.vs_v2_pct}%</td>
                             <td style={{ color: '#9c27b0' }}>{e.vs_v3_pct}%</td>
+                            <td style={{ color: '#e91e63' }}>{(e as any).vs_v3_2_pct}%</td>
                             <td>{e.avg_score_v1.toFixed(1)}</td>
                             <td>{e.avg_score_v2.toFixed(1)}</td>
                             <td>{e.avg_score_v3.toFixed(1)}</td>
+                            <td>{((e as any).avg_score_v3_2 ?? 0).toFixed(1)}</td>
                             <td>{e.loss ? e.loss.toFixed(4) : '—'}</td>
                           </tr>
                         ))}

@@ -19,6 +19,20 @@ const SUIT_SYMBOLS: Record<string, string> = {
   spades: '♠',
 };
 
+const FACE_CARD_EMBLEMS: Record<number, string> = {
+  5: '⚔',   // Jack
+  6: '🐴',  // Knight (cavalier)
+  7: '👑',  // Queen
+  8: '♚',   // King
+};
+
+const FACE_CARD_TITLES: Record<number, string> = {
+  5: 'Jack',
+  6: 'Knight',
+  7: 'Queen',
+  8: 'King',
+};
+
 const TAROK_NUMERALS: Record<number, string> = {
   1: 'I', 2: 'II', 3: 'III', 4: 'IV', 5: 'V',
   6: 'VI', 7: 'VII', 8: 'VIII', 9: 'IX', 10: 'X',
@@ -45,6 +59,7 @@ const Card = React.memo(function Card({ card, onClick, disabled, highlighted, fa
   const isTarok = card.card_type === 'tarok';
   const isRed = card.suit === 'hearts' || card.suit === 'diamonds';
   const trula = isTrula(card);
+  const isFaceCard = !isTarok && card.value >= 5;
 
   const imageUrl = getCardImageUrl(card);
   const hasFallback = !imageUrl;
@@ -55,6 +70,7 @@ const Card = React.memo(function Card({ card, onClick, disabled, highlighted, fa
     isRed ? 'card-red' : 'card-black',
     trula ? 'card-trula' : '',
     hasFallback ? 'card-fallback' : '',
+    hasFallback && isFaceCard ? 'card-face' : '',
     highlighted ? 'card-highlighted' : '',
     disabled ? 'card-disabled' : '',
     onClick && !disabled ? 'card-clickable' : '',
@@ -91,7 +107,14 @@ const Card = React.memo(function Card({ card, onClick, disabled, highlighted, fa
             <span className="card-suit-symbol">{SUIT_SYMBOLS[card.suit!]}</span>
           </div>
           <div className="card-center">
-            <span className="suit-large">{SUIT_SYMBOLS[card.suit!]}</span>
+            {isFaceCard ? (
+              <div className="face-card-center">
+                <span className="face-card-emblem">{FACE_CARD_EMBLEMS[card.value]}</span>
+                <span className="face-card-title">{FACE_CARD_TITLES[card.value]}</span>
+              </div>
+            ) : (
+              <span className="suit-large">{SUIT_SYMBOLS[card.suit!]}</span>
+            )}
           </div>
           <div className="card-corner card-corner-bottom">
             <span className="card-rank">{card.label.replace(/[♥♦♣♠]/g, '')}</span>
