@@ -40,10 +40,12 @@ function cardLabel(card: CardData): string {
   return `${card.label}`;
 }
 
-function formatEvent(event: string, data: Record<string, unknown>, names: string[]): LogEntry | null {
+let _logIdCounter = 0;
+
+export function formatEvent(event: string, data: Record<string, unknown>, names: string[]): LogEntry | null {
   const name = (idx: number) => names[idx] ?? `P${idx}`;
   const isHuman = (idx: number) => idx === 0;
-  let nextId = Date.now();
+  const nextId = ++_logIdCounter;
 
   switch (event) {
     case 'game_start':
@@ -69,6 +71,8 @@ function formatEvent(event: string, data: Record<string, unknown>, names: string
     }
     case 'talon_revealed':
       return { id: nextId, message: 'Talon revealed.', category: 'talon' };
+    case 'talon_group_picked':
+      return { id: nextId, message: 'Talon group picked. Choose cards to discard.', category: 'talon' };
     case 'talon_exchanged':
       return { id: nextId, message: 'Talon exchange complete.', category: 'talon' };
     case 'card_played': {
@@ -120,7 +124,13 @@ export function useGame() {
   }, []);
 
   const addLogEntry = useCallback((entry: LogEntry) => {
-    setLogEntries(prev => [...prev.slice(-49), entry]);
+    setLogEntries(prev => {
+      // Skip consecutive duplicate messages
+      if (prev.length > 0 && prev[prev.length - 1].message === entry.message) {
+        return prev;
+      }
+      return [...prev.slice(-49), entry];
+    });
   }, []);
 
   const connect = useCallback((id: string) => {

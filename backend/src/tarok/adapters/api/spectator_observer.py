@@ -218,6 +218,9 @@ class SpectatorObserver:
             "groups": [[_card_to_dict(c) for c in g] for g in groups],
         }, state)
 
+    async def on_talon_group_picked(self, state: GameState) -> None:
+        await self._broadcast("talon_group_picked", {}, state)
+
     async def on_talon_exchanged(self, state: GameState, picked: list | None = None, discarded: list | None = None) -> None:
         data: dict = {}
         if picked:
@@ -231,6 +234,9 @@ class SpectatorObserver:
             "player": player,
             "card": _card_to_dict(card),
         }, state)
+
+    async def on_trick_start(self, state: GameState) -> None:
+        await self._broadcast("trick_start", {}, state)
 
     async def on_rule_verified(self, player: int, rule: str, state: GameState) -> None:
         await self._broadcast("rule_verified", {

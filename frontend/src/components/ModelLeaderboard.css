@@ -4,9 +4,9 @@
 
 .model-leaderboard {
   position: fixed;
-  top: 0;
+  top: 50px;
   right: 0;
-  height: 100vh;
+  max-height: calc(100vh - 60px);
   width: 36px;
   z-index: 100;
   display: flex;
@@ -41,7 +41,8 @@
   padding: 10px 4px;
   font-size: 0.7rem;
   writing-mode: vertical-lr;
-  align-self: center;
+  align-self: flex-start;
+  margin-top: 8px;
   transition: background 0.2s;
 }
 
@@ -63,6 +64,7 @@
 /* Panel content */
 .leaderboard-panel {
   flex: 1;
+  max-height: calc(100vh - 70px);
   background: rgba(0, 40, 20, 0.95);
   border-left: 1px solid rgba(218, 165, 32, 0.3);
   color: #e0e0e0;

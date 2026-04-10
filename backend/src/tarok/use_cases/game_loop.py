@@ -28,7 +28,9 @@ class NullObserver:
     async def on_contract_won(self, player, contract, state): pass
     async def on_king_called(self, player, king, state): pass
     async def on_talon_revealed(self, groups, state): pass
+    async def on_talon_group_picked(self, state): pass
     async def on_talon_exchanged(self, state, picked=None, discarded=None): pass
+    async def on_trick_start(self, state): pass
     async def on_card_played(self, player, card, state): pass
     async def on_rule_verified(self, player, rule, state): pass
     async def on_trick_won(self, trick, winner, state): pass
@@ -108,6 +110,7 @@ class GameLoop:
             )
             picked = list(state.talon_revealed[group_idx])  # copy before mutation
             state = pick_talon_group(state, group_idx)
+            await self._observer.on_talon_group_picked(state)
 
             discards = await self._players[state.declarer].choose_discard(
                 state, state.declarer, state.contract.talon_cards
@@ -164,6 +167,7 @@ class GameLoop:
         from tarok.entities.card import CardType
         while state.phase == Phase.TRICK_PLAY:
             state = start_trick(state)
+            await self._observer.on_trick_start(state)
             for card_num in range(state.num_players):
                 player_idx = state.current_player
                 legal = state.legal_plays(player_idx)

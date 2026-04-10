@@ -87,7 +87,9 @@ class _NullObserver:
     async def on_contract_won(self, player, contract, state): pass
     async def on_king_called(self, player, king, state): pass
     async def on_talon_revealed(self, groups, state): pass
+    async def on_talon_group_picked(self, state): pass
     async def on_talon_exchanged(self, state): pass
+    async def on_trick_start(self, state): pass
     async def on_card_played(self, player, card, state): pass
     async def on_rule_verified(self, player, rule, state): pass
     async def on_trick_won(self, trick, winner, state): pass

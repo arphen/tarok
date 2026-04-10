@@ -266,6 +266,12 @@ class WebSocketObserver:
     async def on_talon_exchanged(self, state: GameState, picked=None, discarded=None) -> None:
         await self._send("talon_exchanged", {}, state)
 
+    async def on_trick_start(self, state: GameState) -> None:
+        await self._send("trick_start", {}, state)
+
+    async def on_talon_group_picked(self, state: GameState) -> None:
+        await self._send("talon_group_picked", {}, state)
+
     async def on_card_played(self, player: int, card: Card, state: GameState) -> None:
         await self._send("card_played", {
             "player": player,

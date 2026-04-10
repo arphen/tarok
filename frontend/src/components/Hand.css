@@ -68,7 +68,8 @@
 
 .hand-left .hand-label {
   white-space: nowrap;
-  writing-mode: horizontal-tb;
+  writing-mode: vertical-lr;
+  transform: rotate(180deg);
 }
 
 .hand-left .hand-cards {
@@ -83,7 +84,7 @@
 
 .hand-right .hand-label {
   white-space: nowrap;
-  writing-mode: horizontal-tb;
+  writing-mode: vertical-rl;
 }
 
 .hand-right .hand-cards {
