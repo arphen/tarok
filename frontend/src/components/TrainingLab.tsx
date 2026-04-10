@@ -149,7 +149,7 @@ const tooltipStyle = {
   labelStyle: { color: '#aaa' },
 };
 
-const ALL_BOT_VERSIONS = ['v1', 'v2', 'v3', 'v3.2', 'v4'] as const;
+const ALL_BOT_VERSIONS = ['v1', 'v2', 'v3', 'v3.2', 'v4', 'v5'] as const;
 const BOT_COLORS: Record<string, string> = {
   v1: '#4caf50', v2: '#2196f3', v3: '#9c27b0', 'v3.2': '#e91e63', v4: '#ff9800', v5: '#f44336',
 };

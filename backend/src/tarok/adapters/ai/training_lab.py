@@ -55,6 +55,7 @@ from tarok.adapters.ai.stockskis_v2 import StockSkisPlayerV2
 from tarok.adapters.ai.stockskis_v3 import StockSkisPlayerV3
 from tarok.adapters.ai.stockskis_v3_2 import StockSkisPlayerV3_2
 from tarok.adapters.ai.stockskis_v4 import StockSkisPlayerV4
+from tarok.adapters.ai.stockskis_v5 import StockSkisPlayerV5
 from tarok.adapters.api.spectator_observer import SpectatorObserver
 from tarok.use_cases.game_loop import GameLoop
 
@@ -645,6 +646,8 @@ def _make_opponents(version: str) -> list:
         return [StockSkisPlayerV3_2(name=f"V3.2-{i}") for i in range(3)]
     elif version == "v4":
         return [StockSkisPlayerV4(name=f"V4-{i}") for i in range(3)]
+    elif version == "v5":
+        return [StockSkisPlayerV5(name=f"V5-{i}") for i in range(3)]
     else:
         return [StockSkisPlayer(name=f"V1-{i}", strength=1.0) for i in range(3)]
 
@@ -1305,6 +1308,7 @@ async def _run_island_pbt_session(
                     mutation_scale=mutation_scale,
                     fsp_ratio=fsp_ratio,
                     time_limit_seconds=time_limit_secs,
+                    eval_bots=eval_bots,
                 ),
                 daemon=True,
             )
@@ -1347,14 +1351,12 @@ async def _run_island_pbt_session(
                         "games": s.get("total_games", 0),
                         "batch_avg_reward": s.get("avg_score", 0),
                         "batch_win_rate": s.get("session_win_rate", 0),
-                        "vs_v1": s.get("vs_v1", 0),
-                        "vs_v3": s.get("vs_v3", 0),
-                        "vs_v3.2": s.get("vs_v3.2", 0),
                         "loss": s.get("loss", 0),
                         "games_per_sec": s.get("games_per_sec", 0),
                         "generation": s.get("generation", 0),
                         "hparams": island_hp,
                         "model_hash": f"island-{idx}",
+                        **{k: s.get(k, 0) for k in s if k.startswith("vs_") or k.startswith("avg_score_")},
                     })
 
             # Best across all islands
