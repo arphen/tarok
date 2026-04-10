@@ -128,6 +128,33 @@ def _load_best_from_hof(hof_dir: Path) -> dict | None:
         return None
 
 
+def _load_hof_state_dicts(hof_dir: Path, max_entries: int = 10) -> list[dict]:
+    """Load multiple model state_dicts from the HoF for FSP bank seeding."""
+    manifest_path = hof_dir / "manifest.json"
+    if not manifest_path.exists():
+        return []
+    try:
+        manifest = json.loads(manifest_path.read_text())
+    except Exception:
+        return []
+    if not manifest:
+        return []
+    # Take best entries by vs_v3
+    sorted_entries = sorted(manifest, key=lambda e: e.get("vs_v3", 0), reverse=True)
+    results = []
+    for entry in sorted_entries[:max_entries]:
+        pt_path = hof_dir / entry["filename"]
+        if not pt_path.exists():
+            continue
+        try:
+            data = torch.load(pt_path, map_location="cpu", weights_only=False)
+            if "model_state_dict" in data:
+                results.append(data["model_state_dict"])
+        except Exception:
+            continue
+    return results
+
+
 def _save_to_hof(
     network_state: dict,
     hidden_size: int,
@@ -302,6 +329,8 @@ def island_worker(
     seed_state_dict: dict | None = None,
     hparams: dict | None = None,
     mutation_scale: float = 1.0,
+    fsp_ratio: float = 0.3,
+    time_limit_seconds: float = 0,
 ) -> None:
     """Self-contained training loop for one island.
 
@@ -356,13 +385,21 @@ def island_worker(
         games_per_session=games_per_session,
         device="cpu",
         stockskis_ratio=0.0,
-        fsp_ratio=0.0,
+        fsp_ratio=fsp_ratio,
         use_rust_engine=True,
         save_dir=str(ckpt_dir / "island_tmp" / f"island_{island_id}"),
         batch_concurrency=32,
         value_clip=0.2,
     )
     trainer._running = True
+
+    # --- Seed FSP bank from Hall of Fame ---
+    if fsp_ratio > 0:
+        hof_dicts = _load_hof_state_dicts(hof_dir, max_entries=10)
+        for sd in hof_dicts:
+            trainer.network_bank.push(sd)
+        # Also push current weights so the bank is never empty
+        trainer.network_bank.push(net.state_dict())
 
     # --- Training loop ---
     generation = 0
@@ -377,6 +414,12 @@ def island_worker(
     loop = asyncio.new_event_loop()
     try:
         while not stop_event.is_set():
+            # Time limit check
+            if time_limit_seconds > 0:
+                elapsed = time.perf_counter() - t_start
+                if elapsed >= time_limit_seconds:
+                    break
+
             generation += 1
             session_start = time.perf_counter()
 
@@ -436,8 +479,18 @@ def island_worker(
                     hof_dir,
                 )
 
-            # --- Check HoF for better weights (migration) ---
+            # --- Push current weights to FSP bank ---
+            if fsp_ratio > 0:
+                trainer.network_bank.push(net.state_dict())
+
+            # --- Check HoF for better weights (migration) + refresh FSP bank ---
             if generation % 5 == 0:
+                # Refresh FSP bank from HoF (other islands' models = diversity)
+                if fsp_ratio > 0:
+                    hof_dicts = _load_hof_state_dicts(hof_dir, max_entries=10)
+                    for sd in hof_dicts:
+                        trainer.network_bank.push(sd)
+
                 hof_data = _load_best_from_hof(hof_dir)
                 if hof_data is not None:
                     hof_v3 = hof_data.get("metrics", {}).get("vs_v3", 0)

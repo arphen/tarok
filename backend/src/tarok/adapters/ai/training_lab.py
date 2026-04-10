@@ -1212,6 +1212,8 @@ async def _run_island_pbt_session(
     learning_rate: float,
     population_size: int,
     mutation_scale: float,
+    fsp_ratio: float = 0.3,
+    time_limit_minutes: float = 5.0,
 ):
     """Island-model PBT: N fully independent training loops,
     coordinating only via the Hall of Fame directory."""
@@ -1234,8 +1236,7 @@ async def _run_island_pbt_session(
         hidden_size = _lab.hidden_size
         checkpoints_dir = str(CHECKPOINTS_DIR)
 
-        # Compute total games target
-        target_games = num_sessions * games_per_session * eval_interval
+        time_limit_secs = time_limit_minutes * 60
 
         # Seed weights from current lab network (if any)
         seed_state = None
@@ -1268,6 +1269,8 @@ async def _run_island_pbt_session(
                     seed_state_dict=seed_state,
                     hparams=dict(base_hp),
                     mutation_scale=mutation_scale,
+                    fsp_ratio=fsp_ratio,
+                    time_limit_seconds=time_limit_secs,
                 ),
                 daemon=True,
             )
@@ -1275,35 +1278,48 @@ async def _run_island_pbt_session(
             _island_processes.append(p)
 
         _lab.pbt_population = [
-            {"index": i, "label": f"Island {i}", "status": "running",
-             "fitness": 0, "games": 0, "hparams": {}}
+            {"index": i, "label": f"Island {i}", "status": "starting",
+             "fitness": 0, "games": 0, "hparams": {},
+             "batch_avg_reward": 0, "batch_win_rate": 0,
+             "vs_v1": 0, "vs_v2": 0, "vs_v3": 0,
+             "avg_score_v1": 0, "avg_score_v2": 0, "avg_score_v3": 0,
+             "loss": 0, "copied_from": None, "mutations": 0,
+             "survival_count": 0, "model_hash": "",
+             "games_per_sec": 0, "generation": 0}
             for i in range(population_size)
         ]
+        _lab.total_training_sessions = int(time_limit_minutes)
 
         # Poll island stats files for dashboard updates
         t_start = time.perf_counter()
         while _lab.running:
+            elapsed = time.perf_counter() - t_start
             stats = read_all_island_stats(CHECKPOINTS_DIR)
             total_games = sum(s.get("total_games", 0) for s in stats)
             total_gps = sum(s.get("games_per_sec", 0) for s in stats)
 
             _lab.self_play_games = total_games
             _lab.sp_games_per_second = round(total_gps, 1)
+            _lab.training_sessions_done = min(int(elapsed / 60), int(time_limit_minutes))
 
             # Update per-island population display
             for s in stats:
                 idx = s.get("island_id", 0)
                 if idx < len(_lab.pbt_population):
+                    island_hp = s.get("hparams", {})
                     _lab.pbt_population[idx].update({
                         "status": s.get("status", "running"),
                         "fitness": s.get("best_fitness", 0),
                         "games": s.get("total_games", 0),
-                        "win_rate": s.get("win_rate", 0),
+                        "batch_avg_reward": s.get("avg_score", 0),
+                        "batch_win_rate": s.get("session_win_rate", 0),
                         "vs_v1": s.get("vs_v1", 0),
                         "vs_v3": s.get("vs_v3", 0),
+                        "loss": s.get("loss", 0),
                         "games_per_sec": s.get("games_per_sec", 0),
                         "generation": s.get("generation", 0),
-                        "hparams": s.get("hparams", {}),
+                        "hparams": island_hp,
+                        "model_hash": f"island-{idx}",
                     })
 
             # Best across all islands
@@ -1314,8 +1330,8 @@ async def _run_island_pbt_session(
                 _lab.current_loss = best.get("loss", 0)
                 _lab.pbt_generation = max(s.get("generation", 0) for s in stats)
 
-            # Check if target reached
-            if target_games > 0 and total_games >= target_games:
+            # Time limit
+            if time_limit_secs > 0 and elapsed >= time_limit_secs:
                 break
 
             # Check if all processes have died
@@ -2081,10 +2097,11 @@ async def start_self_play(
     stockskis_ratio: float = 0.0,
     fsp_ratio: float = 0.3,
     pbt_enabled: bool = False,
-    population_size: int = 6,
+    population_size: int = 4,
     exploit_top_ratio: float = 0.25,
     exploit_bottom_ratio: float = 0.25,
     mutation_scale: float = 1.0,
+    time_limit_minutes: float = 5.0,
 ):
     """Start the self-play PPO training pipeline."""
     global _lab, _lab_task
@@ -2114,6 +2131,8 @@ async def start_self_play(
                 learning_rate=learning_rate,
                 population_size=population_size,
                 mutation_scale=mutation_scale,
+                fsp_ratio=fsp_ratio,
+                time_limit_minutes=time_limit_minutes,
             )
         )
     else:

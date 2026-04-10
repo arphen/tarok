@@ -9,6 +9,7 @@ pub mod stockskis;
 pub mod stockskis_v2;
 pub mod stockskis_v3;
 pub mod stockskis_v4;
+pub mod stockskis_v5;
 pub mod benchmark;
 pub mod trick_eval;
 pub mod warmup;

@@ -14,6 +14,7 @@ use crate::stockskis;
 use crate::stockskis_v2;
 use crate::stockskis_v3;
 use crate::stockskis_v4;
+use crate::stockskis_v5;
 use crate::trick_eval;
 
 /// Which bot version a player uses.
@@ -23,6 +24,7 @@ pub enum BotVersion {
     V2,
     V3,
     V4,
+    V5,
 }
 
 impl std::fmt::Display for BotVersion {
@@ -32,6 +34,7 @@ impl std::fmt::Display for BotVersion {
             BotVersion::V2 => write!(f, "V2"),
             BotVersion::V3 => write!(f, "V3"),
             BotVersion::V4 => write!(f, "V4"),
+            BotVersion::V5 => write!(f, "V5"),
         }
     }
 }
@@ -74,10 +77,20 @@ pub fn run_benchmark(num_games: usize) {
         ("V2 vs V4 vs V4 vs V4", [BotVersion::V2, BotVersion::V4, BotVersion::V4, BotVersion::V4]),
         ("V4 vs V1 vs V1 vs V1", [BotVersion::V4, BotVersion::V1, BotVersion::V1, BotVersion::V1]),
         ("V1 vs V4 vs V4 vs V4", [BotVersion::V1, BotVersion::V4, BotVersion::V4, BotVersion::V4]),
+        // V5 configs
+        ("V5 vs V5 vs V5 vs V5", [BotVersion::V5, BotVersion::V5, BotVersion::V5, BotVersion::V5]),
+        ("V5 vs V4 vs V4 vs V4", [BotVersion::V5, BotVersion::V4, BotVersion::V4, BotVersion::V4]),
+        ("V4 vs V5 vs V5 vs V5", [BotVersion::V4, BotVersion::V5, BotVersion::V5, BotVersion::V5]),
+        ("V5 vs V3 vs V3 vs V3", [BotVersion::V5, BotVersion::V3, BotVersion::V3, BotVersion::V3]),
+        ("V3 vs V5 vs V5 vs V5", [BotVersion::V3, BotVersion::V5, BotVersion::V5, BotVersion::V5]),
+        ("V5 vs V2 vs V2 vs V2", [BotVersion::V5, BotVersion::V2, BotVersion::V2, BotVersion::V2]),
+        ("V2 vs V5 vs V5 vs V5", [BotVersion::V2, BotVersion::V5, BotVersion::V5, BotVersion::V5]),
+        ("V5 vs V1 vs V1 vs V1", [BotVersion::V5, BotVersion::V1, BotVersion::V1, BotVersion::V1]),
+        ("V1 vs V5 vs V5 vs V5", [BotVersion::V1, BotVersion::V5, BotVersion::V5, BotVersion::V5]),
     ];
 
     println!("\n╔══════════════════════════════════════════════════════════════╗");
-    println!("║      StockŠkis Bot Benchmark: V1 vs V2 vs V3 vs V4         ║");
+    println!("║   StockŠkis Bot Benchmark: V1 vs V2 vs V3 vs V4 vs V5      ║");
     println!("║      {} games per configuration                          ║", num_games);
     println!("╚══════════════════════════════════════════════════════════════╝");
 
@@ -87,6 +100,7 @@ pub fn run_benchmark(num_games: usize) {
     global_stats.insert(BotVersion::V2, VersionStats::default());
     global_stats.insert(BotVersion::V3, VersionStats::default());
     global_stats.insert(BotVersion::V4, VersionStats::default());
+    global_stats.insert(BotVersion::V5, VersionStats::default());
 
     for (config_name, versions) in &configs {
         let t0 = Instant::now();
@@ -169,6 +183,7 @@ pub fn run_benchmark(num_games: usize) {
             BotVersion::V2 => 2,
             BotVersion::V3 => 3,
             BotVersion::V4 => 4,
+            BotVersion::V5 => 5,
         });
 
         for (ver, s) in &sorted_versions {
@@ -188,7 +203,7 @@ pub fn run_benchmark(num_games: usize) {
         "Bot", "Games", "Wins", "WinRate", "ScoreDiff", "DeclGames", "DeclWR");
     println!("  {}", "-".repeat(64));
 
-    for ver in [BotVersion::V1, BotVersion::V2, BotVersion::V3, BotVersion::V4] {
+    for ver in [BotVersion::V1, BotVersion::V2, BotVersion::V3, BotVersion::V4, BotVersion::V5] {
         let s = &global_stats[&ver];
         let wr = if s.games > 0 { s.wins as f64 / s.games as f64 * 100.0 } else { 0.0 };
         let avg = if s.games > 0 { s.total_score as f64 / s.games as f64 } else { 0.0 };
@@ -234,6 +249,7 @@ fn play_one_game(
             BotVersion::V2 => stockskis_v2::evaluate_bid_v2(state.hands[bidder as usize], highest),
             BotVersion::V3 => stockskis_v3::evaluate_bid_v3(state.hands[bidder as usize], highest),
             BotVersion::V4 => stockskis_v4::evaluate_bid_v4(state.hands[bidder as usize], highest),
+            BotVersion::V5 => stockskis_v5::evaluate_bid_v5(state.hands[bidder as usize], highest),
         }
         .filter(|&c| {
             if c == Contract::Three && !is_fh { return false; }
@@ -311,6 +327,7 @@ fn play_one_game(
                 BotVersion::V2 => stockskis_v2::choose_card_v2(state.hands[player as usize], &state, player),
                 BotVersion::V3 => stockskis_v3::choose_card_v3(state.hands[player as usize], &state, player),
                 BotVersion::V4 => stockskis_v4::choose_card_v4(state.hands[player as usize], &state, player),
+                BotVersion::V5 => stockskis_v5::choose_card_v5(state.hands[player as usize], &state, player),
             };
 
             state.hands[player as usize].remove(card);
@@ -343,6 +360,7 @@ fn handle_king_call(state: &mut GameState, versions: [BotVersion; 4]) {
         BotVersion::V2 => stockskis_v2::choose_king_v2(hand),
         BotVersion::V3 => stockskis_v3::choose_king_v3(hand),
         BotVersion::V4 => stockskis_v4::choose_king_v4(hand),
+        BotVersion::V5 => stockskis_v5::choose_king_v5(hand),
     };
 
     if let Some(king) = king {
@@ -380,6 +398,7 @@ fn handle_talon(state: &mut GameState, versions: [BotVersion; 4]) {
         BotVersion::V2 => stockskis_v2::choose_talon_group_v2(&groups, hand, state.called_king),
         BotVersion::V3 => stockskis_v3::choose_talon_group_v3(&groups, hand, state.called_king),
         BotVersion::V4 => stockskis_v4::choose_talon_group_v4(&groups, hand, state.called_king),
+        BotVersion::V5 => stockskis_v5::choose_talon_group_v5(&groups, hand, state.called_king),
     };
 
     // Pick the group
@@ -412,6 +431,11 @@ fn handle_talon(state: &mut GameState, versions: [BotVersion; 4]) {
             state.called_king,
         ),
         BotVersion::V4 => stockskis_v4::choose_discards_v4(
+            state.hands[declarer as usize],
+            talon_cards as usize,
+            state.called_king,
+        ),
+        BotVersion::V5 => stockskis_v5::choose_discards_v5(
             state.hands[declarer as usize],
             talon_cards as usize,
             state.called_king,
