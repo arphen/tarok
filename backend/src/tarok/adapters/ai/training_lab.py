@@ -727,6 +727,7 @@ async def _save_sample_replay(network: TarokNet, generation: int, member: dict[s
 
 async def _run_lab_session(
     expert_games: int,
+    expert_source: str,
     training_epochs: int,
     eval_games: int,
     num_rounds: int,
@@ -794,7 +795,7 @@ async def _run_lab_session(
                     device=_detect_device(),
                     include_oracle=False,
                     progress_callback=lambda info: _on_training_progress(info),
-                    use_v2v3=True,
+                    expert_source=expert_source,
                 )
                 return result
 
@@ -2058,6 +2059,7 @@ def load_lab_checkpoint(choice: str) -> dict:
 
 async def start_lab_training(
     expert_games: int = 500_000,
+    expert_source: str = "v2v3v5",
     training_epochs: int = 3,
     eval_games: int = 500,
     num_rounds: int = 10,
@@ -2078,6 +2080,7 @@ async def start_lab_training(
     _lab_task = asyncio.create_task(
         _run_lab_session(
             expert_games=expert_games,
+            expert_source=expert_source,
             training_epochs=training_epochs,
             eval_games=eval_games,
             num_rounds=num_rounds,
