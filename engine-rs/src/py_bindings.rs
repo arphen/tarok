@@ -361,7 +361,7 @@ impl PyGameState {
 
     // -- Encoding --
 
-    /// Encode state as a numpy array (STATE_SIZE=270).
+    /// Encode state as a numpy array (STATE_SIZE=450).
     fn encode_state<'py>(
         &self,
         py: Python<'py>,
@@ -373,7 +373,7 @@ impl PyGameState {
         PyArray1::from_slice(py, &buf)
     }
 
-    /// Encode oracle state as a numpy array (ORACLE_STATE_SIZE=432).
+    /// Encode oracle state as a numpy array (ORACLE_STATE_SIZE=612).
     fn encode_oracle_state<'py>(
         &self,
         py: Python<'py>,

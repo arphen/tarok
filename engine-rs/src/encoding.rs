@@ -1,15 +1,27 @@
 /// State encoding — writes features directly into a numpy buffer.
 ///
-/// Matches the Python STATE_SIZE = 270 layout exactly so that neural
-/// network weights trained in Python work with the Rust encoder.
+/// v2 encoding matches Python STATE_SIZE = 450 layout:
+///  - v1 features (270 dims): hand, played, trick, talon, position, contract, etc.
+///  - Belief probabilities: 3×54 opponent card likelihoods with void inference
+///  - Opponent card-play stats: 3×4 features (taroks, suits, kings, total)
+///  - Trick context: 6 features (position + lead suit)
 
 use crate::card::*;
 use crate::game_state::*;
 use crate::trick_eval::evaluate_trick;
 
-pub const STATE_SIZE: usize = 270;
+/// v1 base features size (for backward compat detection)
+pub const V1_STATE_SIZE: usize = 270;
+/// v2 belief features: 3 opponents × 54 cards
+const BELIEF_SIZE: usize = 3 * DECK_SIZE;
+/// v2 opponent play stats: 3 opponents × 4 features
+const OPP_STATS_SIZE: usize = 3 * 4;
+/// v2 trick context: position(1) + tarok_lead(1) + suit_lead(4)
+const TRICK_CTX_SIZE: usize = 6;
+/// Full v2 state size
+pub const STATE_SIZE: usize = V1_STATE_SIZE + BELIEF_SIZE + OPP_STATS_SIZE + TRICK_CTX_SIZE; // 450
 pub const ORACLE_EXTRA: usize = 3 * DECK_SIZE; // 162
-pub const ORACLE_STATE_SIZE: usize = STATE_SIZE + ORACLE_EXTRA; // 432
+pub const ORACLE_STATE_SIZE: usize = STATE_SIZE + ORACLE_EXTRA; // 612
 
 /// Decision type codes matching Python DecisionType enum.
 pub const DT_BID: u8 = 0;
@@ -187,6 +199,139 @@ pub fn encode_state(buf: &mut [f32], state: &GameState, player: u8, decision_typ
     }
     // During bidding (no declarer yet), all three stay 0 — role unknown
     o += 3;
+
+    debug_assert_eq!(o, V1_STATE_SIZE);
+
+    // ===================================================================
+    // v2 FEATURES: Belief tracking + card-play statistics
+    // ===================================================================
+
+    // --- 3×54 opponent belief probabilities ---
+    // Compute cards known to this player
+    let mut known = hand;
+    known = known.union(state.played_cards);
+    if let Some(ref trick) = state.current_trick {
+        known = known.union(trick.played_cards_set());
+    }
+    if !state.talon_revealed.is_empty() && Some(player) == state.declarer {
+        for group in &state.talon_revealed {
+            for &card in group {
+                known.insert(card);
+            }
+        }
+    }
+
+    // Detect opponent void suits from trick history
+    let mut opp_void: [u8; NUM_PLAYERS] = [0; NUM_PLAYERS]; // bitmask per player: bit=suit_idx → void
+    for trick in &state.tricks {
+        if trick.count == 0 {
+            continue;
+        }
+        let lead_card = trick.cards[0].1;
+        let lead_suit = if lead_card.card_type() == CardType::Suit {
+            lead_card.suit()
+        } else {
+            None
+        };
+        if let Some(ls) = lead_suit {
+            for i in 1..trick.count as usize {
+                let (p, card) = trick.cards[i];
+                if p == player {
+                    continue;
+                }
+                if card.suit() != Some(ls) {
+                    // Player didn't follow suit → void in that suit
+                    opp_void[p as usize] |= 1 << (ls as u8);
+                }
+            }
+        }
+    }
+
+    // Write belief probabilities for each opponent
+    for opp_offset in 1..NUM_PLAYERS {
+        let opp_idx = ((player as usize + opp_offset) % NUM_PLAYERS) as u8;
+        let void_mask = opp_void[opp_idx as usize];
+        for cidx in 0..DECK_SIZE {
+            let c = Card(cidx as u8);
+            if known.contains(c) {
+                // Known card — not in any opponent's hand
+                // buf stays 0.0
+            } else {
+                // Check void constraint
+                let is_void = if let Some(s) = c.suit() {
+                    void_mask & (1 << (s as u8)) != 0
+                } else {
+                    false
+                };
+                if !is_void {
+                    buf[o + cidx] = 1.0 / 3.0; // uniform prior across 3 opponents
+                }
+            }
+        }
+        o += DECK_SIZE;
+    }
+
+    // --- Per-opponent card-play counts (3×4 features) ---
+    for opp_offset in 1..NUM_PLAYERS {
+        let opp_idx = ((player as usize + opp_offset) % NUM_PLAYERS) as u8;
+        let mut taroks_played: f32 = 0.0;
+        let mut suit_played: f32 = 0.0;
+        let mut kings_played: f32 = 0.0;
+        let mut total_played: f32 = 0.0;
+
+        for trick in &state.tricks {
+            for i in 0..trick.count as usize {
+                let (p, card) = trick.cards[i];
+                if p == opp_idx {
+                    total_played += 1.0;
+                    if card.card_type() == CardType::Tarok {
+                        taroks_played += 1.0;
+                    } else {
+                        suit_played += 1.0;
+                    }
+                    if card.is_king() {
+                        kings_played += 1.0;
+                    }
+                }
+            }
+        }
+        if let Some(ref trick) = state.current_trick {
+            for i in 0..trick.count as usize {
+                let (p, card) = trick.cards[i];
+                if p == opp_idx {
+                    total_played += 1.0;
+                    if card.card_type() == CardType::Tarok {
+                        taroks_played += 1.0;
+                    } else {
+                        suit_played += 1.0;
+                    }
+                    if card.is_king() {
+                        kings_played += 1.0;
+                    }
+                }
+            }
+        }
+
+        buf[o] = taroks_played / 12.0;
+        buf[o + 1] = suit_played / 12.0;
+        buf[o + 2] = kings_played / 4.0;
+        buf[o + 3] = total_played / 12.0;
+        o += 4;
+    }
+
+    // --- Trick context features (6 features) ---
+    if let Some(ref trick) = state.current_trick {
+        if trick.count > 0 {
+            buf[o] = trick.count as f32 / 4.0; // trick position
+            let lead_card = trick.cards[0].1;
+            if lead_card.card_type() == CardType::Tarok {
+                buf[o + 1] = 1.0; // tarok lead
+            } else if let Some(s) = lead_card.suit() {
+                buf[o + 2 + s as usize] = 1.0; // suit lead (4 positions)
+            }
+        }
+    }
+    o += TRICK_CTX_SIZE;
 
     debug_assert_eq!(o, STATE_SIZE);
 }

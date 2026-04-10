@@ -1,6 +1,11 @@
 """State encoding — converts game state into tensor representation for the neural network.
 
 Supports multiple decision types: bidding, king calling, talon selection, and card play.
+
+v2 encoding adds:
+  - 3×54 belief probability vectors (opponent card likelihoods)
+  - 4 card-play-count features per opponent (cards played per suit category)
+  - Trick lead suit & trick position features
 """
 
 from __future__ import annotations
@@ -210,6 +215,116 @@ def _encode_state_into(
     # During bidding (no declarer yet), all three stay 0 — role unknown
     o += 3
 
+    # ===================================================================
+    # v2 FEATURES: Belief tracking + card-play statistics
+    # ===================================================================
+
+    # --- 3×54 opponent belief probabilities ---
+    # Compute the set of cards whose location is unknown to this player
+    known_cards: set[int] = set()
+    # Own hand
+    for card in state.hands[player_idx]:
+        known_cards.add(CARD_TO_IDX[card])
+    # Played cards (completed tricks)
+    for trick in state.tricks:
+        for _, card in trick.cards:
+            known_cards.add(CARD_TO_IDX[card])
+    # Current trick
+    if state.current_trick:
+        for _, card in state.current_trick.cards:
+            known_cards.add(CARD_TO_IDX[card])
+    # Talon visible to declarer
+    if state.talon_revealed and player_idx == state.declarer:
+        for group in state.talon_revealed:
+            for card in group:
+                known_cards.add(CARD_TO_IDX[card])
+
+    # Unknown cards = full deck minus known
+    unknown_card_indices = [i for i in range(54) if i not in known_cards]
+    num_unknown = len(unknown_card_indices)
+
+    # Build per-opponent suit void constraints from trick history
+    # If an opponent failed to follow suit when they could have, they are void
+    opp_void_suits: dict[int, set[Suit]] = {i: set() for i in range(4) if i != player_idx}
+    for trick in state.tricks:
+        if not trick.cards:
+            continue
+        lead_player, lead_card = trick.cards[0]
+        lead_suit = lead_card.suit  # None for taroks
+        if lead_suit is None:
+            continue  # tarok lead — no suit inference
+        for p, card in trick.cards[1:]:
+            if p == player_idx:
+                continue
+            if p in opp_void_suits and card.suit != lead_suit:
+                # Player didn't follow suit → must be void in that suit
+                opp_void_suits[p].add(lead_suit)
+
+    # Compute uniform belief conditioned on void constraints
+    # For each unknown card and each opponent, compute whether the opponent
+    # could hold it (not void in that suit). Then distribute probability.
+    for opp_offset in range(1, 4):
+        opp_idx = (player_idx + opp_offset) % 4
+        void_suits = opp_void_suits.get(opp_idx, set())
+        for cidx in unknown_card_indices:
+            card = DECK[cidx]
+            # If opponent is void in this card's suit, probability = 0
+            if card.suit is not None and card.suit in void_suits:
+                buf[o + cidx] = 0.0
+            else:
+                # Uniform prior across possible holders (3 opponents + hidden talon/put_down)
+                # Rough approximation: 1/3 for each opponent if no constraints
+                buf[o + cidx] = 1.0 / 3.0
+        o += 54
+
+    # --- Per-opponent card-play counts (3×4 = 12 features) ---
+    # For each opponent: [taroks_played, suit_cards_played, kings_played, total_played]
+    # All normalized to 0-1
+    for opp_offset in range(1, 4):
+        opp_idx = (player_idx + opp_offset) % 4
+        taroks_played = 0
+        suit_played = 0
+        kings_played = 0
+        total_played = 0
+        for trick in state.tricks:
+            for p, card in trick.cards:
+                if p == opp_idx:
+                    total_played += 1
+                    if card.card_type == CardType.TAROK:
+                        taroks_played += 1
+                    else:
+                        suit_played += 1
+                    if card.is_king:
+                        kings_played += 1
+        if state.current_trick:
+            for p, card in state.current_trick.cards:
+                if p == opp_idx:
+                    total_played += 1
+                    if card.card_type == CardType.TAROK:
+                        taroks_played += 1
+                    else:
+                        suit_played += 1
+                    if card.is_king:
+                        kings_played += 1
+        buf[o] = taroks_played / 12.0
+        buf[o + 1] = suit_played / 12.0
+        buf[o + 2] = kings_played / 4.0
+        buf[o + 3] = total_played / 12.0
+        o += 4
+
+    # --- Trick context features (4 features) ---
+    # Current trick position (0-3, normalized), lead suit one-hot (4+1 for tarok)
+    if state.current_trick and state.current_trick.cards:
+        trick_pos = len(state.current_trick.cards) / 4.0
+        buf[o] = trick_pos
+        lead_card = state.current_trick.cards[0][1]
+        if lead_card.card_type == CardType.TAROK:
+            buf[o + 1] = 1.0  # tarok lead
+        elif lead_card.suit is not None:
+            suit_idx = list(Suit).index(lead_card.suit)
+            buf[o + 2 + suit_idx] = 1.0  # suit lead (4 positions)
+    o += 6  # trick_pos(1) + tarok_lead(1) + suit_lead(4)
+
 
 def encode_state(state: GameState, player_idx: int, decision_type: DecisionType = DecisionType.CARD_PLAY) -> torch.Tensor:
     """Encode visible game state for a specific player as a flat tensor.
@@ -239,11 +354,17 @@ STATE_SIZE = (
     4 +   # hand_strength
     4 +   # announcements_made
     5 +   # kontra_levels
-    3     # role (is_declarer, is_partner, is_opposition)
-)  # = 270
+    3 +   # role (is_declarer, is_partner, is_opposition)
+    # --- v2 features ---
+    3 * 54 +  # opponent belief probabilities (3 opponents × 54 cards)
+    3 * 4 +   # opponent card-play counts (3 opponents × 4 features)
+    6         # trick context (position + lead suit)
+)  # = 270 + 162 + 12 + 6 = 450
+# Old state size for backward compat migration
+_OLD_STATE_SIZE_V1 = 270
 # Oracle critic sees all opponent hands (Perfect Training, Imperfect Execution)
 ORACLE_EXTRA_SIZE = 3 * 54  # 3 opponent hand vectors
-ORACLE_STATE_SIZE = STATE_SIZE + ORACLE_EXTRA_SIZE  # 270 + 162 = 432
+ORACLE_STATE_SIZE = STATE_SIZE + ORACLE_EXTRA_SIZE  # 450 + 162 = 612
 
 # Pre-allocated encoding buffers (one per process, safe for async single-threaded use)
 _state_buf = torch.zeros(STATE_SIZE, dtype=torch.float32)
