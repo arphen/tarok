@@ -101,6 +101,7 @@ class TrainingRequest(BaseModel):
     stockskis_strength: float = 1.0
     use_rust_engine: bool = False
     warmup_games: int = 0
+    batch_concurrency: int = 32
 
 
 class TrainingMetricsSchema(BaseModel):

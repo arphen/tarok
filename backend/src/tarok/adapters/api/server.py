@@ -87,6 +87,7 @@ async def start_training(req: TrainingRequest):
         stockskis_strength=req.stockskis_strength,
         use_rust_engine=req.use_rust_engine,
         warmup_games=req.warmup_games,
+        batch_concurrency=req.batch_concurrency,
     )
 
     async def on_metrics(metrics: TrainingMetrics):
