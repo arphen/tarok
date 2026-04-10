@@ -95,7 +95,7 @@ class StateTrackingObserver(NullObserver):
     async def on_talon_revealed(self, groups, state):
         await self._record("talon_revealed", state)
 
-    async def on_talon_exchanged(self, state):
+    async def on_talon_exchanged(self, state, picked=None, discarded=None):
         await self._record("talon_exchanged", state)
 
     async def on_card_played(self, player, card, state):

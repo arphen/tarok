@@ -8,8 +8,8 @@ from typing import Any
 
 from fastapi import WebSocket
 
-from tarok.entities.card import Card
-from tarok.entities.game_state import Contract, GameState, Trick
+from tarok.entities.card import Card, CardType, Suit, DECK
+from tarok.entities.game_state import Contract, GameState, Phase, Trick
 
 
 def _card_to_dict(card: Card) -> dict:
@@ -22,7 +22,100 @@ def _card_to_dict(card: Card) -> dict:
     }
 
 
-def _state_for_player(state: GameState, player_idx: int, player_names: list[str]) -> dict:
+def _build_card_tracker(state: GameState) -> dict:
+    """Build a card tracker for the human player (P0).
+    
+    Tracks which cards have been played, which are remaining,
+    which players are void in certain suits, and tarok ranges per player.
+    """
+    # All cards in the deck
+    all_cards = set(DECK)
+    
+    # Cards played so far (from completed tricks + current trick)
+    played_cards: list[tuple[int, Card]] = []
+    for trick in state.tricks:
+        for player, card in trick.cards:
+            played_cards.append((player, card))
+    if state.current_trick:
+        for player, card in state.current_trick.cards:
+            played_cards.append((player, card))
+    
+    played_set = {c for _, c in played_cards}
+    
+    # Cards known to be out of play: human hand + played + put_down
+    human_hand = set(state.hands[0]) if state.hands else set()
+    put_down = set(state.put_down) if state.put_down else set()
+    known_out = played_set | human_hand | put_down
+    
+    # Remaining cards (not in our hand, not played, not put down)
+    remaining = all_cards - known_out
+    
+    # Group remaining by suit/tarok
+    remaining_by_group: dict[str, list[dict]] = {
+        "taroks": [],
+        "hearts": [],
+        "diamonds": [],
+        "clubs": [],
+        "spades": [],
+    }
+    for c in sorted(remaining, key=lambda x: x.sort_key):
+        d = _card_to_dict(c)
+        if c.card_type == CardType.TAROK:
+            remaining_by_group["taroks"].append(d)
+        elif c.suit:
+            remaining_by_group[c.suit.value].append(d)
+    
+    # Track voids and tarok range per opponent
+    player_info: dict[int, dict] = {}
+    for p in range(4):
+        if p == 0:
+            continue  # skip human
+        
+        void_suits: list[str] = []
+        highest_tarok: int | None = None
+        lowest_tarok: int | None = None
+        taroks_played: list[int] = []
+        
+        for trick in state.tricks:
+            # Check for voids: if a player didn't follow suit, they're void
+            if len(trick.cards) >= 2:
+                lead_card = trick.cards[0][1]
+                lead_suit = lead_card.suit if lead_card.card_type == CardType.SUIT else None
+                
+                for tp, tc in trick.cards:
+                    if tp == p and lead_suit and tc.card_type == CardType.SUIT and tc.suit != lead_suit:
+                        if lead_suit.value not in void_suits:
+                            void_suits.append(lead_suit.value)
+                    if tp == p and lead_suit and tc.card_type == CardType.TAROK:
+                        if lead_suit.value not in void_suits:
+                            void_suits.append(lead_suit.value)
+            
+            # Track taroks played by this player
+            for tp, tc in trick.cards:
+                if tp == p and tc.card_type == CardType.TAROK:
+                    taroks_played.append(tc.value)
+        
+        if taroks_played:
+            highest_tarok = max(taroks_played)
+            lowest_tarok = min(taroks_played)
+        
+        player_info[p] = {
+            "void_suits": void_suits,
+            "highest_tarok": highest_tarok,
+            "lowest_tarok": lowest_tarok,
+            "taroks_played_count": len(taroks_played),
+        }
+    
+    return {
+        "remaining_by_group": remaining_by_group,
+        "remaining_count": len(remaining),
+        "player_info": {str(k): v for k, v in player_info.items()},
+    }
+
+
+def _state_for_player(state: GameState, player_idx: int, player_names: list[str],
+                      match_info: dict | None = None, reveal_hands: bool = False,
+                      card_tracker: dict | None = None) -> dict:
     from tarok.entities.game_state import Phase
 
     is_current = state.current_player == player_idx
@@ -79,6 +172,14 @@ def _state_for_player(state: GameState, player_idx: int, player_names: list[str]
         "callable_kings": callable_kings,
         "must_discard": must_discard,
         "player_names": player_names,
+        "card_tracker": card_tracker if card_tracker is not None else (
+            _build_card_tracker(state) if state.phase in (Phase.TRICK_PLAY, Phase.SCORING, Phase.FINISHED) else None
+        ),
+        "match_info": match_info,
+        "hands": (
+            {str(i): [_card_to_dict(c) for c in state.hands[i]] for i in range(len(state.hands))}
+            if reveal_hands else None
+        ),
     }
 
 
@@ -90,12 +191,44 @@ class WebSocketObserver:
         self._player_idx = player_idx
         self._player_names = player_names
         self.ai_delay = ai_delay
+        self._match_info: dict | None = None
+        self.reveal_hands: bool = False
+        self._last_tracker_tricks: int = -1
+        self._cached_tracker: dict | None = None
+
+    def set_match_info(
+        self,
+        round_num: int,
+        total_rounds: int,
+        cumulative_scores: dict,
+        caller_counts: dict,
+        called_counts: dict,
+        round_history: list[dict],
+    ) -> None:
+        self._match_info = {
+            "round_num": round_num,
+            "total_rounds": total_rounds,
+            "cumulative_scores": {str(k): v for k, v in cumulative_scores.items()},
+            "caller_counts": {str(k): v for k, v in caller_counts.items()},
+            "called_counts": {str(k): v for k, v in called_counts.items()},
+            "round_history": round_history,
+        }
 
     async def _send(self, event: str, data: Any, state: GameState) -> None:
+        # Cache card tracker — only recompute when trick count changes
+        tracker = None
+        if state.phase in (Phase.TRICK_PLAY, Phase.SCORING, Phase.FINISHED):
+            trick_count = len(state.current_trick.cards) if state.current_trick else 0
+            trick_count += state.tricks_played
+            if trick_count != self._last_tracker_tricks:
+                self._cached_tracker = _build_card_tracker(state)
+                self._last_tracker_tricks = trick_count
+            tracker = self._cached_tracker
+
         msg = {
             "event": event,
             "data": data,
-            "state": _state_for_player(state, self._player_idx, self._player_names),
+            "state": _state_for_player(state, self._player_idx, self._player_names, self._match_info, self.reveal_hands, tracker),
         }
         await self._ws.send_json(msg)
 
@@ -156,4 +289,42 @@ class WebSocketObserver:
     async def on_game_end(self, scores: dict[int, int], state: GameState) -> None:
         await self._send("game_end", {
             "scores": {str(k): v for k, v in scores.items()},
+        }, state)
+
+    async def send_match_update(
+        self,
+        cumulative_scores: dict,
+        caller_counts: dict,
+        called_counts: dict,
+        round_history: list[dict],
+        round_num: int,
+        total_rounds: int,
+        state: GameState,
+    ) -> None:
+        """Send match progress between rounds."""
+        await self._send("match_update", {
+            "cumulative_scores": {str(k): v for k, v in cumulative_scores.items()},
+            "caller_counts": {str(k): v for k, v in caller_counts.items()},
+            "called_counts": {str(k): v for k, v in called_counts.items()},
+            "round_history": round_history,
+            "round_num": round_num,
+            "total_rounds": total_rounds,
+        }, state)
+
+    async def send_match_end(
+        self,
+        cumulative_scores: dict,
+        caller_counts: dict,
+        called_counts: dict,
+        round_history: list[dict],
+        total_rounds: int,
+        state: GameState,
+    ) -> None:
+        """Send final match results."""
+        await self._send("match_end", {
+            "cumulative_scores": {str(k): v for k, v in cumulative_scores.items()},
+            "caller_counts": {str(k): v for k, v in caller_counts.items()},
+            "called_counts": {str(k): v for k, v in called_counts.items()},
+            "round_history": round_history,
+            "total_rounds": total_rounds,
         }, state)

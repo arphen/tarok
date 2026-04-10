@@ -31,7 +31,7 @@ function isTrula(card: CardData): boolean {
   return card.card_type === 'tarok' && [1, 21, 22].includes(card.value);
 }
 
-export default function Card({ card, onClick, disabled, highlighted, faceDown, small }: CardProps) {
+const Card = React.memo(function Card({ card, onClick, disabled, highlighted, faceDown, small }: CardProps) {
   if (faceDown) {
     return (
       <div className={`card card-back ${small ? 'card-small' : ''}`}>
@@ -102,4 +102,6 @@ export default function Card({ card, onClick, disabled, highlighted, faceDown, s
       )}
     </div>
   );
-}
+});
+
+export default Card;

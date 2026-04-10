@@ -24,7 +24,7 @@ const BID_OPTIONS = [
   { value: -100, label: 'Berač', description: 'Win 0 tricks, solo' },
 ];
 
-export default function BiddingPanel({
+const BiddingPanel = React.memo(function BiddingPanel({
   phase, bids, legalBids, onBid, playerNames, callableKings, onCallKing,
 }: BiddingPanelProps) {
   if (phase === 'king_calling' && callableKings && onCallKing) {
@@ -82,3 +82,6 @@ export default function BiddingPanel({
     </div>
   );
 }
+);
+
+export default BiddingPanel;

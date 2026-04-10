@@ -1,0 +1,177 @@
+.talon-drawer {
+  position: absolute;
+  top: 50%;
+  transform: translateY(-50%);
+  z-index: 20;
+  display: flex;
+  align-items: flex-start;
+}
+
+.talon-drawer-left {
+  left: 0;
+  flex-direction: row;
+}
+
+.talon-drawer-right {
+  right: 0;
+  flex-direction: row-reverse;
+}
+
+/* Tab button */
+.talon-drawer-tab {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 2px;
+  padding: 10px 6px;
+  background: rgba(0, 40, 20, 0.92);
+  border: 1px solid rgba(218, 165, 32, 0.3);
+  color: rgba(255, 255, 255, 0.7);
+  cursor: pointer;
+  font-size: 0.7rem;
+  transition: background 0.2s;
+  z-index: 21;
+}
+
+.talon-drawer-left .talon-drawer-tab {
+  border-radius: 0 8px 8px 0;
+  border-left: none;
+}
+
+.talon-drawer-right .talon-drawer-tab {
+  border-radius: 8px 0 0 8px;
+  border-right: none;
+}
+
+.talon-drawer-tab:hover {
+  background: rgba(0, 60, 30, 0.95);
+  color: #daa520;
+}
+
+.talon-drawer-tab-icon {
+  font-size: 1.1rem;
+}
+
+.talon-drawer-tab-label {
+  writing-mode: vertical-lr;
+  text-orientation: mixed;
+  letter-spacing: 1px;
+  font-weight: 600;
+}
+
+/* Sliding panel */
+.talon-drawer-panel {
+  width: 0;
+  overflow: hidden;
+  background: rgba(0, 35, 18, 0.95);
+  border: 1px solid rgba(218, 165, 32, 0.25);
+  border-radius: 8px;
+  transition: width 0.25s ease;
+  backdrop-filter: blur(8px);
+  max-height: 400px;
+  display: flex;
+  flex-direction: column;
+}
+
+.talon-drawer-open .talon-drawer-panel {
+  width: 240px;
+}
+
+.talon-drawer-open .talon-drawer-tab {
+  display: none;
+}
+
+.talon-drawer-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 10px 12px 6px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+  flex-shrink: 0;
+}
+
+.talon-drawer-header h4 {
+  margin: 0;
+  font-size: 0.85rem;
+  color: #daa520;
+}
+
+.talon-drawer-close {
+  background: none;
+  border: none;
+  color: rgba(255, 255, 255, 0.5);
+  cursor: pointer;
+  font-size: 1.2rem;
+  padding: 0 4px;
+  line-height: 1;
+}
+
+.talon-drawer-close:hover {
+  color: #fff;
+}
+
+.talon-drawer-body {
+  padding: 8px 12px;
+  overflow-y: auto;
+  flex: 1;
+}
+
+.talon-drawer-section {
+  margin-bottom: 12px;
+}
+
+.talon-drawer-section h5 {
+  margin: 0 0 6px;
+  font-size: 0.7rem;
+  color: rgba(255, 255, 255, 0.5);
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+
+.talon-drawer-groups {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.talon-drawer-group {
+  position: relative;
+  padding: 6px;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 6px;
+  background: rgba(255, 255, 255, 0.03);
+}
+
+.talon-drawer-group-chosen {
+  border-color: rgba(218, 165, 32, 0.4);
+  background: rgba(218, 165, 32, 0.08);
+}
+
+.talon-chosen-badge {
+  position: absolute;
+  top: -8px;
+  right: 6px;
+  font-size: 0.6rem;
+  background: #daa520;
+  color: #000;
+  padding: 1px 6px;
+  border-radius: 3px;
+  font-weight: 700;
+  text-transform: uppercase;
+}
+
+.talon-drawer-cards {
+  display: flex;
+  gap: 4px;
+  flex-wrap: wrap;
+}
+
+/* Scrollbar */
+.talon-drawer-body::-webkit-scrollbar {
+  width: 3px;
+}
+
+.talon-drawer-body::-webkit-scrollbar-thumb {
+  background: rgba(255, 255, 255, 0.15);
+  border-radius: 3px;
+}
