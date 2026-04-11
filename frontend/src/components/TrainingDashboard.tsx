@@ -124,7 +124,21 @@ export default function TrainingDashboard({ onBack }: Props) {
   const historyOffset = metrics?.history_offset ?? 0;
 
   const rewardData = useMemo(() => smoothAndSample(metrics?.reward_history.map((v, i) => ({ s: historyOffset + i + 1, reward: v })) ?? [], ['reward']), [metrics?.reward_history, historyOffset, smoothAndSample]);
-  const winRateData = useMemo(() => smoothAndSample(metrics?.win_rate_history.map((v, i) => ({ s: historyOffset + i + 1, winRate: +(v * 100).toFixed(1) })) ?? [], ['winRate']), [metrics?.win_rate_history, historyOffset, smoothAndSample]);
+  const placementData = useMemo(() => smoothAndSample(metrics?.avg_placement_history.map((v, i) => ({ s: historyOffset + i + 1, placement: +(v).toFixed(2) })) ?? [], ['placement']), [metrics?.avg_placement_history, historyOffset, smoothAndSample]);
+  const placementByOpponentData = useMemo(() => {
+    if (!metrics) return [];
+    const s = metrics.placement_selfplay_history ?? [];
+    const h = metrics.placement_hof_history ?? [];
+    const v5 = metrics.placement_v5_history ?? [];
+    const n = Math.max(s.length, h.length, v5.length);
+    const rows = Array.from({ length: n }, (_, i) => ({
+      s: historyOffset + i + 1,
+      selfplay: s[i],
+      hof: h[i],
+      v5: v5[i],
+    }));
+    return smoothAndSample(rows, ['selfplay', 'hof', 'v5']);
+  }, [metrics, historyOffset, smoothAndSample]);
   const lossData = useMemo(() => smoothAndSample(metrics?.loss_history.map((v, i) => ({ s: historyOffset + i + 1, loss: v })) ?? [], ['loss']), [metrics?.loss_history, historyOffset, smoothAndSample]);
   const sessionScoreData = useMemo(() => smoothAndSample(metrics?.session_avg_score_history?.map((v, i) => ({ s: historyOffset + i + 1, avgScore: v })) ?? [], ['avgScore']), [metrics?.session_avg_score_history, historyOffset, smoothAndSample]);
   const stockskisPlaceData = useMemo(() => smoothAndSample(metrics?.stockskis_place_history?.map((v, i) => ({ s: historyOffset + i + 1, place: v })) ?? [], ['place']), [metrics?.stockskis_place_history, historyOffset, smoothAndSample]);
@@ -150,14 +164,14 @@ export default function TrainingDashboard({ onBack }: Props) {
 
   // Contract win-rate over time
   const contractWinData = useMemo(() => smoothAndSample(metrics?.contract_win_rate_history
-    ? (metrics.win_rate_history || []).map((_, i) => {
-        const row: Record<string, number> = { s: historyOffset + i + 1 };
+    ? (metrics.avg_placement_history || []).map((_, i) => {
+        const row: any = { s: historyOffset + i + 1 };
         for (const [cname, arr] of Object.entries(metrics.contract_win_rate_history)) {
           if (arr[i] !== undefined) row[cname] = +(arr[i] * 100).toFixed(1);
         }
         return row;
       })
-    : [], Object.keys(metrics?.contract_win_rate_history || {})), [metrics?.contract_win_rate_history, metrics?.win_rate_history, historyOffset, smoothAndSample]);
+    : [], Object.keys(metrics?.contract_win_rate_history || {})), [metrics?.contract_win_rate_history, metrics?.avg_placement_history, historyOffset, smoothAndSample]);
 
   const sessionPct = metrics && metrics.total_sessions > 0
     ? (metrics.session / metrics.total_sessions) * 100
@@ -275,7 +289,7 @@ export default function TrainingDashboard({ onBack }: Props) {
 
       {/* Stat cards */}
       <div className="td-stats">
-        <StatCard label="Win Rate" value={`${((metrics?.win_rate ?? 0) * 100).toFixed(1)}%`} highlight />
+        <StatCard label="Avg Placement" value={metrics?.avg_placement?.toFixed(2) ?? "0.00"} highlight />
         <StatCard label="Avg Reward" value={(metrics?.avg_reward ?? 0).toFixed(2)} />
         <StatCard label="Sess. Avg Score"
           value={metrics?.session_avg_score_history?.length
@@ -303,14 +317,18 @@ export default function TrainingDashboard({ onBack }: Props) {
       <div className="td-tab-content">
         {tab === 'overview' && (
           <div className="chart-grid">
-            <ChartCard title="Win Rate Over Time">
+            <ChartCard title="Avg Placement Over Time">
               <ResponsiveContainer width="100%" height={260}>
-                <LineChart data={winRateData}>
+                <LineChart data={placementByOpponentData.length > 0 ? placementByOpponentData : placementData}>
                   <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.08)" />
                   <XAxis dataKey="s" stroke="#666" fontSize={11} type="number" domain={['dataMin', 'dataMax']} />
-                  <YAxis stroke="#666" fontSize={11} domain={[0, 100]} unit="%" />
+                  <YAxis stroke="#666" fontSize={11} domain={[1.0, 4.0]} reversed tickCount={4} />
                   <Tooltip {...tooltipStyle} />
-                  <Line type="monotone" dataKey="winRate" stroke="#4caf50" strokeWidth={2} dot={false} name="Win %" />
+                  <Legend />
+                  <Line type="monotone" dataKey="selfplay" stroke="#4caf50" strokeWidth={2} dot={false} name="Self-Play" connectNulls />
+                  <Line type="monotone" dataKey="hof" stroke="#ff9800" strokeWidth={2} dot={false} name="HoF" connectNulls />
+                  <Line type="monotone" dataKey="v5" stroke="#2196f3" strokeWidth={2} dot={false} name="StockSkis v5" connectNulls />
+                  <Line type="monotone" dataKey="placement" stroke="#9e9e9e" strokeWidth={1.5} dot={false} name="Overall" connectNulls />
                 </LineChart>
               </ResponsiveContainer>
             </ChartCard>

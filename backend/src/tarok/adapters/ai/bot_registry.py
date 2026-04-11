@@ -1,17 +1,30 @@
-"""Bot registry — plugin system for discovering and instantiating bot players.
+"""Player factory — unified plugin system for creating any player type.
 
-Any module under ``tarok.adapters.ai`` whose filename matches ``stockskis*.py``
-is auto-discovered.  External plugins can register via :func:`register_bot`.
+Supports bots (heuristic, baseline, search), neural network agents,
+and human players — all through the same interface. Any module under
+``tarok.adapters.ai`` whose filename matches ``stockskis*.py`` is
+auto-discovered.
 
 Usage::
 
-    from tarok.adapters.ai.bot_registry import BotRegistry
+    from tarok.adapters.ai.bot_registry import get_registry
 
-    registry = BotRegistry()
-    registry.discover()                        # auto-scan built-in bots
+    factory = get_registry()
 
-    info = registry.list_bots()                # [{id, name, description, category, ...}]
-    player = registry.create("stockskis_v5")   # instantiate a PlayerPort
+    # Bots
+    bot = factory.create("stockskis_v5", name="Bot-0")
+
+    # Neural network agent from checkpoint
+    ai = factory.create("nn", name="AI", checkpoint="path/to/model.pt")
+
+    # Fresh neural network (for self-play training)
+    ai = factory.create("nn", name="Lab-0", hidden_size=256, device="cpu")
+
+    # Human player (WebSocket)
+    human = factory.create("human", name="You")
+
+    # List all available player types
+    info = factory.list_bots()
 """
 
 from __future__ import annotations
@@ -100,20 +113,6 @@ class BotRegistry:
             lambda name="Random", **kw: RandomPlayer(name=name),
         )
 
-        # StockŠkis v1 lives in stockskis_player.py (not stockskis_v1.py)
-        self.register(
-            BotInfo(
-                id="stockskis_v1",
-                name="StockŠkis v1",
-                description=_STOCKSKIS_DESCRIPTIONS[1],
-                category="heuristic",
-                version=1,
-            ),
-            _make_stockskis_factory(
-                "tarok.adapters.ai.stockskis_player", "StockSkisPlayer", 1
-            ),
-        )
-
         # Lookahead (Monte Carlo search) — import lazily to avoid hard dep
         try:
             from tarok.adapters.ai.lookahead_agent import LookaheadAgent
@@ -133,6 +132,29 @@ class BotRegistry:
         except ImportError:
             pass
 
+        # Neural network agent
+        self.register(
+            BotInfo(
+                id="nn",
+                name="Neural Network",
+                description="TarokNet RL agent — load from checkpoint or create fresh",
+                category="neural",
+                default_params={"hidden_size": 256, "device": "cpu"},
+            ),
+            _make_nn_factory(),
+        )
+
+        # Human player (WebSocket)
+        self.register(
+            BotInfo(
+                id="human",
+                name="Human",
+                description="Human player via WebSocket connection",
+                category="human",
+            ),
+            _make_human_factory(),
+        )
+
     def _discover_stockskis(self) -> None:
         """Scan the ai/ directory for stockskis*.py files and register them."""
         ai_dir = Path(__file__).resolve().parent
@@ -149,13 +171,9 @@ class BotRegistry:
             seen_versions.add(version)
 
             # Determine module and class name
-            module_name = fpath.stem  # e.g. "stockskis_player", "stockskis_v3"
-            if version == 1:
-                class_name = "StockSkisPlayer"
-                full_module = "tarok.adapters.ai.stockskis_player"
-            else:
-                class_name = f"StockSkisPlayerV{version}"
-                full_module = f"tarok.adapters.ai.{module_name}"
+            module_name = fpath.stem  # e.g. "stockskis_v5"
+            class_name = f"StockSkisPlayerV{version}"
+            full_module = f"tarok.adapters.ai.{module_name}"
 
             bot_id = f"stockskis_v{version}"
             desc = _STOCKSKIS_DESCRIPTIONS.get(version, f"StockŠkis heuristic bot version {version}")
@@ -225,6 +243,37 @@ def _make_stockskis_factory(module_path: str, class_name: str, version: int) -> 
         mod = importlib.import_module(module_path)
         cls = getattr(mod, class_name)
         return cls(name=name, **kwargs)
+
+    return factory
+
+
+def _make_nn_factory() -> BotFactory:
+    """Create a factory for neural network agents."""
+
+    def factory(
+        name: str = "NN",
+        checkpoint: str | None = None,
+        hidden_size: int = 256,
+        device: str = "cpu",
+        explore_rate: float = 0.0,
+        **kwargs: Any,
+    ) -> Any:
+        from tarok.adapters.ai.agent import RLAgent
+
+        if checkpoint:
+            return RLAgent.from_checkpoint(checkpoint, name=name, device=device)
+        return RLAgent(name=name, hidden_size=hidden_size, device=device, explore_rate=explore_rate)
+
+    return factory
+
+
+def _make_human_factory() -> BotFactory:
+    """Create a factory for human WebSocket players."""
+
+    def factory(name: str = "Human", **kwargs: Any) -> Any:
+        from tarok.adapters.api.human_player import HumanPlayer
+
+        return HumanPlayer(name=name)
 
     return factory
 

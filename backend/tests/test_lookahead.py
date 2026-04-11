@@ -227,7 +227,7 @@ class TestTrainerStubs:
 async def test_training_with_lookahead_opponents():
     """A short training run with lookahead_ratio=1.0 should complete without errors."""
     from tarok.adapters.ai.agent import RLAgent
-    from tarok.adapters.ai.trainer import PPOTrainer
+    from tarok.adapters.ai.training_lab import PPOTrainer
 
     agents = [RLAgent(name=f"RL-{i}", hidden_size=64) for i in range(4)]
     trainer = PPOTrainer(
@@ -252,7 +252,7 @@ async def test_training_with_lookahead_opponents():
 async def test_training_lookahead_scores_populated():
     """Lookahead score and bid-rate histories should contain valid numbers."""
     from tarok.adapters.ai.agent import RLAgent
-    from tarok.adapters.ai.trainer import PPOTrainer
+    from tarok.adapters.ai.training_lab import PPOTrainer
 
     agents = [RLAgent(name=f"RL-{i}", hidden_size=64) for i in range(4)]
     trainer = PPOTrainer(
@@ -277,7 +277,7 @@ async def test_training_lookahead_scores_populated():
 async def test_training_metrics_to_dict_includes_lookahead():
     """to_dict() must include lookahead histories so the frontend can graph them."""
     from tarok.adapters.ai.agent import RLAgent
-    from tarok.adapters.ai.trainer import PPOTrainer
+    from tarok.adapters.ai.training_lab import PPOTrainer
 
     agents = [RLAgent(name=f"RL-{i}", hidden_size=64) for i in range(4)]
     trainer = PPOTrainer(
@@ -367,7 +367,7 @@ async def test_perfect_info_choose_card_legal():
 async def test_trainer_uses_perfect_info_lookahead():
     """Trainer should create perfect-info lookahead opponents by default."""
     from tarok.adapters.ai.agent import RLAgent
-    from tarok.adapters.ai.trainer import PPOTrainer
+    from tarok.adapters.ai.training_lab import PPOTrainer
 
     agents = [RLAgent(name=f"RL-{i}", hidden_size=64) for i in range(4)]
     trainer = PPOTrainer(
@@ -392,7 +392,7 @@ async def test_trainer_uses_perfect_info_lookahead():
 async def test_trainer_imperfect_info_lookahead():
     """Trainer can create imperfect-info (Monte Carlo) lookahead opponents."""
     from tarok.adapters.ai.agent import RLAgent
-    from tarok.adapters.ai.trainer import PPOTrainer
+    from tarok.adapters.ai.training_lab import PPOTrainer
 
     agents = [RLAgent(name=f"RL-{i}", hidden_size=64) for i in range(4)]
     trainer = PPOTrainer(
@@ -417,7 +417,7 @@ async def test_trainer_imperfect_info_lookahead():
 async def test_normal_training_without_lookahead():
     """Normal self-play training (no lookahead) must still work."""
     from tarok.adapters.ai.agent import RLAgent
-    from tarok.adapters.ai.trainer import PPOTrainer
+    from tarok.adapters.ai.training_lab import PPOTrainer
 
     agents = [RLAgent(name=f"RL-{i}", hidden_size=64) for i in range(4)]
     trainer = PPOTrainer(

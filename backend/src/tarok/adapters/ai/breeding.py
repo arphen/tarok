@@ -35,7 +35,7 @@ from tarok.adapters.ai.behavioral_profile import (
     GENE_SIGMAS,
     NUM_GENES,
 )
-from tarok.adapters.ai.trainer import PPOTrainer, TrainingMetrics
+from tarok.adapters.ai.training_lab import PPOTrainer, TrainingMetrics
 from tarok.use_cases.game_loop import GameLoop
 
 
@@ -175,7 +175,7 @@ async def _evaluate_variant(
     When use_stockskis is True, opponents are StockŠkis heuristic bots
     instead of base-model clones, providing a fixed external benchmark.
     """
-    from tarok.adapters.ai.stockskis_player import StockSkisPlayer
+    from tarok.adapters.ai.stockskis_v5 import StockSkisPlayerV5
 
     # The profiled agent (player 0)
     agent0 = RLAgent(
@@ -191,7 +191,7 @@ async def _evaluate_variant(
 
     if use_stockskis:
         opponents: list = [
-            StockSkisPlayer(name=f"StockŠkis-{i+1}", strength=stockskis_strength)
+            StockSkisPlayerV5(name=f"StockŠkis-{i+1}", strength=stockskis_strength)
             for i in range(3)
         ]
     else:

@@ -26,6 +26,35 @@ from typing import Any
 import torch
 
 # ---------------------------------------------------------------------------
+# Slovenian male first names for island descendants
+# ---------------------------------------------------------------------------
+
+_SLOVENIAN_MALE_NAMES = [
+    "Luka", "Janez", "Marko", "Andrej", "Matej", "Tomaž", "Gregor", "Rok",
+    "Blaž", "Žiga", "Miha", "Tadej", "Nejc", "Anže", "Bojan", "Dejan",
+    "Gašper", "Jure", "Primož", "Simon", "Aleš", "Igor", "Matija", "Uroš",
+    "Boštjan", "Damjan", "Filip", "Jakob", "Klemen", "Leon", "Tilen", "Vid",
+    "Žan", "Aljaž", "Borut", "David", "Erik", "Franc", "Gorazd", "Ivan",
+    "Jernej", "Karel", "Lovro", "Matic", "Niko", "Oskar", "Pavel", "Robert",
+    "Samo", "Tim", "Urban", "Valentin", "Vinko", "Zdravko", "Peter", "Mitja",
+    "Sašo", "Tone", "Domen", "Jan",
+]
+
+_SLOVENIAN_LAST_NAMES = [
+    "Novak", "Horvat", "Kovač", "Krajnc", "Zupan", "Potočnik", "Mlakar", "Kos",
+    "Vidmar", "Golob", "Turk", "Korošec", "Košir", "Bizjak", "Mezgec", "Oblak",
+    "Kern", "Repnik", "Žagar", "Hribar", "Pintar", "Kolenc", "Štrukelj", "Ribič",
+]
+
+
+def _generate_island_name(island_id: int, generation: int, rng: random.Random) -> dict:
+    """Generate a Slovenian male name for an island descendant."""
+    first = rng.choice(_SLOVENIAN_MALE_NAMES)
+    last = rng.choice(_SLOVENIAN_LAST_NAMES)
+    return {"first_name": first, "last_name": last, "age": generation, "island_id": island_id}
+
+
+# ---------------------------------------------------------------------------
 # Constants
 # ---------------------------------------------------------------------------
 
@@ -162,6 +191,7 @@ def _save_to_hof(
     generation: int,
     eval_results: dict,
     hof_dir: Path,
+    persona: dict | None = None,
 ) -> None:
     """Save a model snapshot to the Hall of Fame."""
     import hashlib
@@ -172,13 +202,18 @@ def _save_to_hof(
         str(sorted((k, v.sum().item()) for k, v in network_state.items())).encode()
     ).hexdigest()[:8]
 
-    filename = f"hof_island{island_id}_gen{generation}_{h}.pt"
+    if persona is None:
+        persona = {"first_name": f"Island{island_id}", "last_name": "Worker", "age": generation, "island_id": island_id}
+
+    display_name = f"{persona['first_name']} {persona['last_name']} (gen {generation}) #{h}"
+
+    filename = f"hof_{persona['first_name']}_{persona['last_name']}_island{island_id}_gen{generation}_{h}.pt"
     data = {
         "model_state_dict": network_state,
-        "persona": {"first_name": f"Island{island_id}", "last_name": "Worker", "age": generation},
+        "persona": persona,
         "model_hash": h,
-        "display_name": f"Island {island_id} gen {generation} #{h}",
-        "model_name": f"Island {island_id} gen {generation} #{h}",
+        "display_name": display_name,
+        "model_name": display_name,
         "phase_label": f"island-{island_id}-g{generation}",
         "eval_history": [],
         "hidden_size": hidden_size,
@@ -199,10 +234,12 @@ def _save_to_hof(
             manifest = []
     manifest_entry = {
         "filename": filename,
-        "display_name": data["display_name"],
-        "persona": data["persona"],
+        "display_name": display_name,
+        "persona": persona,
         "model_hash": h,
         "phase_label": data["phase_label"],
+        "island_id": island_id,
+        "generation": generation,
         "saved_at": data["saved_at"],
     }
     for k, v in eval_results.items():
@@ -221,11 +258,6 @@ def _save_to_hof(
 def _evaluate_vs_bots(network, num_games: int, version: str) -> dict:
     """Evaluate a network vs heuristic bots. Fully synchronous."""
     from tarok.adapters.ai.agent import RLAgent
-    from tarok.adapters.ai.stockskis_player import StockSkisPlayer
-    from tarok.adapters.ai.stockskis_v2 import StockSkisPlayerV2
-    from tarok.adapters.ai.stockskis_v3 import StockSkisPlayerV3
-    from tarok.adapters.ai.stockskis_v3_2 import StockSkisPlayerV3_2
-    from tarok.adapters.ai.stockskis_v4 import StockSkisPlayerV4
     from tarok.adapters.ai.stockskis_v5 import StockSkisPlayerV5
     from tarok.use_cases.game_loop import GameLoop
 
@@ -236,18 +268,7 @@ def _evaluate_vs_bots(network, num_games: int, version: str) -> dict:
     agent.network = network
     agent.set_training(False)
 
-    if version == "v2":
-        opponents = [StockSkisPlayerV2(name=f"V2-{i}") for i in range(3)]
-    elif version == "v3":
-        opponents = [StockSkisPlayerV3(name=f"V3-{i}") for i in range(3)]
-    elif version == "v3.2":
-        opponents = [StockSkisPlayerV3_2(name=f"V3.2-{i}") for i in range(3)]
-    elif version == "v4":
-        opponents = [StockSkisPlayerV4(name=f"V4-{i}") for i in range(3)]
-    elif version == "v5":
-        opponents = [StockSkisPlayerV5(name=f"V5-{i}") for i in range(3)]
-    else:
-        opponents = [StockSkisPlayer(name=f"V1-{i}", strength=1.0) for i in range(3)]
+    opponents = [StockSkisPlayerV5(name=f"V5-{i}") for i in range(3)]
 
     wins = 0
     total_diff = 0
@@ -279,6 +300,191 @@ def _evaluate_vs_bots(network, num_games: int, version: str) -> dict:
         "win_rate": round(wins / max(num_games, 1), 4),
         "avg_score": round(total_diff / max(num_games, 1), 2),
     }
+
+
+# ---------------------------------------------------------------------------
+# Post-training round-robin tournament between HoF models
+# ---------------------------------------------------------------------------
+
+def run_hof_tournament(
+    hof_dir: Path,
+    games_per_matchup: int = 20,
+    hidden_size: int = 256,
+    progress_callback=None,
+    max_models: int = 32,
+) -> list[dict]:
+    """Load all HoF models and run a round-robin tournament.
+
+    Each model plays *games_per_matchup* games in each seat (0-3) against
+    every combination of 3 other models (or backfills with the strongest
+    available if fewer than 4 models).  Returns a ranking sorted by
+    cumulative score (best first).
+
+    If there are more than *max_models* unique models, only the top ones
+    (by vs_v3 win-rate) are included in the tournament.
+
+    Each entry in the returned list:
+      { name, persona, filename, model_hash, wins, games, win_rate,
+        avg_score, cumulative_score, rank }
+    """
+    from tarok.adapters.ai.agent import RLAgent
+    from tarok.adapters.ai.network import TarokNet
+    from tarok.use_cases.game_loop import GameLoop
+
+    manifest_path = hof_dir / "manifest.json"
+    if not manifest_path.exists():
+        return []
+    try:
+        manifest = json.loads(manifest_path.read_text())
+    except Exception:
+        return []
+    if not manifest:
+        return []
+
+    # Deduplicate by model_hash — keep best per hash
+    by_hash: dict[str, dict] = {}
+    for entry in manifest:
+        h = entry.get("model_hash", "")
+        old = by_hash.get(h)
+        if old is None or entry.get("vs_v3", 0) > old.get("vs_v3", 0):
+            by_hash[h] = entry
+    unique_entries = list(by_hash.values())
+
+    # Cap to top N models by best eval score to keep tournament tractable
+    if len(unique_entries) > max_models:
+        unique_entries.sort(key=lambda e: max(
+            e.get("vs_v3", 0), e.get("vs_v5", 0), e.get("vs_v2", 0),
+        ), reverse=True)
+        unique_entries = unique_entries[:max_models]
+
+    if len(unique_entries) < 2:
+        # Need at least 2 models for a tournament
+        return [{
+            **unique_entries[0],
+            "wins": 0, "games": 0, "win_rate": 0, "avg_score": 0,
+            "cumulative_score": 0, "rank": 1,
+        }] if unique_entries else []
+
+    # Load networks
+    models: list[tuple[dict, TarokNet]] = []
+    for entry in unique_entries:
+        pt_path = hof_dir / entry["filename"]
+        if not pt_path.exists():
+            continue
+        try:
+            data = torch.load(pt_path, map_location="cpu", weights_only=False)
+            net = TarokNet(hidden_size=hidden_size)
+            net.load_state_dict(data["model_state_dict"])
+            net.eval()
+            models.append((entry, net))
+        except Exception:
+            continue
+
+    if len(models) < 2:
+        return []
+
+    # Round-robin: each pair plays games_per_matchup games
+    # with models rotating through different seats
+    standings: dict[str, dict] = {}
+    for entry, _ in models:
+        h = entry["model_hash"]
+        standings[h] = {
+            "name": entry.get("display_name", f"#{h}"),
+            "persona": entry.get("persona", {}),
+            "filename": entry["filename"],
+            "model_hash": h,
+            "island_id": entry.get("island_id"),
+            "generation": entry.get("generation", 0),
+            "wins": 0,
+            "games": 0,
+            "cumulative_score": 0,
+            "vs_bot_scores": {k: v for k, v in entry.items() if k.startswith("vs_")},
+        }
+
+    loop = asyncio.new_event_loop()
+    total_matchups = len(models) * (len(models) - 1) // 2
+    matchup_idx = 0
+
+    try:
+        for i in range(len(models)):
+            for j in range(i + 1, len(models)):
+                matchup_idx += 1
+                entry_i, net_i = models[i]
+                entry_j, net_j = models[j]
+
+                if progress_callback:
+                    progress_callback(matchup_idx, total_matchups,
+                                      entry_i.get("display_name", "?"),
+                                      entry_j.get("display_name", "?"))
+
+                # Fill remaining 2 seats with copies of the stronger model
+                for g in range(games_per_matchup):
+                    agents_list: list = []
+                    # Rotate seats: model_i sits at seat g%4, model_j at (g+1)%4
+                    seat_i = g % 4
+                    seat_j = (g + 1) % 4
+
+                    for seat in range(4):
+                        if seat == seat_i:
+                            a = RLAgent(name=entry_i.get("display_name", f"M{i}"),
+                                        hidden_size=hidden_size, device="cpu", explore_rate=0.0)
+                            a.network = net_i
+                            a.set_training(False)
+                            agents_list.append((a, entry_i["model_hash"]))
+                        elif seat == seat_j:
+                            a = RLAgent(name=entry_j.get("display_name", f"M{j}"),
+                                        hidden_size=hidden_size, device="cpu", explore_rate=0.0)
+                            a.network = net_j
+                            a.set_training(False)
+                            agents_list.append((a, entry_j["model_hash"]))
+                        else:
+                            # Fill with alternating models
+                            fill_net = net_i if (seat % 2 == 0) else net_j
+                            fill_entry = entry_i if (seat % 2 == 0) else entry_j
+                            a = RLAgent(name=f"Fill-{seat}", hidden_size=hidden_size, device="cpu", explore_rate=0.0)
+                            a.network = fill_net
+                            a.set_training(False)
+                            agents_list.append((a, fill_entry["model_hash"]))
+
+                    game = GameLoop([a for a, _ in agents_list], rng=random.Random(g + i * 1000 + j * 100))
+                    state, scores = loop.run_until_complete(game.run(dealer=g % 4))
+
+                    for seat, (agent, model_hash) in enumerate(agents_list):
+                        s = standings.get(model_hash)
+                        if s is None:
+                            continue
+                        raw = scores.get(seat, 0)
+                        s["games"] += 1
+                        s["cumulative_score"] += raw
+                        is_klop = state.contract is not None and state.contract.is_klop
+                        if is_klop:
+                            won = raw > 0
+                        elif state.declarer == seat:
+                            won = raw > 0
+                        else:
+                            declarer_score = scores.get(state.declarer, 0) if state.declarer is not None else 0
+                            won = declarer_score < 0
+                        if won:
+                            s["wins"] += 1
+
+                    # Clean up experiences
+                    for a, _ in agents_list:
+                        a.clear_experiences()
+    finally:
+        loop.close()
+
+    # Compute final stats and rank
+    ranking = []
+    for h, s in standings.items():
+        s["win_rate"] = round(s["wins"] / max(s["games"], 1), 4)
+        s["avg_score"] = round(s["cumulative_score"] / max(s["games"], 1), 2)
+        ranking.append(s)
+
+    ranking.sort(key=lambda x: (x["win_rate"], x["avg_score"]), reverse=True)
+    for i, entry in enumerate(ranking):
+        entry["rank"] = i + 1
+
+    return ranking
 
 
 # ---------------------------------------------------------------------------
@@ -349,7 +555,7 @@ def island_worker(
     """
     from tarok.adapters.ai.agent import RLAgent
     from tarok.adapters.ai.network import TarokNet
-    from tarok.adapters.ai.trainer import PPOTrainer
+    from tarok.adapters.ai.training_lab import PPOTrainer
 
     if eval_bots is None:
         eval_bots = ["v1", "v3"]
@@ -372,6 +578,9 @@ def island_worker(
     # --- Initialize hparams ---
     hp = hparams or _default_hparams()
     hp = _mutate_hparams(hp, rng, mutation_scale)
+
+    # --- Generate Slovenian name for this island ---
+    persona = _generate_island_name(island_id, 0, rng)
 
     # --- Create trainer ---
     agents = [
@@ -488,16 +697,20 @@ def island_worker(
             else:
                 fitness = reward_norm
 
-            # --- Save to HoF if improved ---
+            # --- Save to HoF if improved AND above minimum quality ---
+            HOF_MIN_FITNESS = 0.35  # Don't pollute HoF with weak early models
             if fitness > best_fitness:
                 best_fitness = fitness
                 best_eval = {f"vs_{v}": eval_results[v]["win_rate"] for v in eval_bots}
-                hof_eval = {f"vs_{v}": eval_results[v]["win_rate"] for v in eval_bots}
-                _save_to_hof(
-                    net.state_dict(), hidden_size, island_id, generation,
-                    hof_eval,
-                    hof_dir,
-                )
+                if fitness >= HOF_MIN_FITNESS:
+                    hof_eval = {f"vs_{v}": eval_results[v]["win_rate"] for v in eval_bots}
+                    persona["age"] = generation
+                    _save_to_hof(
+                        net.state_dict(), hidden_size, island_id, generation,
+                        hof_eval,
+                        hof_dir,
+                        persona=persona,
+                    )
 
             # --- Push current weights to FSP bank ---
             if fsp_ratio > 0:
@@ -538,6 +751,8 @@ def island_worker(
             # --- Write stats for dashboard ---
             stats_data = {
                 "island_id": island_id,
+                "name": f"{persona['first_name']} {persona['last_name']}",
+                "persona": persona,
                 "generation": generation,
                 "total_games": total_games,
                 "games_per_sec": round(gps, 1),
@@ -568,6 +783,8 @@ def island_worker(
         elapsed = time.perf_counter() - t_start
         final_stats = {
             "island_id": island_id,
+            "name": f"{persona['first_name']} {persona['last_name']}",
+            "persona": persona,
             "generation": generation,
             "total_games": total_games,
             "games_per_sec": round(total_games / max(elapsed, 0.01), 1),

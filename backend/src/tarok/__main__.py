@@ -48,7 +48,7 @@ async def run_training(num_sessions: int, games_per_session: int):
     import os
     import torch
     from tarok.adapters.ai.agent import RLAgent
-    from tarok.adapters.ai.trainer import PPOTrainer
+    from tarok.adapters.ai.training_lab import PPOTrainer
 
     device = "cpu"
     if torch.cuda.is_available():
@@ -374,7 +374,7 @@ async def run_pipeline_cli():
     import torch
     from tarok.adapters.ai.agent import RLAgent
     from tarok.adapters.ai.imitation import imitation_pretrain
-    from tarok.adapters.ai.trainer import PPOTrainer
+    from tarok.adapters.ai.training_lab import PPOTrainer
 
     device = "cpu"
     if torch.cuda.is_available():

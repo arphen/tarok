@@ -135,19 +135,36 @@ async def test_rust_game_loop_different_dealers(rl_agents):
         assert len(scores) == 4
 
 
+async def test_rust_game_loop_mixed_players_compatible():
+    """RustGameLoop should support non-RL players via compatibility fallback."""
+    from tarok.adapters.ai.agent import RLAgent
+    from tarok.adapters.ai.rust_game_loop import RustGameLoop
+    from tarok.adapters.ai.stockskis_v5 import StockSkisPlayerV5
+
+    agents = [RLAgent(name="RL-0")]
+    agents.extend(StockSkisPlayerV5(name=f"Skis-{i}") for i in range(1, 4))
+    agents[0].set_training(False)
+
+    loop = RustGameLoop(agents)
+    _state, scores = await loop.run()
+
+    assert isinstance(scores, dict)
+    assert len(scores) == 4
+
+
 # ---- Trainer fallback ----
 
 
 def test_trainer_has_rust_flag():
     """Trainer module should expose _HAS_RUST flag."""
-    from tarok.adapters.ai import trainer
-    assert isinstance(trainer._HAS_RUST, bool)
+    from tarok.adapters.ai import training_lab
+    assert isinstance(training_lab._HAS_RUST, bool)
 
 
 def test_trainer_rust_flag_true_when_installed():
     """With the engine installed, _HAS_RUST should be True."""
-    from tarok.adapters.ai import trainer
-    assert trainer._HAS_RUST is True
+    from tarok.adapters.ai import training_lab
+    assert training_lab._HAS_RUST is True
 
 
 def test_rust_game_loop_import_succeeds():

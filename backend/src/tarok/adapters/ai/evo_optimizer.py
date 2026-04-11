@@ -22,7 +22,7 @@ import torch
 from deap import base, creator, tools, algorithms
 
 from tarok.adapters.ai.agent import RLAgent
-from tarok.adapters.ai.trainer import PPOTrainer, TrainingMetrics
+from tarok.adapters.ai.training_lab import PPOTrainer, TrainingMetrics
 
 
 # ---------------------------------------------------------------------------

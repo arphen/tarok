@@ -98,7 +98,7 @@ export interface TrainingMetrics {
   total_sessions: number;
   avg_reward: number;
   avg_loss: number;
-  win_rate: number;
+  avg_placement: number;
   entropy: number;
   value_loss: number;
   policy_loss: number;
@@ -109,7 +109,7 @@ export interface TrainingMetrics {
   contract_stats: Record<string, ContractStat>;
   history_offset: number;
   reward_history: number[];
-  win_rate_history: number[];
+  avg_placement_history: number[];
   loss_history: number[];
   bid_rate_history: number[];
   klop_rate_history: number[];
@@ -121,6 +121,10 @@ export interface TrainingMetrics {
   lookahead_bid_rate_history: number[];
   snapshots: SnapshotInfo[];
   tarok_count_bids?: Record<string, Record<string, number>>;
+  // Per-opponent avg placement histories
+  placement_selfplay_history: number[];
+  placement_hof_history: number[];
+  placement_v5_history: number[];
 }
 
 export const CONTRACT_NAMES: Record<number, string> = {

@@ -9,7 +9,10 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from enum import Enum
 
-from tarok.entities.card import Card, CardType, Suit, SuitRank, SKIS, PAGAT, MOND
+from tarok.entities.card import Card, CardType, Suit, SuitRank, SKIS, PAGAT, MOND, DECK
+
+# Precompute Card → Rust u8 index mapping (DECK order matches Rust card layout)
+CARD_TO_IDX: dict[Card, int] = {card: idx for idx, card in enumerate(DECK)}
 
 
 class Phase(Enum):
@@ -88,6 +91,21 @@ class Contract(Enum):
         return self not in (Contract.KLOP, Contract.BARVNI_VALAT)
 
 
+# Mapping from Python Contract enum to Rust u8 contract index
+_CONTRACT_TO_U8: dict[Contract, int] = {
+    Contract.KLOP: 0,
+    Contract.THREE: 1,
+    Contract.TWO: 2,
+    Contract.ONE: 3,
+    Contract.SOLO_THREE: 4,
+    Contract.SOLO_TWO: 5,
+    Contract.SOLO_ONE: 6,
+    Contract.SOLO: 7,
+    Contract.BERAC: 8,
+    Contract.BARVNI_VALAT: 9,
+}
+
+
 class PlayerRole(Enum):
     DECLARER = "declarer"
     PARTNER = "partner"      # Holds the called king
@@ -153,31 +171,12 @@ class Trick:
     def is_complete(self) -> bool:
         return len(self.cards) == 4
 
-    def winner(self, is_last_trick: bool = False, contract_name: str | None = None) -> int:
+    def winner(self, is_last_trick: bool = False, contract: Contract | None = None) -> int:
         assert self.is_complete
-        from tarok.engine.conditions import TrickContext
-        from tarok.engine.trick_eval import evaluate_trick
-        ctx = TrickContext(
-            cards=tuple(self.cards),
-            lead_suit=self.lead_suit,
-            is_last_trick=is_last_trick,
-            contract_name=contract_name,
-        )
-        trace = evaluate_trick(ctx)
-        return trace.result[0]
-
-    def winner_trace(self, is_last_trick: bool = False, contract_name: str | None = None):
-        """Return full Trace from trick evaluation (for audit trails)."""
-        assert self.is_complete
-        from tarok.engine.conditions import TrickContext
-        from tarok.engine.trick_eval import evaluate_trick
-        ctx = TrickContext(
-            cards=tuple(self.cards),
-            lead_suit=self.lead_suit,
-            is_last_trick=is_last_trick,
-            contract_name=contract_name,
-        )
-        return evaluate_trick(ctx)
+        import tarok_engine as te
+        cards_rust = [(p, CARD_TO_IDX[c]) for p, c in self.cards]
+        contract_u8 = _CONTRACT_TO_U8.get(contract) if contract else None
+        return te.evaluate_trick_winner(cards_rust, is_last_trick=is_last_trick, contract=contract_u8)
 
     @property
     def points(self) -> int:
@@ -249,109 +248,29 @@ class GameState:
     def legal_plays(self, player: int) -> list[Card]:
         """Which cards can this player legally play in the current trick?
 
-        Delegates to the rules engine for all business logic.
+        Delegates to the Rust engine for all business logic.
         """
-        from tarok.engine.conditions import MoveContext
-        from tarok.engine.legal_moves import generate_legal_moves
+        import tarok_engine as te
+        from tarok.entities.card import DECK
 
         hand = self.hands[player]
         if not hand:
             return []
 
-        lead_card = None
-        lead_suit = None
-        best_card = None
-        trick_card_count = 0
-        trick_cards: tuple[Card, ...] = ()
-
+        hand_indices = [CARD_TO_IDX[c] for c in hand]
+        trick_cards_rust: list[tuple[int, int]] = []
         if self.current_trick is not None and self.current_trick.cards:
-            lead_card = self.current_trick.cards[0][1]
-            lead_suit = self.current_trick.lead_suit
-            trick_card_count = len(self.current_trick.cards)
-            trick_cards = tuple(c for _, c in self.current_trick.cards)
-            # Find the current best card in the trick
-            best_card = lead_card
-            for _, c in self.current_trick.cards:
-                if c.beats(best_card, lead_suit):
-                    best_card = c
+            trick_cards_rust = [(p, CARD_TO_IDX[c]) for p, c in self.current_trick.cards]
 
-        contract_name = self.contract.value if self.contract else None
-        # Normalise contract name to the string key used by conditions
-        if self.contract is not None:
-            _cname_map = {
-                Contract.KLOP: "klop", Contract.BERAC: "berac",
-                Contract.BARVNI_VALAT: "barvni_valat",
-                Contract.THREE: "three", Contract.TWO: "two", Contract.ONE: "one",
-                Contract.SOLO_THREE: "solo_three", Contract.SOLO_TWO: "solo_two",
-                Contract.SOLO_ONE: "solo_one", Contract.SOLO: "solo",
-            }
-            contract_name = _cname_map.get(self.contract)
+        contract_u8 = _CONTRACT_TO_U8.get(self.contract) if self.contract else None
 
-        ctx = MoveContext(
-            hand=tuple(hand),
-            lead_card=lead_card,
-            lead_suit=lead_suit,
-            best_card=best_card,
-            contract_name=contract_name,
-            is_first_trick=(self.tricks_played == 0),
+        legal_indices = te.compute_legal_plays(
+            hand_indices,
+            trick_cards_rust,
+            contract=contract_u8,
             is_last_trick=self.is_last_trick,
-            trick_card_count=trick_card_count,
-            trick_cards=trick_cards,
         )
-
-        trace = generate_legal_moves(ctx)
-        return trace.result
-
-    def legal_plays_trace(self, player: int):
-        """Return full Trace from legal move generation (for audit trails)."""
-        from tarok.engine.conditions import MoveContext
-        from tarok.engine.legal_moves import generate_legal_moves
-
-        hand = self.hands[player]
-        if not hand:
-            from tarok.engine.core import Trace
-            return Trace(result=[], triggered_rule="EmptyHand", priority=-1)
-
-        lead_card = None
-        lead_suit = None
-        best_card = None
-        trick_card_count = 0
-        trick_cards: tuple[Card, ...] = ()
-
-        if self.current_trick is not None and self.current_trick.cards:
-            lead_card = self.current_trick.cards[0][1]
-            lead_suit = self.current_trick.lead_suit
-            trick_card_count = len(self.current_trick.cards)
-            trick_cards = tuple(c for _, c in self.current_trick.cards)
-            best_card = lead_card
-            for _, c in self.current_trick.cards:
-                if c.beats(best_card, lead_suit):
-                    best_card = c
-
-        contract_name = None
-        if self.contract is not None:
-            _cname_map = {
-                Contract.KLOP: "klop", Contract.BERAC: "berac",
-                Contract.BARVNI_VALAT: "barvni_valat",
-                Contract.THREE: "three", Contract.TWO: "two", Contract.ONE: "one",
-                Contract.SOLO_THREE: "solo_three", Contract.SOLO_TWO: "solo_two",
-                Contract.SOLO_ONE: "solo_one", Contract.SOLO: "solo",
-            }
-            contract_name = _cname_map.get(self.contract)
-
-        ctx = MoveContext(
-            hand=tuple(hand),
-            lead_card=lead_card,
-            lead_suit=lead_suit,
-            best_card=best_card,
-            contract_name=contract_name,
-            is_first_trick=(self.tricks_played == 0),
-            is_last_trick=self.is_last_trick,
-            trick_card_count=trick_card_count,
-            trick_cards=trick_cards,
-        )
-
-        return generate_legal_moves(ctx)
+        return [DECK[i] for i in legal_indices]
 
     @property
     def forehand(self) -> int:

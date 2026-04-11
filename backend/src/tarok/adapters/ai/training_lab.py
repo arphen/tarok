@@ -16,20 +16,24 @@ import copy
 import functools
 import hashlib
 import json
+import logging
 import math
 import multiprocessing as mp
 import os
 import random
 import time
+from collections import defaultdict
 from concurrent.futures import ProcessPoolExecutor
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
 import torch
+import torch.nn as nn
 import torch.optim as optim
 
 from tarok.adapters.ai.network import TarokNet
+from tarok.adapters.ai.hof_manager import HoFManager
 
 
 def _detect_device() -> str:
@@ -48,13 +52,26 @@ def _detect_self_play_device() -> str:
     if hasattr(torch.backends, "mps") and torch.backends.mps.is_available():
         return "mps"
     return "cpu"
-from tarok.adapters.ai.agent import RLAgent
+from tarok.adapters.ai.agent import RLAgent, Experience
+from tarok.adapters.ai.encoding import (
+    DecisionType,
+    BID_ACTION_SIZE,
+    KING_ACTION_SIZE,
+    TALON_ACTION_SIZE,
+    CARD_ACTION_SIZE,
+    ANNOUNCE_ACTION_SIZE,
+)
 from tarok.adapters.ai.imitation import imitation_pretrain
-from tarok.adapters.ai.stockskis_player import StockSkisPlayer
-from tarok.adapters.ai.stockskis_v2 import StockSkisPlayerV2
-from tarok.adapters.ai.stockskis_v3 import StockSkisPlayerV3
-from tarok.adapters.ai.stockskis_v3_2 import StockSkisPlayerV3_2
-from tarok.adapters.ai.stockskis_v4 import StockSkisPlayerV4
+from tarok.adapters.ai.lookahead_agent import LookaheadAgent
+from tarok.adapters.ai.network_bank import NetworkBank
+from tarok.adapters.ai.opponent_pool import (
+    OpponentPool,
+    PureSelfPlayOpponent,
+    FSPOpponent,
+    StockSkisOpponent,
+    HoFOpponent,
+    OpponentGameResult,
+)
 from tarok.adapters.ai.stockskis_v5 import StockSkisPlayerV5
 from tarok.adapters.api.spectator_observer import SpectatorObserver
 from tarok.use_cases.game_loop import GameLoop
@@ -62,10 +79,1649 @@ from tarok.use_cases.game_loop import GameLoop
 try:
     from tarok.adapters.ai.batch_game_runner import BatchGameRunner, GameResult, GameExperience
     from tarok.adapters.ai.compute import ComputeBackend, create_backend
+    from tarok.adapters.ai.rust_game_loop import RustGameLoop
     import tarok_engine as _te_check
     _HAS_RUST = _te_check is not None
 except Exception:
     _HAS_RUST = False
+
+log = logging.getLogger(__name__)
+
+# ---------------------------------------------------------------------------
+# PPOTrainer and supporting types (migrated from trainer.py)
+# ---------------------------------------------------------------------------
+
+_ACTION_SIZES = {
+    DecisionType.BID: BID_ACTION_SIZE,
+    DecisionType.KING_CALL: KING_ACTION_SIZE,
+    DecisionType.TALON_PICK: TALON_ACTION_SIZE,
+    DecisionType.CARD_PLAY: CARD_ACTION_SIZE,
+    DecisionType.ANNOUNCE: ANNOUNCE_ACTION_SIZE,
+}
+
+
+@dataclass
+class ContractStats:
+    """Per-contract stats, split by role (declarer vs defender)."""
+    # As declarer (P0 won the bidding for this contract)
+    decl_played: int = 0
+    decl_won: int = 0
+    decl_total_score: int = 0
+    # As defender (another player declared this contract)
+    def_played: int = 0
+    def_won: int = 0
+    def_total_score: int = 0
+
+    @property
+    def played(self) -> int:
+        return self.decl_played + self.def_played
+
+    @property
+    def decl_win_rate(self) -> float:
+        return self.decl_won / max(self.decl_played, 1)
+
+    @property
+    def def_win_rate(self) -> float:
+        return self.def_won / max(self.def_played, 1)
+
+    @property
+    def decl_avg_score(self) -> float:
+        return self.decl_total_score / max(self.decl_played, 1)
+
+    @property
+    def def_avg_score(self) -> float:
+        return self.def_total_score / max(self.def_played, 1)
+
+    def to_dict(self) -> dict:
+        return {
+            "played": self.played,
+            "decl_played": self.decl_played,
+            "decl_won": self.decl_won,
+            "decl_win_rate": round(self.decl_win_rate, 4),
+            "decl_avg_score": round(self.decl_avg_score, 1),
+            "def_played": self.def_played,
+            "def_won": self.def_won,
+            "def_win_rate": round(self.def_win_rate, 4),
+            "def_avg_score": round(self.def_avg_score, 1),
+        }
+
+
+@dataclass
+class TrainerOpponentStats:
+    """Aggregate stats against a specific opponent pool (detailed role split)."""
+    games: int = 0
+    wins: int = 0
+    total_score: int = 0
+    total_place: float = 0.0
+    bids: int = 0
+    decl_games: int = 0
+    decl_wins: int = 0
+    decl_total_score: int = 0
+    def_games: int = 0
+    def_wins: int = 0
+    def_total_score: int = 0
+
+    @property
+    def win_rate(self) -> float:
+        return self.wins / max(self.games, 1)
+
+    @property
+    def avg_score(self) -> float:
+        return self.total_score / max(self.games, 1)
+
+    @property
+    def avg_place(self) -> float:
+        return self.total_place / max(self.games, 1)
+
+    @property
+    def bid_rate(self) -> float:
+        return self.bids / max(self.games, 1)
+
+    @property
+    def decl_win_rate(self) -> float:
+        return self.decl_wins / max(self.decl_games, 1)
+
+    @property
+    def decl_avg_score(self) -> float:
+        return self.decl_total_score / max(self.decl_games, 1)
+
+    @property
+    def def_win_rate(self) -> float:
+        return self.def_wins / max(self.def_games, 1)
+
+    @property
+    def def_avg_score(self) -> float:
+        return self.def_total_score / max(self.def_games, 1)
+
+    def to_dict(self) -> dict:
+        return {
+            "games": self.games,
+            "wins": self.wins,
+            "win_rate": round(self.win_rate, 4),
+            "avg_score": round(self.avg_score, 2),
+            "avg_place": round(self.avg_place, 2),
+            "bid_rate": round(self.bid_rate, 4),
+            "decl_games": self.decl_games,
+            "decl_win_rate": round(self.decl_win_rate, 4),
+            "decl_avg_score": round(self.decl_avg_score, 2),
+            "def_games": self.def_games,
+            "def_win_rate": round(self.def_win_rate, 4),
+            "def_avg_score": round(self.def_avg_score, 2),
+        }
+
+
+# Contract names we individually track
+_TRACKED_CONTRACTS = ["klop", "three", "two", "one", "solo_three", "solo_two", "solo_one", "solo", "berac"]
+
+
+@dataclass
+class TrainingMetrics:
+    run_id: str = ""
+    episode: int = 0
+    total_episodes: int = 0
+    session: int = 0
+    total_sessions: int = 0
+    avg_reward: float = 0.0
+    avg_loss: float = 0.0
+    avg_placement: float = 0.0
+    entropy: float = 0.0
+    value_loss: float = 0.0
+    policy_loss: float = 0.0
+    games_per_second: float = 0.0
+    bid_rate: float = 0.0
+    klop_rate: float = 0.0
+    solo_rate: float = 0.0
+    contract_stats: dict[str, ContractStats] = field(
+        default_factory=lambda: {c: ContractStats() for c in _TRACKED_CONTRACTS}
+    )
+    reward_history: list[float] = field(default_factory=list)
+    avg_placement_history: list[float] = field(default_factory=list)
+    loss_history: list[float] = field(default_factory=list)
+    bid_rate_history: list[float] = field(default_factory=list)
+    klop_rate_history: list[float] = field(default_factory=list)
+    solo_rate_history: list[float] = field(default_factory=list)
+    contract_win_rate_history: dict[str, list[float]] = field(
+        default_factory=lambda: {c: [] for c in _TRACKED_CONTRACTS}
+    )
+    session_avg_score_history: list[float] = field(default_factory=list)
+    # Table scoring: sum of points per session when P0 is declaring team (family rules)
+    table_score_history: list[float] = field(default_factory=list)
+    snapshots: list[dict] = field(default_factory=list)
+    # Avg finishing place of StockŠkis opponents per session (1=best, 4=worst)
+    stockskis_place_history: list[float] = field(default_factory=list)
+    # Lookahead opponent metrics per session
+    lookahead_score_history: list[float] = field(default_factory=list)
+    lookahead_bid_rate_history: list[float] = field(default_factory=list)
+    # Tarok count vs bid: for each tarok count (0..12), track which contract was played
+    tarok_count_bids: dict[int, dict[str, int]] = field(
+        default_factory=lambda: {i: {} for i in range(13)}
+    )
+    # Evaluation signal and detailed breakdown against StockSkis v5 opponents
+    vs_v5: TrainerOpponentStats = field(default_factory=TrainerOpponentStats)
+    vs_v5_contract_stats: dict[str, TrainerOpponentStats] = field(
+        default_factory=lambda: {c: TrainerOpponentStats() for c in _TRACKED_CONTRACTS}
+    )
+    vs_v5_avg_placement_history: list[float] = field(default_factory=list)
+    vs_v5_avg_score_history: list[float] = field(default_factory=list)
+    vs_v5_avg_place_history: list[float] = field(default_factory=list)
+    vs_v5_bid_rate_history: list[float] = field(default_factory=list)
+    vs_v5_eval_signal_history: list[float] = field(default_factory=list)
+    # Per-opponent avg placement history (one entry per session)
+    placement_selfplay_history: list[float] = field(default_factory=list)
+    placement_hof_history: list[float] = field(default_factory=list)
+    placement_v5_history: list[float] = field(default_factory=list)
+
+    def to_dict(self) -> dict:
+        return {
+            "run_id": self.run_id,
+            "episode": self.episode,
+            "total_episodes": self.total_episodes,
+            "session": self.session,
+            "total_sessions": self.total_sessions,
+            "avg_reward": round(self.avg_reward, 2),
+            "avg_loss": round(self.avg_loss, 4),
+            "avg_placement": round(self.avg_placement, 4),
+            "entropy": round(self.entropy, 4),
+            "value_loss": round(self.value_loss, 4),
+            "policy_loss": round(self.policy_loss, 4),
+            "games_per_second": round(self.games_per_second, 2),
+            "bid_rate": round(self.bid_rate, 4),
+            "klop_rate": round(self.klop_rate, 4),
+            "solo_rate": round(self.solo_rate, 4),
+            "contract_stats": {k: v.to_dict() for k, v in self.contract_stats.items()},
+            "history_offset": max(0, len(self.reward_history) - 500),
+            "reward_history": self.reward_history[-500:],
+            "avg_placement_history": self.avg_placement_history[-500:],
+            "loss_history": self.loss_history[-500:],
+            "bid_rate_history": self.bid_rate_history[-500:],
+            "klop_rate_history": self.klop_rate_history[-500:],
+            "solo_rate_history": self.solo_rate_history[-500:],
+            "contract_win_rate_history": {
+                k: v[-500:] for k, v in self.contract_win_rate_history.items()
+            },
+            "session_avg_score_history": self.session_avg_score_history[-500:],
+            "table_score_history": self.table_score_history[-500:],
+            "stockskis_place_history": self.stockskis_place_history[-500:],
+            "lookahead_score_history": self.lookahead_score_history[-500:],
+            "lookahead_bid_rate_history": self.lookahead_bid_rate_history[-500:],
+            "snapshots": self.snapshots,
+            "tarok_count_bids": {
+                str(k): v for k, v in self.tarok_count_bids.items()
+            },
+            "vs_v5": self.vs_v5.to_dict(),
+            "vs_v5_contract_stats": {
+                k: v.to_dict() for k, v in self.vs_v5_contract_stats.items()
+            },
+            "vs_v5_win_rate_history": self.vs_v5_avg_placement_history[-500:],
+            "vs_v5_avg_score_history": self.vs_v5_avg_score_history[-500:],
+            "vs_v5_avg_place_history": self.vs_v5_avg_place_history[-500:],
+            "vs_v5_bid_rate_history": self.vs_v5_bid_rate_history[-500:],
+            "vs_v5_eval_signal_history": self.vs_v5_eval_signal_history[-500:],
+            "placement_selfplay_history": self.placement_selfplay_history[-500:],
+            "placement_hof_history": self.placement_hof_history[-500:],
+            "placement_v5_history": self.placement_v5_history[-500:],
+        }
+
+
+class PPOTrainer:
+    """Session-based self-play PPO trainer for Tarok agents.
+
+    Each training session plays *games_per_session* games, collects all
+    experiences (bids + king calls + talon picks + card plays), then
+    performs a PPO update.  This teaches the agent the expected value of
+    each bid given a hand, and the long-run payoff of conservative vs
+    aggressive play.
+    """
+
+    def __init__(
+        self,
+        agents: list[RLAgent],
+        lr: float = 3e-4,
+        gamma: float = 0.99,
+        gae_lambda: float = 0.95,
+        clip_epsilon: float = 0.2,
+        value_coef: float = 0.5,
+        entropy_coef: float = 0.01,
+        epochs_per_update: int = 4,
+        batch_size: int = 64,
+        games_per_session: int = 20,
+        device: str = "cpu",
+        save_dir: str = "checkpoints",
+        # --- Fictitious Self-Play ---
+        fsp_ratio: float = 0.3,
+        bank_size: int = 20,
+        bank_save_interval: int = 5,
+        # --- StockŠkis opponents ---
+        stockskis_ratio: float = 0.0,
+        stockskis_strength: float = 1.0,
+        stockskis_version: int = 5,
+        # --- Lookahead opponents ---
+        lookahead_ratio: float = 0.0,
+        lookahead_sims: int = 20,
+        lookahead_perfect_info: bool = True,
+        # --- Hall of Fame opponents ---
+        hof_ratio: float = 0.0,
+        hof_dir: str = "checkpoints/hall_of_fame",
+        # --- Rust engine ---
+        use_rust_engine: bool = False,
+        warmup_games: int = 0,
+        # --- Batched self-play ---
+        batch_concurrency: int = 32,  # concurrent games for batched NN inference
+        # --- Scheduling ---
+        lr_schedule: str = "cosine",       # "cosine" | "none"
+        lr_min_ratio: float = 0.1,         # min LR = lr * lr_min_ratio
+        entropy_schedule: str = "linear",  # "linear" | "none"
+        entropy_coef_end: float = 0.002,   # final entropy coef
+        value_clip: float = 0.0,           # >0 enables value function clipping
+        # --- v2: Oracle guiding ---
+        oracle_guiding_coef: float = 0.1,  # weight of oracle distillation loss
+        # --- v2: pMCPA ---
+        pmcpa_rollouts: int = 0,           # 0 disables; >0 = rollouts per hand
+    ):
+        self.agents = agents
+        self.gamma = gamma
+        self.gae_lambda = gae_lambda
+        self.clip_epsilon = clip_epsilon
+        self.value_coef = value_coef
+        self.entropy_coef = entropy_coef
+        self.epochs_per_update = epochs_per_update
+        self.batch_size = batch_size
+        self.games_per_session = games_per_session
+        self.device = torch.device(device)
+        self.compute = create_backend(device)
+        self.save_dir = Path(save_dir)
+        self.save_dir.mkdir(parents=True, exist_ok=True)
+
+        # All agents share the same network for self-play
+        self.shared_network = agents[0].network
+        self.shared_network = self.compute.prepare_network(self.shared_network)
+        self.optimizer = optim.Adam(self.shared_network.parameters(), lr=lr)
+
+        # Sync all agents to use the same network
+        for agent in agents:
+            agent.network = self.shared_network
+
+        # --- Scheduling ---
+        self._lr_init = lr
+        self._lr_schedule = lr_schedule
+        self._lr_min_ratio = lr_min_ratio
+        self._entropy_coef_init = entropy_coef
+        self._entropy_schedule = entropy_schedule
+        self._entropy_coef_end = entropy_coef_end
+        self._value_clip = value_clip
+        self._oracle_guiding_coef = oracle_guiding_coef
+        self._pmcpa_rollouts = pmcpa_rollouts
+
+        # --- Fictitious Self-Play ---
+        self.fsp_ratio = fsp_ratio
+        self.bank_save_interval = bank_save_interval
+        self.network_bank = NetworkBank(max_size=bank_size)
+        # Separate opponent network for FSP games (same architecture, different weights)
+        self.opponent_network: TarokNet | None = None
+        if fsp_ratio > 0:
+            # Infer hidden size from the shared network's first linear layer
+            hidden_size = self.shared_network.shared[0].out_features
+            self.opponent_network = TarokNet(
+                hidden_size=hidden_size,
+                oracle_critic=self.shared_network.oracle_critic_enabled,
+            )
+            self.opponent_network = self.compute.prepare_network(self.opponent_network)
+
+        # --- StockŠkis opponents ---
+        self.stockskis_ratio = stockskis_ratio
+        self.stockskis_version = 5
+        self._stockskis_opponents: list | None = None
+        if stockskis_ratio > 0:
+            self._stockskis_opponents = [
+                StockSkisPlayerV5(name=f"StockŠkis-v5-{i}", strength=stockskis_strength)
+                for i in range(3)
+            ]
+
+        # --- Lookahead opponents ---
+        self.lookahead_ratio = lookahead_ratio
+        self._lookahead_opponents: list[LookaheadAgent] | None = None
+        if lookahead_ratio > 0:
+            self._lookahead_opponents = [
+                LookaheadAgent(
+                    n_simulations=lookahead_sims,
+                    name=f"Lookahead-{i}",
+                    perfect_information=lookahead_perfect_info,
+                )
+                for i in range(3)
+            ]
+
+        # --- Hall of Fame opponents ---
+        self.hof_ratio = hof_ratio
+        self._hof_opponent: HoFOpponent | None = None
+        if hof_ratio > 0:
+            self._hof_opponent = HoFOpponent(hof_dir=hof_dir, weight=hof_ratio)
+
+        self.metrics = TrainingMetrics()
+        self._running = False
+        self._metrics_callback: list = []
+        self._rng = random.Random()
+
+        # --- Opponent Pool (unified sampling) ---
+        self.opponent_pool = OpponentPool(rng=self._rng)
+        # Weights here represent the share of games going to each opponent type;
+        # they do NOT need to sum to 1 — OpponentPool normalizes internally.
+        remaining = 1.0 - stockskis_ratio - fsp_ratio - lookahead_ratio - hof_ratio
+        if remaining > 0:
+            self.opponent_pool.add(PureSelfPlayOpponent(weight=remaining))
+        if self.fsp_ratio > 0:
+            self.opponent_pool.add(FSPOpponent(self.network_bank, weight=self.fsp_ratio))
+        if self.stockskis_ratio > 0:
+            self.opponent_pool.add(StockSkisOpponent(
+                version=self.stockskis_version,
+                strength=stockskis_strength,
+                weight=self.stockskis_ratio,
+            ))
+        if self.hof_ratio > 0 and self._hof_opponent is not None:
+            self.opponent_pool.add(self._hof_opponent)
+
+        # --- Rust engine ---
+        self.use_rust_engine = use_rust_engine and _HAS_RUST
+        self.warmup_games = warmup_games
+        self.batch_concurrency = batch_concurrency
+
+    def add_metrics_callback(self, callback) -> None:
+        self._metrics_callback.append(callback)
+
+    def _update_schedule(self, session_idx: int, total_sessions: int) -> None:
+        """Update LR and entropy coefficient based on training progress."""
+        progress = session_idx / max(total_sessions - 1, 1)  # 0.0 → 1.0
+
+        # Learning rate schedule
+        if self._lr_schedule == "cosine":
+            lr_min = self._lr_init * self._lr_min_ratio
+            lr = lr_min + 0.5 * (self._lr_init - lr_min) * (1 + math.cos(math.pi * progress))
+            for param_group in self.optimizer.param_groups:
+                param_group["lr"] = lr
+
+        # Entropy coefficient schedule
+        if self._entropy_schedule == "linear":
+            self.entropy_coef = (
+                self._entropy_coef_init
+                + (self._entropy_coef_end - self._entropy_coef_init) * progress
+            )
+
+    def _record_opponent_result(self, mode: str, result: OpponentGameResult) -> None:
+        """Record a game result to the correct opponent in the pool."""
+        name_map = {
+            "batch": "self-play",
+            "stockskis": f"stockskis-v{self.stockskis_version}",
+            "hof": "hof",
+            "fsp": "fsp",
+            "lookahead": "lookahead",
+        }
+        target_name = name_map.get(mode, "self-play")
+        self.opponent_pool.record_session_result(target_name, result)
+
+    def _enter_stockskis_mode(self) -> list:
+        """Replace opponents (agents 1-3) with StockŠkis heuristic bots."""
+        assert self._stockskis_opponents is not None
+        original = list(self.agents)
+        for i in range(1, 4):
+            self.agents[i] = self._stockskis_opponents[i - 1]  # type: ignore[assignment]
+        return original
+
+    def _exit_stockskis_mode(self, original_agents: list) -> None:
+        """Restore the original agents after a StockŠkis game."""
+        for i in range(4):
+            self.agents[i] = original_agents[i]
+
+    def _enter_lookahead_mode(self) -> list:
+        """Replace opponents (agents 1-3) with Lookahead search bots."""
+        assert self._lookahead_opponents is not None
+        original = list(self.agents)
+        for i in range(1, 4):
+            self.agents[i] = self._lookahead_opponents[i - 1]  # type: ignore[assignment]
+        return original
+
+    def _exit_lookahead_mode(self, original_agents: list) -> None:
+        """Restore the original agents after a Lookahead game."""
+        for i in range(4):
+            self.agents[i] = original_agents[i]
+
+    def _enter_hof_mode(self) -> list:
+        """Replace opponents (agents 1-3) with a random HoF model opponent."""
+        assert self._hof_opponent is not None
+        original = list(self.agents)
+        players = self._hof_opponent.make_players(self.shared_network)
+        if players:
+            for i in range(1, 4):
+                self.agents[i] = players[i - 1]  # type: ignore[assignment]
+        return original
+
+    def _exit_hof_mode(self, original_agents: list) -> None:
+        """Restore the original agents after a HoF game."""
+        for i in range(4):
+            self.agents[i] = original_agents[i]
+
+    @staticmethod
+    def _eval_signal(stats: TrainerOpponentStats) -> float:
+        """Scalar evaluation signal from win rate + score + placement."""
+        wr = stats.win_rate
+        score_term = max(-1.0, min(1.0, stats.avg_score / 120.0))
+        place_term = max(0.0, min(1.0, (4.0 - stats.avg_place) / 3.0))
+        return 0.55 * wr + 0.30 * ((score_term + 1.0) / 2.0) + 0.15 * place_term
+
+    @staticmethod
+    def _update_opponent_stats(
+        stats: TrainerOpponentStats,
+        contract_stats: dict[str, TrainerOpponentStats],
+        contract_name: str,
+        raw_score: int,
+        won: bool,
+        bid: bool,
+        place: float,
+        declarer_p0: bool,
+    ) -> None:
+        stats.games += 1
+        stats.wins += 1 if won else 0
+        stats.total_score += raw_score
+        stats.total_place += place
+        stats.bids += 1 if bid else 0
+        if declarer_p0:
+            stats.decl_games += 1
+            stats.decl_wins += 1 if won else 0
+            stats.decl_total_score += raw_score
+        else:
+            stats.def_games += 1
+            stats.def_wins += 1 if won else 0
+            stats.def_total_score += raw_score
+
+        if contract_name in contract_stats:
+            cs = contract_stats[contract_name]
+            cs.games += 1
+            cs.wins += 1 if won else 0
+            cs.total_score += raw_score
+            cs.total_place += place
+            cs.bids += 1 if bid else 0
+            if declarer_p0:
+                cs.decl_games += 1
+                cs.decl_wins += 1 if won else 0
+                cs.decl_total_score += raw_score
+            else:
+                cs.def_games += 1
+                cs.def_wins += 1 if won else 0
+                cs.def_total_score += raw_score
+
+    def _enter_fsp_mode(self) -> None:
+        """Switch opponents (agents 1-3) to historical weights for FSP."""
+        snap, snapshot_id = self.network_bank.sample()
+        if snap is None or self.opponent_network is None:
+            return
+        self.opponent_network.load_state_dict(snap)
+        # Track which snapshot was used for per-instance stats
+        for opp in self.opponent_pool.opponents:
+            if opp.name == "fsp" and hasattr(opp, '_last_snapshot_id'):
+                opp._last_snapshot_id = snapshot_id
+                break
+        for agent in self.agents[1:]:
+            agent.network = self.opponent_network
+            agent.set_training(False)  # Don't record experiences for opponents
+
+    def _exit_fsp_mode(self) -> None:
+        """Switch opponents back to the shared (learning) network."""
+        for agent in self.agents[1:]:
+            agent.network = self.shared_network
+            agent.set_training(True)
+
+    async def train(self, num_sessions: int) -> TrainingMetrics:
+        """Run session-based self-play training.
+
+        Each session = *games_per_session* games → one PPO update.
+        Metrics update after every game for live dashboard feedback.
+        """
+        # --- Optional warmup phase ---
+        if self.warmup_games > 0 and self.use_rust_engine:
+            await self._run_warmup()
+
+        self._running = True
+        total_games = num_sessions * self.games_per_session
+        self.metrics.total_episodes = total_games
+        self.metrics.total_sessions = num_sessions
+
+        # Generate a unique run ID (short hash from timestamp + config)
+        run_seed = f"{time.time()}-{num_sessions}-{self.games_per_session}-{id(self)}"
+        self.metrics.run_id = hashlib.sha256(run_seed.encode()).hexdigest()[:8]
+        print(f"[Trainer] Run #{self.metrics.run_id} — {num_sessions} sessions × {self.games_per_session} games")
+
+        recent_rewards: list[float] = []
+        recent_places: list[float] = []
+        recent_bids: list[float] = []
+        recent_klops: list[float] = []
+        recent_solos: list[float] = []
+        # Per-game records for rolling contract stats: (contract_name, declarer_p0, raw_score, won)
+        recent_games: list[tuple[str, bool, int, bool]] = []
+        start_time = time.time()
+        game_count = 0
+        # Running sums for O(1) rolling-window metrics
+        _rsum = 0.0; _psum = 0.0; _bsum = 0.0; _ksum = 0.0; _ssum = 0.0
+
+        for agent in self.agents:
+            agent.set_training(True)
+
+        snapshot_interval = max(1, num_sessions // 10)
+
+        for session_idx in range(num_sessions):
+            if not self._running:
+                break
+
+            # Update LR and entropy schedules
+            self._update_schedule(session_idx, num_sessions)
+
+            self.metrics.session = session_idx + 1
+            all_experiences: list[Experience] = []
+            session_scores: list[int] = []
+            session_table_scores: list[int] = []  # table scoring: only declaring team
+            session_stockskis_places: list[float] = []
+            session_lookahead_scores: list[int] = []
+            session_lookahead_bids: list[float] = []
+            session_v5 = TrainerOpponentStats()
+            session_v5_contracts: dict[str, TrainerOpponentStats] = {
+                c: TrainerOpponentStats() for c in _TRACKED_CONTRACTS
+            }
+            # Per-opponent placement accumulators for this session
+            session_places_selfplay: list[float] = []
+            session_places_hof: list[float] = []
+            session_places_v5: list[float] = []
+
+            # --- Batched self-play (Rust engine only) ---
+            # Split games into batched NN games and sequential StockŠkis games
+            can_batch = (
+                self.use_rust_engine
+                and _HAS_RUST
+                and self.batch_concurrency > 1
+            )
+            if can_batch:
+                batched_exps, batched_stats, stockskis_exps, stockskis_stats = (
+                    await self._play_session_batched(
+                        session_idx, game_count, start_time,
+                    )
+                )
+                for result in batched_stats:
+                    if not self._running:
+                        break
+                    raw_score = result["raw_score"]
+                    contract_name = result["contract_name"]
+                    is_klop = result["is_klop"]
+                    is_solo = result["is_solo"]
+                    declarer_p0 = result["declarer_p0"]
+                    agent0_bids = result["agent0_bids"]
+
+                    if result.get("initial_tarok_counts"):
+                        tarok_counts = result["initial_tarok_counts"]
+                        tarok_count = tarok_counts[0] if isinstance(tarok_counts, (list, tuple)) else tarok_counts.get(0, 0)
+                        bucket = self.metrics.tarok_count_bids.setdefault(tarok_count, {})
+                        bucket[contract_name] = bucket.get(contract_name, 0) + 1
+
+                    game_count += 1
+                    session_scores.append(raw_score)
+                    # Table scoring: only record when P0 is on the declaring team
+                    _partner_p0 = result.get("partner_p0", False)
+                    if is_klop or declarer_p0 or _partner_p0:
+                        session_table_scores.append(raw_score)
+                    r = raw_score / 100.0
+                    if is_klop:
+                        w = 1.0 if raw_score > 0 else 0.0
+                    elif declarer_p0:
+                        w = 1.0 if raw_score > 0 else 0.0
+                    else:
+                        w = 1.0 if result.get("declarer_lost", False) else 0.0
+                    
+                    if "stockskis_place" in result:
+                        p = float(result["stockskis_place"])
+                    elif "agent_place" in result:
+                        p = float(result["agent_place"])
+                    else:
+                        p = 4.0 # Fallback
+                    b = 1.0 if agent0_bids else 0.0
+                    k = 1.0 if is_klop else 0.0
+                    s = 1.0 if is_solo else 0.0
+
+                    # Record to opponent pool for per-instance tracking
+                    game_mode = result.get("game_mode", "batch")
+                    self._record_opponent_result(game_mode, OpponentGameResult(
+                        raw_score=raw_score,
+                        won=(w > 0),
+                        contract_name=contract_name,
+                        place=p,
+                        declarer_p0=declarer_p0,
+                        bid=bool(agent0_bids),
+                    ))
+                    # Accumulate placement per opponent type
+                    if game_mode == "batch":
+                        session_places_selfplay.append(p)
+                    elif game_mode == "hof":
+                        session_places_hof.append(p)
+                    elif game_mode == "stockskis":
+                        session_places_v5.append(p)
+
+                    recent_rewards.append(r); recent_places.append(p)
+                    recent_bids.append(b); recent_klops.append(k); recent_solos.append(s)
+                    recent_games.append((contract_name, declarer_p0, raw_score, w > 0))
+                    _rsum += r; _psum += p; _bsum += b; _ksum += k; _ssum += s
+
+                    if contract_name in self.metrics.contract_stats:
+                        cs = self.metrics.contract_stats[contract_name]
+                        if declarer_p0:
+                            cs.decl_played += 1
+                            if raw_score > 0:
+                                cs.decl_won += 1
+                            cs.decl_total_score += raw_score
+                        else:
+                            cs.def_played += 1
+                            if w > 0:
+                                cs.def_won += 1
+                            cs.def_total_score += raw_score
+
+                    window = self.games_per_session * 10
+                    if len(recent_rewards) > window:
+                        _rsum -= recent_rewards[-window - 1]
+                        _psum -= recent_places[-window - 1]
+                        _bsum -= recent_bids[-window - 1]
+                        _ksum -= recent_klops[-window - 1]
+                        _ssum -= recent_solos[-window - 1]
+                        old_cn, old_decl, old_score, old_won = recent_games[-window - 1]
+                        if old_cn in self.metrics.contract_stats:
+                            old_cs = self.metrics.contract_stats[old_cn]
+                            if old_decl:
+                                old_cs.decl_played -= 1
+                                if old_score > 0:
+                                    old_cs.decl_won -= 1
+                                old_cs.decl_total_score -= old_score
+                            else:
+                                old_cs.def_played -= 1
+                                if old_won:
+                                    old_cs.def_won -= 1
+                                old_cs.def_total_score -= old_score
+
+                    self.metrics.episode = game_count
+                    n = min(len(recent_rewards), window)
+                    self.metrics.avg_reward = _rsum / n
+                    self.metrics.avg_placement = _psum / n
+                    self.metrics.bid_rate = _bsum / n
+                    self.metrics.klop_rate = _ksum / n
+                    self.metrics.solo_rate = _ssum / n
+
+                # Process sequential StockŠkis game stats the same way
+                for result in stockskis_stats:
+                    if not self._running:
+                        break
+                    raw_score = result["raw_score"]
+                    contract_name = result["contract_name"]
+                    is_klop = result["is_klop"]
+                    is_solo = result["is_solo"]
+                    declarer_p0 = result["declarer_p0"]
+                    agent0_bids = result["agent0_bids"]
+
+                    if result.get("initial_tarok_counts"):
+                        tarok_counts = result["initial_tarok_counts"]
+                        tarok_count = tarok_counts[0] if isinstance(tarok_counts, (list, tuple)) else tarok_counts.get(0, 0)
+                        bucket = self.metrics.tarok_count_bids.setdefault(tarok_count, {})
+                        bucket[contract_name] = bucket.get(contract_name, 0) + 1
+
+                    # Track StockŠkis finishing places
+                    if "stockskis_place" in result:
+                        session_stockskis_places.append(result["stockskis_place"])
+
+                    game_count += 1
+                    session_scores.append(raw_score)
+                    # Table scoring: only record when P0 is on the declaring team
+                    _partner_p0 = result.get("partner_p0", False)
+                    if is_klop or declarer_p0 or _partner_p0:
+                        session_table_scores.append(raw_score)
+                    r = raw_score / 100.0
+                    if is_klop:
+                        w = 1.0 if raw_score > 0 else 0.0
+                    elif declarer_p0:
+                        w = 1.0 if raw_score > 0 else 0.0
+                    else:
+                        w = 1.0 if result.get("declarer_lost", False) else 0.0
+                    
+                    if "stockskis_place" in result:
+                        p = float(result["stockskis_place"])
+                    elif "agent_place" in result:
+                        p = float(result["agent_place"])
+                    else:
+                        p = 4.0 # Fallback
+                    b = 1.0 if agent0_bids else 0.0
+                    k = 1.0 if is_klop else 0.0
+                    s = 1.0 if is_solo else 0.0
+
+                    # Record to opponent pool for per-instance tracking
+                    game_mode = result.get("game_mode", "stockskis")
+                    agent_place = float(result.get("agent_place", 4.0))
+                    self._record_opponent_result(game_mode, OpponentGameResult(
+                        raw_score=raw_score,
+                        won=(w > 0),
+                        contract_name=contract_name,
+                        place=agent_place,
+                        declarer_p0=declarer_p0,
+                        bid=bool(agent0_bids),
+                    ))
+                    # Accumulate placement per opponent type
+                    if game_mode == "batch":
+                        session_places_selfplay.append(p)
+                    elif game_mode == "hof":
+                        session_places_hof.append(p)
+                    elif game_mode == "stockskis":
+                        session_places_v5.append(p)
+
+                    if self.stockskis_version == 5:
+                        agent_place = float(result.get("agent_place", 4.0))
+                        self._update_opponent_stats(
+                            session_v5,
+                            session_v5_contracts,
+                            contract_name=contract_name,
+                            raw_score=raw_score,
+                            won=(w > 0),
+                            bid=bool(agent0_bids),
+                            place=agent_place,
+                            declarer_p0=declarer_p0,
+                        )
+
+                    recent_rewards.append(r); recent_places.append(p)
+                    recent_bids.append(b); recent_klops.append(k); recent_solos.append(s)
+                    recent_games.append((contract_name, declarer_p0, raw_score, w > 0))
+                    _rsum += r; _psum += p; _bsum += b; _ksum += k; _ssum += s
+
+                    if contract_name in self.metrics.contract_stats:
+                        cs = self.metrics.contract_stats[contract_name]
+                        if declarer_p0:
+                            cs.decl_played += 1
+                            if raw_score > 0:
+                                cs.decl_won += 1
+                            cs.decl_total_score += raw_score
+                        else:
+                            cs.def_played += 1
+                            if w > 0:
+                                cs.def_won += 1
+                            cs.def_total_score += raw_score
+
+                    window = self.games_per_session * 10
+                    if len(recent_rewards) > window:
+                        _rsum -= recent_rewards[-window - 1]
+                        _psum -= recent_places[-window - 1]
+                        _bsum -= recent_bids[-window - 1]
+                        _ksum -= recent_klops[-window - 1]
+                        _ssum -= recent_solos[-window - 1]
+                        old_cn, old_decl, old_score, old_won = recent_games[-window - 1]
+                        if old_cn in self.metrics.contract_stats:
+                            old_cs = self.metrics.contract_stats[old_cn]
+                            if old_decl:
+                                old_cs.decl_played -= 1
+                                if old_score > 0:
+                                    old_cs.decl_won -= 1
+                                old_cs.decl_total_score -= old_score
+                            else:
+                                old_cs.def_played -= 1
+                                if old_won:
+                                    old_cs.def_won -= 1
+                                old_cs.def_total_score -= old_score
+
+                    self.metrics.episode = game_count
+                    n = min(len(recent_rewards), window)
+                    self.metrics.avg_reward = _rsum / n
+                    self.metrics.avg_placement = _psum / n
+                    self.metrics.bid_rate = _bsum / n
+                    self.metrics.klop_rate = _ksum / n
+                    self.metrics.solo_rate = _ssum / n
+
+                all_experiences.extend(batched_exps)
+                all_experiences.extend(stockskis_exps)
+
+                # Update throughput
+                elapsed = time.time() - start_time
+                self.metrics.games_per_second = game_count / max(elapsed, 1e-6)
+                for cb in self._metrics_callback:
+                    await cb(self.metrics)
+                await asyncio.sleep(0)
+
+            else:
+                # --- Sequential fallback (no Rust engine or concurrency=1) ---
+                for g in range(self.games_per_session):
+                    if not self._running:
+                        break
+
+                    # --- Opponent mode selection ---
+                    # StockŠkis mode: use heuristic bots as opponents
+                    use_stockskis = (
+                        self.stockskis_ratio > 0
+                        and self._stockskis_opponents is not None
+                        and self._rng.random() < self.stockskis_ratio
+                    )
+                    # HoF mode: use Hall of Fame models as frozen opponents
+                    use_hof = (
+                        not use_stockskis
+                        and self.hof_ratio > 0
+                        and self._hof_opponent is not None
+                        and self._hof_opponent.is_available()
+                        and self._rng.random() < self.hof_ratio
+                    )
+                    # Lookahead mode: use Monte Carlo search bots as opponents (only if not StockŠkis)
+                    use_lookahead = (
+                        not use_stockskis
+                        and not use_hof
+                        and self.lookahead_ratio > 0
+                        and self._lookahead_opponents is not None
+                        and self._rng.random() < self.lookahead_ratio
+                    )
+                    # FSP mode: use historical network weights (only if not StockŠkis)
+                    use_fsp = (
+                        not use_stockskis
+                        and not use_hof
+                        and not use_lookahead
+                        and self.fsp_ratio > 0
+                        and self.network_bank.is_ready
+                        and self._rng.random() < self.fsp_ratio
+                    )
+                    external_opponents = use_fsp or use_stockskis or use_lookahead or use_hof
+
+                    original_agents = None
+                    if use_stockskis:
+                        original_agents = self._enter_stockskis_mode()
+                    elif use_hof:
+                        original_agents = self._enter_hof_mode()
+                    elif use_lookahead:
+                        original_agents = self._enter_lookahead_mode()
+                    elif use_fsp:
+                        self._enter_fsp_mode()
+
+                    # Clear experiences from previous game
+                    for agent in self.agents:
+                        if hasattr(agent, 'clear_experiences'):
+                            agent.clear_experiences()
+
+                    # Play one game (Rust engine or Python engine)
+                    if self.use_rust_engine and not use_stockskis:
+                        game = RustGameLoop(self.agents)
+                    else:
+                        game = GameLoop(self.agents)
+                    try:
+                        state, scores = await game.run(dealer=(game_count + g) % 4)
+                    except Exception:
+                        log.exception("Training game crashed; skipping (session=%s game=%s)", session_idx + 1, g + 1)
+                        continue
+                    finally:
+                        # Restore agents after external-opponent game (even on crash)
+                        if use_stockskis and original_agents is not None:
+                            self._exit_stockskis_mode(original_agents)
+                        elif use_hof and original_agents is not None:
+                            self._exit_hof_mode(original_agents)
+                        elif use_lookahead and original_agents is not None:
+                            self._exit_lookahead_mode(original_agents)
+                        elif use_fsp:
+                            self._exit_fsp_mode()
+
+                    # Extract stats
+                    is_klop = state.contract is not None and state.contract.is_klop
+                    is_solo = state.contract is not None and state.contract.is_solo
+                    agent0_bids = [b for b in state.bids if b.player == 0 and b.contract is not None]
+                    contract_name = state.contract.name.lower() if state.contract else "klop"
+                    raw_score = scores.get(0, 0)
+                    declarer_p0 = state.declarer == 0
+
+                    # Track StockŠkis finishing places (1=best, 4=worst)
+                    if use_stockskis:
+                        sorted_players = sorted(scores, key=lambda p: scores[p], reverse=True)
+                        places = {p: rank + 1 for rank, p in enumerate(sorted_players)}
+                        avg_sk_place = sum(places[p] for p in range(1, 4)) / 3.0
+                        session_stockskis_places.append(avg_sk_place)
+
+                    # Track tarok count vs contract for player 0
+                    if state.initial_tarok_counts:
+                        tarok_count = state.initial_tarok_counts[0]
+                        bucket = self.metrics.tarok_count_bids.setdefault(tarok_count, {})
+                        bucket[contract_name] = bucket.get(contract_name, 0) + 1
+
+                    # Finalize rewards and collect experiences
+                    for i, agent in enumerate(self.agents):
+                        reward = scores.get(i, 0) / 100.0
+                        agent.finalize_game(reward)
+                        # With external opponents, only agent 0 records experiences
+                        if not external_opponents or i == 0:
+                            all_experiences.extend(agent.experiences)
+
+                    game_count += 1
+                    session_scores.append(raw_score)
+                    # Table scoring: only record when P0 is on the declaring team
+                    _partner_p0 = state.partner == 0 if state.partner is not None else False
+                    if is_klop or declarer_p0 or _partner_p0:
+                        session_table_scores.append(raw_score)
+                    r = raw_score / 100.0
+                    if is_klop:
+                        w = 1.0 if raw_score > 0 else 0.0
+                    elif declarer_p0:
+                        w = 1.0 if raw_score > 0 else 0.0
+                    else:
+                        declarer_score = scores.get(state.declarer, 0) if state.declarer is not None else 0
+                        w = 1.0 if declarer_score < 0 else 0.0
+                        
+                    sorted_players = sorted(scores, key=lambda x: scores[x], reverse=True)
+                    places_map = {x: rank + 1 for rank, x in enumerate(sorted_players)}
+                    p = float(places_map.get(0, 4))
+                    b = 1.0 if agent0_bids else 0.0
+                    k = 1.0 if is_klop else 0.0
+                    s = 1.0 if is_solo else 0.0
+
+                    # Record to opponent pool for per-instance tracking
+                    seq_mode = (
+                        "stockskis" if use_stockskis else
+                        "hof" if use_hof else
+                        "fsp" if use_fsp else
+                        "lookahead" if use_lookahead else
+                        "batch"
+                    )
+                    sorted_players_seq = sorted(scores, key=lambda p: scores[p], reverse=True)
+                    places_seq = {p: rank + 1 for rank, p in enumerate(sorted_players_seq)}
+                    self._record_opponent_result(seq_mode, OpponentGameResult(
+                        raw_score=raw_score,
+                        won=(w > 0),
+                        contract_name=contract_name,
+                        place=float(places_seq.get(0, 4)),
+                        declarer_p0=declarer_p0,
+                        bid=bool(agent0_bids),
+                    ))
+                    # Accumulate placement per opponent type
+                    if seq_mode == "batch":
+                        session_places_selfplay.append(p)
+                    elif seq_mode == "hof":
+                        session_places_hof.append(p)
+                    elif seq_mode == "stockskis":
+                        session_places_v5.append(p)
+
+                    # StockŠkis v5 per-contract stats (after w is computed)
+                    if use_stockskis and self.stockskis_version == 5:
+                        self._update_opponent_stats(
+                            session_v5,
+                            session_v5_contracts,
+                            contract_name=contract_name,
+                            raw_score=raw_score,
+                            won=(w > 0),
+                            bid=bool(agent0_bids),
+                            place=float(places.get(0, 4)),
+                            declarer_p0=declarer_p0,
+                        )
+
+                    # Track lookahead scores + bid rate (per-game, aggregated per-session)
+                    if use_lookahead:
+                        session_lookahead_scores.append(raw_score)
+                        session_lookahead_bids.append(b)
+                    recent_rewards.append(r); recent_places.append(p)
+                    recent_bids.append(b); recent_klops.append(k); recent_solos.append(s)
+                    recent_games.append((contract_name, declarer_p0, raw_score, w > 0))
+                    _rsum += r; _psum += p; _bsum += b; _ksum += k; _ssum += s
+
+                    # Per-contract tracking (split by role) — add current game
+                    if contract_name in self.metrics.contract_stats:
+                        cs = self.metrics.contract_stats[contract_name]
+                        if declarer_p0:
+                            cs.decl_played += 1
+                            if raw_score > 0:
+                                cs.decl_won += 1
+                            cs.decl_total_score += raw_score
+                        else:
+                            cs.def_played += 1
+                            if w > 0:
+                                cs.def_won += 1
+                            cs.def_total_score += raw_score
+
+                    # Evict oldest entry once we exceed the window
+                    window = self.games_per_session * 10
+                    if len(recent_rewards) > window:
+                        _rsum -= recent_rewards[-window - 1]
+                        _psum -= recent_places[-window - 1]
+                        _bsum -= recent_bids[-window - 1]
+                        _ksum -= recent_klops[-window - 1]
+                        _ssum -= recent_solos[-window - 1]
+                        # Also evict from rolling contract stats
+                        old_cn, old_decl, old_score, old_won = recent_games[-window - 1]
+                        if old_cn in self.metrics.contract_stats:
+                            old_cs = self.metrics.contract_stats[old_cn]
+                            if old_decl:
+                                old_cs.decl_played -= 1
+                                if old_score > 0:
+                                    old_cs.decl_won -= 1
+                                old_cs.decl_total_score -= old_score
+                            else:
+                                old_cs.def_played -= 1
+                                if old_won:
+                                    old_cs.def_won -= 1
+                                old_cs.def_total_score -= old_score
+
+                    # Update live metrics (O(1) — no recomputation)
+                    self.metrics.episode = game_count
+                    n = min(len(recent_rewards), window)
+                    self.metrics.avg_reward = _rsum / n
+                    self.metrics.avg_placement = _psum / n
+                    self.metrics.bid_rate = _bsum / n
+                    self.metrics.klop_rate = _ksum / n
+                    self.metrics.solo_rate = _ssum / n
+
+                    # Throttle callbacks: every 10 games (print flush + async yield is expensive)
+                    if game_count % 10 == 0 or g == self.games_per_session - 1:
+                        elapsed = time.time() - start_time
+                        self.metrics.games_per_second = game_count / max(elapsed, 1e-6)
+                        for cb in self._metrics_callback:
+                            await cb(self.metrics)
+                        # Yield to the event loop so FastAPI can serve HTTP requests
+                        await asyncio.sleep(0)
+
+            # Per-session average score (internal zero-sum signal)
+            if session_scores:
+                self.metrics.session_avg_score_history.append(
+                    round(sum(session_scores) / len(session_scores), 2)
+                )
+
+            # Per-session table score (family rules: only count declaring team + klop)
+            table_total = sum(session_table_scores)
+            self.metrics.table_score_history.append(round(table_total, 2))
+
+            # --- PPO update on the full session ---
+            if all_experiences:
+                loss_info = self._ppo_update(all_experiences)
+                self.metrics.policy_loss = loss_info["policy_loss"]
+                self.metrics.value_loss = loss_info["value_loss"]
+                self.metrics.entropy = loss_info["entropy"]
+                self.metrics.avg_loss = loss_info["total_loss"]
+
+            # Yield after PPO update so the event loop can serve HTTP requests
+            await asyncio.sleep(0)
+
+            # --- Push to network bank for Fictitious Self-Play ---
+            if self.fsp_ratio > 0 and (session_idx + 1) % self.bank_save_interval == 0:
+                self.network_bank.push(self.shared_network.state_dict())
+
+            # StockŠkis avg finishing place for this session (NaN if no StockŠkis games)
+            if session_stockskis_places:
+                self.metrics.stockskis_place_history.append(
+                    round(sum(session_stockskis_places) / len(session_stockskis_places), 2)
+                )
+
+            # Lookahead opponent metrics for this session
+            if session_lookahead_scores:
+                self.metrics.lookahead_score_history.append(
+                    round(sum(session_lookahead_scores) / len(session_lookahead_scores), 2)
+                )
+                self.metrics.lookahead_bid_rate_history.append(
+                    round(sum(session_lookahead_bids) / len(session_lookahead_bids), 4)
+                )
+
+            # Update v5 evaluation block (can be used as a learning/eval signal)
+            self.metrics.vs_v5 = session_v5
+            self.metrics.vs_v5_contract_stats = session_v5_contracts
+            self.metrics.vs_v5_avg_placement_history.append(round(session_v5.win_rate, 4))
+            self.metrics.vs_v5_avg_score_history.append(round(session_v5.avg_score, 2))
+            self.metrics.vs_v5_avg_place_history.append(round(session_v5.avg_place, 2))
+            self.metrics.vs_v5_bid_rate_history.append(round(session_v5.bid_rate, 4))
+            self.metrics.vs_v5_eval_signal_history.append(
+                round(self._eval_signal(session_v5), 4)
+            )
+
+            # --- Append per-session history for charts ---
+            self.metrics.reward_history.append(self.metrics.avg_reward)
+            self.metrics.avg_placement_history.append(self.metrics.avg_placement)
+            self.metrics.loss_history.append(self.metrics.avg_loss)
+            self.metrics.bid_rate_history.append(self.metrics.bid_rate)
+            self.metrics.klop_rate_history.append(self.metrics.klop_rate)
+            self.metrics.solo_rate_history.append(self.metrics.solo_rate)
+
+            # Per-opponent avg placement history (NaN-safe: only append when games exist)
+            if session_places_selfplay:
+                self.metrics.placement_selfplay_history.append(
+                    round(sum(session_places_selfplay) / len(session_places_selfplay), 2)
+                )
+            if session_places_hof:
+                self.metrics.placement_hof_history.append(
+                    round(sum(session_places_hof) / len(session_places_hof), 2)
+                )
+            if session_places_v5:
+                self.metrics.placement_v5_history.append(
+                    round(sum(session_places_v5) / len(session_places_v5), 2)
+                )
+
+            # Per-contract declarer win rate history
+            for cname in _TRACKED_CONTRACTS:
+                cs = self.metrics.contract_stats[cname]
+                self.metrics.contract_win_rate_history[cname].append(
+                    round(cs.decl_win_rate, 4)
+                )
+
+            # Periodic snapshot checkpoint
+            if (session_idx + 1) % snapshot_interval == 0 or session_idx == num_sessions - 1:
+                snap_info = self._save_checkpoint(game_count, is_snapshot=True)
+                self.metrics.snapshots.append(snap_info)
+
+        # Save final completed snapshot
+        custom_name = f"tarok_agent_completed_S{num_sessions}_ep{game_count}.pt"
+        snap_info = self._save_checkpoint(game_count, is_snapshot=True, custom_name=custom_name)
+        if snap_info:
+            self.metrics.snapshots.append(snap_info)
+        return self.metrics
+
+    async def _play_session_batched(
+        self,
+        session_idx: int,
+        game_count: int,
+        start_time: float,
+    ) -> tuple[list[Experience], list[dict], list[Experience], list[dict]]:
+        """Play a session using batched NN inference.
+
+        Returns (batched_experiences, batched_stats, stockskis_experiences, stockskis_stats).
+        Batched games use BatchGameRunner; StockŠkis games run sequentially.
+        """
+        # Decide per-game modes up front
+        n_stockskis = 0
+        n_hof = 0
+        n_batched = 0
+        game_modes: list[str] = []  # "batch" | "stockskis" | "hof"
+        for _ in range(self.games_per_session):
+            if (
+                self.stockskis_ratio > 0
+                and self._stockskis_opponents is not None
+                and self._rng.random() < self.stockskis_ratio
+            ):
+                game_modes.append("stockskis")
+                n_stockskis += 1
+            elif (
+                self.hof_ratio > 0
+                and self._hof_opponent is not None
+                and self._hof_opponent.is_available()
+                and self._rng.random() < self.hof_ratio
+            ):
+                game_modes.append("hof")
+                n_hof += 1
+            else:
+                game_modes.append("batch")
+                n_batched += 1
+
+        batched_experiences: list[Experience] = []
+        batched_stats: list[dict] = []
+        stockskis_experiences: list[Experience] = []
+        stockskis_stats: list[dict] = []
+
+        # --- Run batched NN games ---
+        if n_batched > 0:
+            # Use the shared network in eval mode for batched inference
+            runner = BatchGameRunner(
+                network=self.shared_network,
+                concurrency=min(self.batch_concurrency, n_batched),
+                oracle=self.shared_network.oracle_critic_enabled,
+                compute=self.compute,
+            )
+            runner._rng = self._rng
+            results = runner.run(
+                total_games=n_batched,
+                explore_rate=self.agents[0].explore_rate,
+                dealer_offset=game_count,
+                game_id_offset=game_count,
+            )
+
+            for result in results:
+                scores = result.scores
+                raw_score = scores.get(0, 0)
+
+                # Convert GameExperience → Experience with rewards assigned
+                game_exps: list[Experience] = []
+                for gexp in result.experiences:
+                    game_exps.append(Experience(
+                        state=gexp.state,
+                        action=gexp.action,
+                        log_prob=gexp.log_prob,
+                        value=gexp.value,
+                        decision_type=gexp.decision_type,
+                        reward=0.0,
+                        done=False,
+                        oracle_state=gexp.oracle_state,
+                        legal_mask=gexp.legal_mask,
+                        game_id=gexp.game_id,
+                        step_in_game=gexp.step_in_game,
+                    ))
+
+                # Assign terminal reward to last experience
+                if game_exps:
+                    game_exps[-1].reward = raw_score / 100.0
+                    game_exps[-1].done = True
+
+                batched_experiences.extend(game_exps)
+
+                # Determine if player 0 bid
+                agent0_bids = (result.declarer_p0 and result.py_state.declarer == 0)
+
+                # Determine if declarer lost (for defender win detection)
+                declarer_lost = False
+                if result.py_state.declarer is not None:
+                    declarer_score = scores.get(result.py_state.declarer, 0)
+                    declarer_lost = declarer_score < 0
+
+                partner_p0 = result.py_state.partner == 0 if result.py_state.partner is not None else False
+                batched_stats.append({
+                    "raw_score": raw_score,
+                    "contract_name": result.contract_name,
+                    "is_klop": result.is_klop,
+                    "is_solo": result.is_solo,
+                    "declarer_p0": result.declarer_p0,
+                    "partner_p0": partner_p0,
+                    "agent0_bids": agent0_bids,
+                    "declarer_lost": declarer_lost,
+                    "agent_place": float({x: rank + 1 for rank, x in enumerate(sorted(result.scores, key=lambda p: result.scores[p], reverse=True))}.get(0, 4)),
+                    "initial_tarok_counts": result.initial_tarok_counts,
+                    "game_mode": "batch",
+                })
+
+        # --- Run StockŠkis games sequentially ---
+        if n_stockskis > 0:
+            original_agents = self._enter_stockskis_mode()
+            for g_idx in range(n_stockskis):
+                if not self._running:
+                    break
+                for agent in self.agents:
+                    if hasattr(agent, 'clear_experiences'):
+                        agent.clear_experiences()
+
+                game = RustGameLoop(self.agents)
+                state, scores = await game.run(dealer=(game_count + n_batched + g_idx) % 4)
+
+                # Only agent 0 records experiences vs StockŠkis
+                reward = scores.get(0, 0) / 100.0
+                self.agents[0].finalize_game(reward)
+                stockskis_experiences.extend(self.agents[0].experiences)
+
+                raw_score = scores.get(0, 0)
+                contract_name = state.contract.name.lower() if state.contract else "klop"
+                is_klop = state.contract is not None and state.contract.is_klop
+                is_solo = state.contract is not None and state.contract.is_solo
+                declarer_p0 = state.declarer == 0
+                agent0_bids_list = [b for b in state.bids if b.player == 0 and b.contract is not None]
+
+                # StockŠkis finishing places
+                sorted_players = sorted(scores, key=lambda p: scores[p], reverse=True)
+                places = {p: rank + 1 for rank, p in enumerate(sorted_players)}
+                avg_sk_place = sum(places[p] for p in range(1, 4)) / 3.0
+
+                declarer_lost = False
+                if state.declarer is not None:
+                    declarer_lost = scores.get(state.declarer, 0) < 0
+
+                partner_p0 = state.partner == 0 if state.partner is not None else False
+                stockskis_stats.append({
+                    "raw_score": raw_score,
+                    "contract_name": contract_name,
+                    "is_klop": is_klop,
+                    "is_solo": is_solo,
+                    "declarer_p0": declarer_p0,
+                    "partner_p0": partner_p0,
+                    "agent0_bids": bool(agent0_bids_list),
+                    "declarer_lost": declarer_lost,
+                    "agent_place": places.get(0, 4),
+                    "stockskis_place": avg_sk_place,
+                    "initial_tarok_counts": state.initial_tarok_counts if hasattr(state, 'initial_tarok_counts') else {},
+                    "game_mode": "stockskis",
+                })
+
+            self._exit_stockskis_mode(original_agents)
+
+        # --- Run HoF games sequentially ---
+        hof_experiences: list[Experience] = []
+        hof_stats: list[dict] = []
+        if n_hof > 0 and self._hof_opponent is not None:
+            original_agents = self._enter_hof_mode()
+            for g_idx in range(n_hof):
+                if not self._running:
+                    break
+                for agent in self.agents:
+                    if hasattr(agent, 'clear_experiences'):
+                        agent.clear_experiences()
+
+                game = RustGameLoop(self.agents)
+                state, scores = await game.run(dealer=(game_count + n_batched + n_stockskis + g_idx) % 4)
+
+                reward = scores.get(0, 0) / 100.0
+                self.agents[0].finalize_game(reward)
+                hof_experiences.extend(self.agents[0].experiences)
+
+                raw_score = scores.get(0, 0)
+                contract_name = state.contract.name.lower() if state.contract else "klop"
+                is_klop = state.contract is not None and state.contract.is_klop
+                is_solo = state.contract is not None and state.contract.is_solo
+                declarer_p0 = state.declarer == 0
+                agent0_bids_list = [b for b in state.bids if b.player == 0 and b.contract is not None]
+
+                declarer_lost = False
+                if state.declarer is not None:
+                    declarer_lost = scores.get(state.declarer, 0) < 0
+
+                partner_p0 = state.partner == 0 if state.partner is not None else False
+                hof_stats.append({
+                    "raw_score": raw_score,
+                    "contract_name": contract_name,
+                    "is_klop": is_klop,
+                    "is_solo": is_solo,
+                    "declarer_p0": declarer_p0,
+                    "partner_p0": partner_p0,
+                    "agent0_bids": bool(agent0_bids_list),
+                    "declarer_lost": declarer_lost,
+                    "initial_tarok_counts": state.initial_tarok_counts if hasattr(state, 'initial_tarok_counts') else {},
+                    "game_mode": "hof",
+                })
+
+            self._exit_hof_mode(original_agents)
+
+        # Merge HoF stats into stockskis stats (same format, processed the same way)
+        stockskis_experiences.extend(hof_experiences)
+        stockskis_stats.extend(hof_stats)
+
+        return batched_experiences, batched_stats, stockskis_experiences, stockskis_stats
+
+    async def _run_warmup(self) -> None:
+        """Pre-train the value network from random Rust games."""
+        from tarok.adapters.ai.warmup import warmup_value_network
+
+        async def on_progress(info: dict):
+            for cb in self._metrics_callback:
+                # Reuse metrics structure to report warmup progress
+                self.metrics.episode = 0
+                self.metrics.avg_loss = info.get("chunk_loss", 0)
+                self.metrics.games_per_second = info.get("gen_speed", 0)
+                await cb(self.metrics)
+            await asyncio.sleep(0)
+
+        def sync_progress(info: dict):
+            # Schedule the async callback on the event loop
+            loop = asyncio.get_event_loop()
+            if loop.is_running():
+                asyncio.ensure_future(on_progress(info))
+
+        result = warmup_value_network(
+            network=self.shared_network,
+            num_games=self.warmup_games,
+            batch_size=2048,
+            epochs=3,
+            lr=1e-3,
+            chunk_size=10_000,
+            device=str(self.compute.device),
+            include_oracle=self.shared_network.oracle_critic_enabled,
+            progress_callback=sync_progress,
+        )
+
+        # Save a warmup checkpoint
+        self._save_checkpoint(0, is_snapshot=True, custom_name="tarok_agent_warmup.pt")
+
+    def _ppo_update(self, experiences: list[Experience]) -> dict[str, float]:
+        """Perform PPO update on collected experiences, grouped by decision type."""
+        if not experiences:
+            return {"policy_loss": 0, "value_loss": 0, "entropy": 0, "total_loss": 0}
+
+        # --- 1. Compute GAE per-game in temporal order ---
+        # Group experiences by game_id, preserving step order
+        from collections import defaultdict as _dd
+        games: dict[int, list[Experience]] = _dd(list)
+        for exp in experiences:
+            games[exp.game_id].append(exp)
+
+        gae_advantages: dict[int, float] = {}  # id(exp) -> advantage
+        gae_returns: dict[int, float] = {}     # id(exp) -> return
+
+        for game_exps in games.values():
+            # Sort by temporal step within the game
+            game_exps.sort(key=lambda e: e.step_in_game)
+            n = len(game_exps)
+
+            # Compute GAE backwards through the game
+            advantages = [0.0] * n
+            returns = [0.0] * n
+            last_gae = 0.0
+            for t in reversed(range(n)):
+                exp = game_exps[t]
+                if t == n - 1:
+                    next_value = 0.0  # terminal
+                else:
+                    next_value = game_exps[t + 1].value.item()
+                delta = exp.reward + self.gamma * next_value - exp.value.item()
+                last_gae = delta + self.gamma * self.gae_lambda * last_gae
+                advantages[t] = last_gae
+                returns[t] = last_gae + exp.value.item()
+
+            for t, exp in enumerate(game_exps):
+                gae_advantages[id(exp)] = advantages[t]
+                gae_returns[id(exp)] = returns[t]
+
+        # --- 2. Group by decision type for correct head routing ---
+        grouped: dict[DecisionType, list[Experience]] = defaultdict(list)
+        for exp in experiences:
+            grouped[exp.decision_type].append(exp)
+
+        total_policy_loss = 0.0
+        total_value_loss = 0.0
+        total_entropy = 0.0
+        num_updates = 0
+
+        for dt, dt_exps in grouped.items():
+            if not dt_exps:
+                continue
+
+            action_size = _ACTION_SIZES[dt]
+
+            states = self.compute.stack_to_device([e.state for e in dt_exps])
+            actions = self.compute.tensor_to_device([e.action for e in dt_exps], dtype=torch.long)
+            old_log_probs = self.compute.stack_to_device([e.log_prob for e in dt_exps])
+
+            # Oracle states for critic (if PTIE is active)
+            has_oracle = dt_exps[0].oracle_state is not None
+            oracle_states = (
+                self.compute.stack_to_device([e.oracle_state for e in dt_exps])
+                if has_oracle else None
+            )
+
+            # Use pre-computed GAE advantages and returns
+            advantages = self.compute.tensor_to_device(
+                [gae_advantages[id(e)] for e in dt_exps], dtype=torch.float32,
+            )
+            returns = self.compute.tensor_to_device(
+                [gae_returns[id(e)] for e in dt_exps], dtype=torch.float32,
+            )
+
+            # Normalise advantages
+            if advantages.numel() > 1:
+                advantages = (advantages - advantages.mean()) / (advantages.std() + 1e-8)
+
+            # Use stored legal masks from game time
+            if dt_exps[0].legal_mask is not None:
+                legal_masks = self.compute.stack_to_device([e.legal_mask for e in dt_exps])
+            else:
+                legal_masks = torch.ones(len(dt_exps), action_size, dtype=torch.float32)
+                legal_masks = self.compute.to_device(legal_masks)
+
+            # Old values for value clipping
+            old_values = self.compute.stack_to_device([e.value for e in dt_exps])
+
+            for _ in range(self.epochs_per_update):
+                indices = torch.randperm(len(dt_exps))
+
+                for start in range(0, len(dt_exps), self.batch_size):
+                    end = min(start + self.batch_size, len(dt_exps))
+                    batch_idx = indices[start:end]
+
+                    b_states = states[batch_idx]
+                    b_actions = actions[batch_idx]
+                    b_old_log_probs = old_log_probs[batch_idx]
+                    b_advantages = advantages[batch_idx]
+                    b_returns = returns[batch_idx]
+                    b_masks = legal_masks[batch_idx]
+                    b_oracle = oracle_states[batch_idx] if oracle_states is not None else None
+                    b_old_values = old_values[batch_idx]
+
+                    new_log_probs, new_values, entropy = self.shared_network.evaluate_action(
+                        b_states, b_actions, b_masks, dt,
+                        oracle_state=b_oracle,
+                    )
+
+                    # PPO clipped objective
+                    ratio = torch.exp(new_log_probs - b_old_log_probs)
+                    surr1 = ratio * b_advantages
+                    surr2 = torch.clamp(
+                        ratio, 1 - self.clip_epsilon, 1 + self.clip_epsilon
+                    ) * b_advantages
+                    policy_loss = -torch.min(surr1, surr2).mean()
+
+                    # Value loss with optional clipping (PPO best practice)
+                    if self._value_clip > 0:
+                        v_clipped = b_old_values + torch.clamp(
+                            new_values - b_old_values,
+                            -self._value_clip, self._value_clip,
+                        )
+                        vl_unclipped = (new_values - b_returns) ** 2
+                        vl_clipped = (v_clipped - b_returns) ** 2
+                        value_loss = 0.5 * torch.max(vl_unclipped, vl_clipped).mean()
+                    else:
+                        value_loss = nn.functional.mse_loss(new_values, b_returns)
+
+                    loss = (
+                        policy_loss
+                        + self.value_coef * value_loss
+                        - self.entropy_coef * entropy.mean()
+                    )
+
+                    # --- v2: Oracle guiding distillation loss ---
+                    if (
+                        self._oracle_guiding_coef > 0
+                        and self.shared_network.oracle_critic_enabled
+                        and b_oracle is not None
+                    ):
+                        actor_feats = self.shared_network.get_actor_features(b_states)
+                        with torch.no_grad():
+                            critic_feats = self.shared_network.get_critic_features(b_oracle)
+                        oracle_guide_loss = 1.0 - nn.functional.cosine_similarity(
+                            actor_feats, critic_feats, dim=-1
+                        ).mean()
+                        loss = loss + self._oracle_guiding_coef * oracle_guide_loss
+
+                    # Skip corrupted batches
+                    if not torch.isfinite(loss):
+                        log.warning("Non-finite loss (%.4g) at session %d, skipping batch", loss.item(), self.metrics.session)
+                        continue
+
+                    self.optimizer.zero_grad()
+                    loss.backward()
+                    nn.utils.clip_grad_norm_(self.shared_network.parameters(), 0.5)
+                    self.optimizer.step()
+
+                    total_policy_loss += policy_loss.item()
+                    total_value_loss += value_loss.item()
+                    total_entropy += entropy.mean().item()
+                    num_updates += 1
+
+        n = max(num_updates, 1)
+        return {
+            "policy_loss": total_policy_loss / n,
+            "value_loss": total_value_loss / n,
+            "entropy": total_entropy / n,
+            "total_loss": (total_policy_loss + total_value_loss) / n,
+        }
+
+    def _save_checkpoint(self, episode: int, is_snapshot: bool = False, custom_name: str | None = None) -> dict:
+        data = {
+            "run_id": self.metrics.run_id,
+            "episode": episode,
+            "session": self.metrics.session,
+            "model_state_dict": self.shared_network.state_dict(),
+            "optimizer_state_dict": self.optimizer.state_dict(),
+            "metrics": self.metrics.to_dict(),
+        }
+
+        # Always save as 'latest'
+        latest = self.save_dir / "tarok_agent_latest.pt"
+        torch.save(data, latest)
+
+        if not is_snapshot and not custom_name:
+            return {}
+
+        file_name = custom_name if custom_name else f"tarok_agent_ep{episode}.pt"
+        path = self.save_dir / file_name
+        torch.save(data, path)
+
+        info = {
+            "filename": path.name,
+            "run_id": self.metrics.run_id,
+            "episode": episode,
+            "session": self.metrics.session,
+            "win_rate": round(self.metrics.avg_placement, 4),
+            "avg_reward": round(self.metrics.avg_reward, 2),
+            "games_per_second": round(self.metrics.games_per_second, 1),
+        }
+        return info
+
+    def load_checkpoint(self, path: str | Path) -> None:
+        checkpoint = torch.load(path, map_location=self.compute.device, weights_only=True)
+        self.shared_network.load_state_dict(checkpoint["model_state_dict"])
+        self.optimizer.load_state_dict(checkpoint["optimizer_state_dict"])
+
+    def stop(self) -> None:
+        self._running = False
+
 
 # ---------------------------------------------------------------------------
 # Persona naming — random female name + surname + age
@@ -93,6 +1749,19 @@ def _generate_persona(rng: random.Random | None = None) -> dict:
     return {"first_name": first, "last_name": last, "age": 0}
 
 
+def _format_duration(seconds: float) -> str:
+    """Format seconds into a human-readable duration string."""
+    if seconds < 60:
+        return f"{int(seconds)}s"
+    if seconds < 3600:
+        m = int(seconds // 60)
+        s = int(seconds % 60)
+        return f"{m}m {s}s"
+    h = int(seconds // 3600)
+    m = int((seconds % 3600) // 60)
+    return f"{h}h {m}m"
+
+
 def _model_hash(network: TarokNet) -> str:
     """Short deterministic hash of model weights for unique identification."""
     h = hashlib.sha256()
@@ -114,70 +1783,83 @@ BACKEND_ROOT = Path(__file__).resolve().parents[4]
 CHECKPOINTS_DIR = BACKEND_ROOT / "checkpoints"
 HOF_DIR = CHECKPOINTS_DIR / "hall_of_fame"
 
+# Global HoF manager — max 10 auto models, pinned models are exempt
+_hof_manager = HoFManager(HOF_DIR, max_auto=10)
+
 
 def _ensure_hof_dir():
     HOF_DIR.mkdir(parents=True, exist_ok=True)
 
 
-def save_to_hof(network: TarokNet, persona: dict, eval_history: list[dict], phase_label: str = "") -> dict:
-    """Save a model snapshot to the Hall of Fame directory."""
-    _ensure_hof_dir()
-    h = _model_hash(network)
-    display = _display_name(persona, h)
-    filename = f"hof_{persona['first_name']}_{persona['last_name']}_age{persona['age']}_{h}.pt"
+def get_hof_manager() -> HoFManager:
+    """Return the global HoFManager instance."""
+    return _hof_manager
 
-    latest_eval = eval_history[-1] if eval_history else {}
 
-    data = {
-        "model_state_dict": network.state_dict(),
-        "persona": persona,
-        "model_hash": h,
-        "display_name": display,
-        "model_name": display,
-        "phase_label": phase_label,
-        "eval_history": eval_history,
-        "hidden_size": network.shared[0].out_features,
-        "metrics": {
-            "win_rate": latest_eval.get("vs_v1", 0),
-            "vs_v1": latest_eval.get("vs_v1", 0),
-            "vs_v2": latest_eval.get("vs_v2", 0),
-            "vs_v3": latest_eval.get("vs_v3", 0),
-            "vs_v3.2": latest_eval.get("vs_v3.2", 0),
-            "avg_score_v1": latest_eval.get("avg_score_v1", 0),
-        },
-        "saved_at": time.time(),
-    }
+def save_to_hof(
+    network: TarokNet,
+    persona: dict,
+    eval_history: list[dict],
+    phase_label: str = "",
+    pinned: bool = False,
+) -> dict:
+    """Save a model snapshot to the Hall of Fame directory.
 
-    torch.save(data, HOF_DIR / filename)
-
-    # Update manifest
-    manifest_path = HOF_DIR / "manifest.json"
-    manifest = []
-    if manifest_path.exists():
-        manifest = json.loads(manifest_path.read_text())
-    manifest.append({
-        "filename": filename,
-        "display_name": display,
-        "persona": persona,
-        "model_hash": h,
-        "phase_label": phase_label,
-        "vs_v1": latest_eval.get("vs_v1", 0),
-        "vs_v2": latest_eval.get("vs_v2", 0),
-        "vs_v3": latest_eval.get("vs_v3", 0),
-        "vs_v3.2": latest_eval.get("vs_v3.2", 0),
-        "saved_at": data["saved_at"],
-    })
-    manifest_path.write_text(json.dumps(manifest, indent=2))
-
-    return {"filename": filename, "display_name": display, "model_hash": h}
+    If *pinned* is True the model is stored in the ``pinned/`` subdirectory
+    and is exempt from auto-eviction.  Auto models are capped at
+    ``_hof_manager.max_auto`` (default 10); weakest are auto-evicted.
+    """
+    return _hof_manager.save(network, persona, eval_history, phase_label=phase_label, pinned=pinned)
 
 
 def list_hof() -> list[dict]:
-    """List all Hall of Fame models."""
-    manifest_path = HOF_DIR / "manifest.json"
-    if not manifest_path.exists():
-        return []
-    return json.loads(manifest_path.read_text())
+    """List all Hall of Fame models (pinned first, then auto)."""
+    return _hof_manager.list()
+
+
+def remove_from_hof(model_hash: str) -> bool:
+    """Remove a model from the Hall of Fame by model_hash.
+
+    Works for both pinned and auto models.
+    Returns True if the model was found and removed.
+    """
+    return _hof_manager.remove(model_hash)
+
+
+def pin_hof(model_hash: str) -> bool:
+    """Pin a HoF model (exempt from auto-eviction)."""
+    return _hof_manager.pin(model_hash)
+
+
+def unpin_hof(model_hash: str) -> bool:
+    """Unpin a HoF model (subject to auto-eviction again)."""
+    return _hof_manager.unpin(model_hash)
+
+
+def promote_checkpoint_to_hof(checkpoint_filename: str) -> dict | None:
+    """Promote an existing checkpoint file into the Hall of Fame.
+
+    Loads the .pt file, extracts metadata, and saves it to the HoF directory.
+    Returns the HoF entry info or None if the file doesn't exist / is invalid.
+    """
+    # Try checkpoints dir first, then HoF dir (for re-promoting)
+    pt_path = CHECKPOINTS_DIR / checkpoint_filename
+    if not pt_path.exists():
+        return None
+    try:
+        data = torch.load(pt_path, map_location="cpu", weights_only=False)
+    except Exception:
+        return None
+    state_dict = data.get("model_state_dict")
+    if state_dict is None:
+        return None
+    hidden_size = data.get("hidden_size", 256)
+    net = TarokNet(hidden_size=hidden_size)
+    net.load_state_dict(state_dict)
+    persona = data.get("persona", {"first_name": "Promoted", "last_name": "Model", "age": 0})
+    eval_history = data.get("eval_history", [])
+    phase_label = data.get("phase_label", "manual-promote")
+    return save_to_hof(net, persona, eval_history, phase_label=phase_label)
 
 
 def _resolve_checkpoint_path(choice: str) -> Path:
@@ -220,7 +1902,7 @@ class LabState:
     self_play_games: int = 0
     self_play_sessions: int = 0
     # Per-session training metrics (like TrainingDashboard)
-    sp_win_rate: float = 0.0
+    sp_avg_placement: float = 0.0
     sp_avg_reward: float = 0.0
     sp_avg_score: float = 0.0
     sp_bid_rate: float = 0.0
@@ -228,7 +1910,7 @@ class LabState:
     sp_solo_rate: float = 0.0
     sp_games_per_second: float = 0.0
     # History arrays (one entry per session)
-    sp_win_rate_history: list[float] = field(default_factory=list)
+    sp_avg_placement_history: list[float] = field(default_factory=list)
     sp_avg_reward_history: list[float] = field(default_factory=list)
     sp_avg_score_history: list[float] = field(default_factory=list)
     sp_loss_history: list[float] = field(default_factory=list)
@@ -255,6 +1937,14 @@ class LabState:
     pbt_population: list[dict[str, Any]] = field(default_factory=list)
     pbt_generation_history: list[dict[str, Any]] = field(default_factory=list)
     pbt_events: list[dict[str, Any]] = field(default_factory=list)
+    # Training summary (populated at completion)
+    training_summary: dict[str, Any] | None = None
+    # Opponent pool stats (updated per session during self-play)
+    opponent_stats: dict[str, dict] = field(default_factory=dict)
+    # Contract stats (rolling window, updated per session)
+    contract_stats: dict[str, dict] = field(default_factory=dict)
+    # Tarok count vs contract distribution
+    tarok_count_bids: dict[str, dict[str, int]] = field(default_factory=dict)
 
 
 # Global lab state
@@ -323,9 +2013,6 @@ def _train_member_in_process(
     Returns updated network/optimizer state_dicts and training metrics.
     Sends periodic progress updates via *progress_queue* if provided.
     """
-    from tarok.adapters.ai.agent import RLAgent
-    from tarok.adapters.ai.trainer import PPOTrainer
-
     agents = [
         RLAgent(name=f"P{s}", hidden_size=hidden_size, device="cpu",
                 explore_rate=float(hparams.get("explore_rate", 0.1)))
@@ -637,19 +2324,8 @@ def _make_eval_agent(network: TarokNet) -> RLAgent:
 
 
 def _make_opponents(version: str) -> list:
-    """Create 3 heuristic bot opponents of the given version."""
-    if version == "v2":
-        return [StockSkisPlayerV2(name=f"V2-{i}") for i in range(3)]
-    elif version == "v3":
-        return [StockSkisPlayerV3(name=f"V3-{i}") for i in range(3)]
-    elif version == "v3.2":
-        return [StockSkisPlayerV3_2(name=f"V3.2-{i}") for i in range(3)]
-    elif version == "v4":
-        return [StockSkisPlayerV4(name=f"V4-{i}") for i in range(3)]
-    elif version == "v5":
-        return [StockSkisPlayerV5(name=f"V5-{i}") for i in range(3)]
-    else:
-        return [StockSkisPlayer(name=f"V1-{i}", strength=1.0) for i in range(3)]
+    """Create 3 heuristic bot opponents."""
+    return [StockSkisPlayerV5(name=f"V5-{i}") for i in range(3)]
 
 
 def _evaluate_vs_bots_sync(
@@ -812,6 +2488,161 @@ async def _evaluate_vs_bots(
     return await asyncio.get_event_loop().run_in_executor(
         None, _evaluate_vs_bots_sync, network, num_games, version,
     )
+
+
+def _evaluate_vs_nn_opponent_sync(
+    network: TarokNet,
+    opponent_state_dict: dict,
+    opponent_hidden_size: int,
+    num_games: int = 20,
+) -> dict:
+    """Evaluate network against a frozen NN opponent (HoF or FSP snapshot)."""
+    import logging
+    log = logging.getLogger(__name__)
+
+    network.eval()
+    agent = _make_eval_agent(network)
+
+    # Build opponent network + agents
+    opp_net = TarokNet(hidden_size=opponent_hidden_size)
+    try:
+        opp_net.load_state_dict(opponent_state_dict)
+    except Exception:
+        log.warning("Failed to load opponent state dict for evaluation")
+        return {"win_rate": 0.0, "avg_score": 0.0, "avg_place": 4.0, "games": 0}
+    opp_net.eval()
+
+    opp_agents = []
+    for i in range(3):
+        a = RLAgent(name=f"Opp-{i}", hidden_size=opponent_hidden_size, device="cpu", explore_rate=0.0)
+        a.network = opp_net
+        a.set_training(False)
+        opp_agents.append(a)
+
+    wins = 0
+    total_score = 0
+    total_place = 0.0
+
+    loop = asyncio.new_event_loop()
+    try:
+        for g in range(num_games):
+            players = [agent] + opp_agents
+            game = GameLoop(players, rng=random.Random(g + 9999))
+            _state, scores = loop.run_until_complete(game.run(dealer=g % 4))
+
+            raw_score = scores.get(0, 0)
+            total_score += raw_score
+
+            sorted_players = sorted(scores, key=lambda p: scores[p], reverse=True)
+            places = {p: rank + 1 for rank, p in enumerate(sorted_players)}
+            total_place += float(places.get(0, 4))
+
+            is_klop = _state.contract is not None and _state.contract.is_klop
+            if is_klop:
+                won = raw_score > 0
+            elif _state.declarer == 0:
+                won = raw_score > 0
+            else:
+                declarer_score = scores.get(_state.declarer, 0) if _state.declarer is not None else 0
+                won = declarer_score < 0
+            if won:
+                wins += 1
+
+            agent.clear_experiences()
+    finally:
+        loop.close()
+
+    n = max(num_games, 1)
+    return {
+        "win_rate": round(wins / n, 4),
+        "avg_score": round(total_score / n, 2),
+        "avg_place": round(total_place / n, 2),
+        "games": num_games,
+    }
+
+
+async def _evaluate_vs_nn_opponent(
+    network: TarokNet,
+    opponent_state_dict: dict,
+    opponent_hidden_size: int,
+    num_games: int = 20,
+) -> dict:
+    """Async wrapper for NN opponent evaluation."""
+    return await asyncio.get_event_loop().run_in_executor(
+        None, _evaluate_vs_nn_opponent_sync, network, opponent_state_dict,
+        opponent_hidden_size, num_games,
+    )
+
+
+async def _evaluate_vs_opponents(
+    network: TarokNet,
+    trainer,
+    num_games: int = 20,
+) -> dict[str, dict]:
+    """Evaluate network against configured opponents (HoF models, FSP snapshots).
+
+    Returns {opponent_label: {win_rate, avg_score, avg_place, games}}.
+    """
+    import logging
+    log = logging.getLogger(__name__)
+    results: dict[str, dict] = {}
+
+    # Evaluate against each HoF model
+    if hasattr(trainer, '_hof_opponent') and trainer._hof_opponent is not None:
+        hof_opp = trainer._hof_opponent
+        hof_opp._refresh_cache()
+        for model_path in hof_opp._cached_models:
+            try:
+                data = torch.load(model_path, map_location="cpu", weights_only=False)
+                state_dict = data.get("model_state_dict")
+                if state_dict is None:
+                    continue
+                hidden_size = data.get("hidden_size", network.shared[0].out_features)
+                # Extract human-readable label from filename
+                # e.g. hof_Ema_Mlakar_age28_c6fa1e53.pt -> Ema Mlakar (28)
+                name = model_path.stem  # without .pt
+                label = _hof_filename_to_label(name)
+                r = await _evaluate_vs_nn_opponent(
+                    network, state_dict, hidden_size, num_games,
+                )
+                results[f"hof:{label}"] = r
+            except Exception:
+                log.warning("Failed to evaluate vs HoF model %s", model_path.name)
+
+    # Evaluate against latest FSP snapshot
+    if hasattr(trainer, 'network_bank') and trainer.network_bank.is_ready:
+        snap, snapshot_id = trainer.network_bank.sample()
+        if snap is not None:
+            hidden_size = network.shared[0].out_features
+            r = await _evaluate_vs_nn_opponent(
+                network, snap, hidden_size, num_games,
+            )
+            results[f"fsp:{snapshot_id}"] = r
+
+    return results
+
+
+def _hof_filename_to_label(name: str) -> str:
+    """Convert HoF filename stem to a readable label.
+
+    e.g. 'hof_Ema_Mlakar_age28_c6fa1e53' -> 'Ema Mlakar (28)'
+    """
+    import re
+    name = name.removeprefix("hof_")
+    # Try to extract name parts and age
+    m = re.match(r'(.+?)_age(\d+)_([a-f0-9]+)$', name)
+    if m:
+        person = m.group(1).replace('_', ' ')
+        age = m.group(2)
+        return f"{person} ({age})"
+    # Try island format: Name_Name_island1_gen2_hash
+    m = re.match(r'(.+?)_island(\d+)_gen(\d+)_([a-f0-9]+)$', name)
+    if m:
+        person = m.group(1).replace('_', ' ')
+        island = m.group(2)
+        gen = m.group(3)
+        return f"{person} i{island}g{gen}"
+    return name.replace('_', ' ')
 
 
 async def _evaluate_vs_selected_bots(
@@ -1012,8 +2843,6 @@ def _build_pbt_population(
     fsp_ratio: float,
     mutation_scale: float,
 ) -> list[dict[str, Any]]:
-    from tarok.adapters.ai.trainer import PPOTrainer
-
     base_state = copy.deepcopy(seed_network.state_dict())
     base_hparams = _default_pbt_hparams(learning_rate, fsp_ratio)
     members: list[dict[str, Any]] = []
@@ -1429,17 +3258,17 @@ async def _run_island_pbt_session(
             _island_processes.append(p)
 
         _lab.pbt_population = [
-            {"index": i, "label": f"Island {i}", "status": "starting",
+            {"index": i, "label": f"Island {i}", "name": f"Island {i}", "status": "starting",
              "fitness": 0, "games": 0, "hparams": {},
              "batch_avg_reward": 0, "batch_win_rate": 0,
              **{f"vs_{v}": 0 for v in eval_bots},
              **{f"avg_score_{v}": 0 for v in eval_bots},
              "loss": 0, "copied_from": None, "mutations": 0,
              "survival_count": 0, "model_hash": "",
-             "games_per_sec": 0, "generation": 0}
+             "games_per_sec": 0, "generation": 0, "persona": {}}
             for i in range(population_size)
         ]
-        _lab.total_training_sessions = int(time_limit_minutes)
+        _lab.total_training_sessions = round(time_limit_secs)  # seconds
 
         # Poll island stats files for dashboard updates
         t_start = time.perf_counter()
@@ -1451,13 +3280,15 @@ async def _run_island_pbt_session(
 
             _lab.self_play_games = total_games
             _lab.sp_games_per_second = round(total_gps, 1)
-            _lab.training_sessions_done = min(int(elapsed / 60), int(time_limit_minutes))
+            _lab.training_sessions_done = round(elapsed)  # seconds elapsed
+            _lab.total_training_sessions = round(time_limit_secs)  # seconds total
 
             # Update per-island population display
             for s in stats:
                 idx = s.get("island_id", 0)
                 if idx < len(_lab.pbt_population):
                     island_hp = s.get("hparams", {})
+                    island_name = s.get("name", f"Island {idx}")
                     _lab.pbt_population[idx].update({
                         "status": s.get("status", "running"),
                         "fitness": s.get("best_fitness", 0),
@@ -1467,15 +3298,20 @@ async def _run_island_pbt_session(
                         "loss": s.get("loss", 0),
                         "games_per_sec": s.get("games_per_sec", 0),
                         "generation": s.get("generation", 0),
+                        "elapsed": s.get("elapsed", 0),
+                        "time_limit": time_limit_secs,
                         "hparams": island_hp,
                         "model_hash": f"island-{idx}",
+                        "label": island_name,
+                        "name": island_name,
+                        "persona": s.get("persona", {}),
                         **{k: s.get(k, 0) for k in s if k.startswith("vs_") or k.startswith("avg_score_")},
                     })
 
             # Best across all islands
             if stats:
                 best = max(stats, key=lambda s: s.get("best_fitness", 0))
-                _lab.sp_win_rate = best.get("win_rate", 0)
+                _lab.sp_avg_placement = best.get("win_rate", 0)
                 _lab.sp_avg_score = best.get("avg_score", 0)
                 _lab.current_loss = best.get("loss", 0)
                 _lab.pbt_generation = max(s.get("generation", 0) for s in stats)
@@ -1501,11 +3337,153 @@ async def _run_island_pbt_session(
             if p.is_alive():
                 p.terminate()
 
-        # Load best model from HoF back into lab state
-        hof_data = _load_best_from_hof(HOF_DIR)
-        if hof_data is not None and _lab.network is not None:
-            _lab.network.load_state_dict(hof_data["model_state_dict"])
-            _lab.model_hash = _model_hash(_lab.network)
+        # --- Post-training: run round-robin tournament between HoF models ---
+        _lab.phase = "tournament"
+        _lab.active_program = "island_tournament"
+
+        from tarok.adapters.ai.island_worker import run_hof_tournament
+
+        def _tournament_progress(matchup, total, name_a, name_b):
+            _lab.pbt_member_index = matchup
+            _lab.pbt_member_total = total
+
+        tournament_results = await asyncio.get_event_loop().run_in_executor(
+            None,
+            lambda: run_hof_tournament(
+                HOF_DIR,
+                games_per_matchup=eval_games,
+                hidden_size=hidden_size,
+                progress_callback=_tournament_progress,
+            ),
+        )
+
+        # --- Cross-island learning: top 4 models play together, all learn ---
+        cross_island_sessions = 0
+        if len(tournament_results) >= 2 and _lab.running:
+            _lab.phase = "cross_island"
+            _lab.active_program = "cross_island_learning"
+            top_models = tournament_results[:min(4, len(tournament_results))]
+
+            # Load distinct networks for up to 4 agents
+            cross_agents: list[RLAgent] = []
+            for i, result in enumerate(top_models):
+                pt_path = HOF_DIR / result["filename"]
+                if pt_path.exists():
+                    try:
+                        from tarok.adapters.ai.network import TarokNet as _TN
+                        data = torch.load(pt_path, map_location="cpu", weights_only=False)
+                        net = _TN(hidden_size=hidden_size)
+                        net.load_state_dict(data["model_state_dict"])
+                        a = RLAgent(name=result["name"], hidden_size=hidden_size, device="cpu", explore_rate=0.05)
+                        a.network = net
+                        a.set_training(True)
+                        cross_agents.append(a)
+                    except Exception:
+                        pass
+
+            # Pad to 4 if needed
+            while len(cross_agents) < 4:
+                a = RLAgent(name=f"Clone-{len(cross_agents)}", hidden_size=hidden_size, device="cpu", explore_rate=0.05)
+                if cross_agents:
+                    a.network = copy.deepcopy(cross_agents[0].network)
+                a.set_training(True)
+                cross_agents.append(a)
+
+            # Each agent has its own optimizer — true multi-agent learning
+            cross_trainers = []
+            for i, agent in enumerate(cross_agents):
+                t = PPOTrainer(
+                    agents=[agent] + [cross_agents[(i + k) % len(cross_agents)] for k in range(1, 4)],
+                    lr=learning_rate,
+                    games_per_session=games_per_session,
+                    device="cpu",
+                    stockskis_ratio=0.0,
+                    fsp_ratio=0.0,
+                    use_rust_engine=True,
+                    save_dir=str(CHECKPOINTS_DIR / "island_tmp" / f"cross_{i}"),
+                    batch_concurrency=32,
+                )
+                cross_trainers.append(t)
+
+            # Run cross-training: agents play together, each learns from their own perspective
+            cross_sessions = max(5, eval_interval)  # at least 5 sessions
+            _lab.total_training_sessions = cross_sessions
+            _lab.training_sessions_done = 0
+
+            for sess in range(cross_sessions):
+                if not _lab.running:
+                    break
+
+                # Play games with all 4 distinct agents
+                game_loop = GameLoop(cross_agents, rng=random.Random(sess))
+                state, scores = await game_loop.run(dealer=sess % 4)
+
+                # Each agent collects its own experiences and updates
+                for i, agent in enumerate(cross_agents):
+                    if agent.experiences:
+                        for exp in agent.experiences:
+                            exp.reward = float(scores.get(i, 0))
+                        loss_info = cross_trainers[i]._ppo_update(agent.experiences)
+                        agent.clear_experiences()
+
+                cross_island_sessions = sess + 1
+                _lab.training_sessions_done = cross_island_sessions
+
+                if sess % 5 == 4:
+                    await asyncio.sleep(0)  # yield control
+
+            # Find best cross-trained model by quick eval
+            best_cross_idx = 0
+            best_cross_wr = -1.0
+            for i, agent in enumerate(cross_agents):
+                agent.network.eval()
+                result = _evaluate_vs_bots_sync(agent.network, min(eval_games, 20), "v3")
+                wr = result if isinstance(result, (int, float)) else result.get("win_rate", 0) if isinstance(result, dict) else 0
+                if wr > best_cross_wr:
+                    best_cross_wr = wr
+                    best_cross_idx = i
+
+            # Save best cross-trained model
+            best_cross_net = cross_agents[best_cross_idx].network
+            if _lab.network is not None:
+                _lab.network.load_state_dict(best_cross_net.state_dict())
+            _lab.model_hash = _model_hash(_lab.network) if _lab.network else ""
+
+        # --- Load best model from HoF if no cross-training happened ---
+        if cross_island_sessions == 0:
+            hof_data = _load_best_from_hof(HOF_DIR)
+            if hof_data is not None and _lab.network is not None:
+                _lab.network.load_state_dict(hof_data["model_state_dict"])
+                _lab.model_hash = _model_hash(_lab.network)
+
+        # --- Build training summary ---
+        final_stats = read_all_island_stats(CHECKPOINTS_DIR)
+        total_games_all = sum(s.get("total_games", 0) for s in final_stats)
+        total_time_all = max(s.get("elapsed", 0) for s in final_stats) if final_stats else 0
+
+        _lab.training_summary = {
+            "num_islands": population_size,
+            "total_games": total_games_all,
+            "total_time_seconds": round(total_time_all, 1),
+            "total_time_display": _format_duration(total_time_all),
+            "cross_island_sessions": cross_island_sessions,
+            "tournament_results": tournament_results[:10],  # top 10
+            "champion": tournament_results[0] if tournament_results else None,
+            "island_summaries": [
+                {
+                    "island_id": s.get("island_id", i),
+                    "name": s.get("name", f"Island {i}"),
+                    "persona": s.get("persona", {}),
+                    "generations": s.get("generation", 0),
+                    "games": s.get("total_games", 0),
+                    "fitness": s.get("best_fitness", 0),
+                    "games_per_sec": s.get("games_per_sec", 0),
+                    **{k: s.get(k, 0) for k in s if k.startswith("vs_")},
+                }
+                for i, s in enumerate(final_stats)
+            ],
+            "eval_bots": eval_bots,
+        }
 
         _lab.phase = "done"
 
@@ -1642,7 +3620,7 @@ async def _run_pbt_self_play_session(
                             m.get("games", 0) for m in members
                         ) + sum(member_games.values())
                         _lab.sp_games_per_second = sum(member_gps.values())
-                        _lab.sp_win_rate = msg["win_rate"]
+                        _lab.sp_avg_placement = msg["win_rate"]
                         _lab.sp_avg_score = msg["avg_score"]
                         # Update member status
                         if idx < len(members):
@@ -1779,17 +3757,18 @@ async def _run_self_play_session(
     learning_rate: float,
     stockskis_ratio: float,
     fsp_ratio: float,
+    hof_ratio: float = 0.0,
 ):
-    """Self-play PPO training pipeline:
-    1. Create PPOTrainer wrapping the lab network
-    2. Run sessions of self-play with PPO updates
-    3. Every eval_interval sessions, eval vs all bots and save
+    """Self-play PPO training pipeline.
+
+    Delegates game-playing to the PPOTrainer which handles all opponent types
+    (self-play, StockSkis, HoF, FSP) and records per-opponent stats.
+    Training game stats are emitted to eval_history each session for the chart.
+    Detailed evaluation should be done via tournaments.
     """
     global _lab
 
     try:
-        from tarok.adapters.ai.trainer import PPOTrainer
-
         _lab.phase = "self_play"
         _lab.active_program = "self_play"
         _lab.total_training_sessions = num_sessions
@@ -1814,6 +3793,8 @@ async def _run_self_play_session(
             stockskis_ratio=stockskis_ratio,
             stockskis_strength=1.0,
             fsp_ratio=fsp_ratio,
+            hof_ratio=hof_ratio,
+            hof_dir=str(HOF_DIR),
             bank_size=20,
             use_rust_engine=True,
             lr_schedule="cosine",
@@ -1825,12 +3806,15 @@ async def _run_self_play_session(
         )
 
         trainer._running = True
+        game_count = 0
+        hof_interval = max(eval_interval, 1)
 
-        # Detect if batched runner is available (Rust engine required)
-        can_batch = _HAS_RUST
-        if can_batch:
-            compute = create_backend(dev)
-            _lab.network = compute.prepare_network(_lab.network)
+        # Rolling contract stats (cumulative across sessions)
+        rolling_contract_stats: dict[str, ContractStats] = {
+            c: ContractStats() for c in _TRACKED_CONTRACTS
+        }
+        # Tarok count distribution (cumulative)
+        tarok_count_bids: dict[int, dict[str, int]] = {i: {} for i in range(13)}
 
         for session_idx in range(num_sessions):
             if not _lab.running:
@@ -1844,111 +3828,93 @@ async def _run_self_play_session(
             _lab.self_play_sessions = session_idx + 1
             await asyncio.sleep(0)
 
-            all_experiences: list = []
+            session_start = time.time()
+
+            # Begin per-session opponent tracking
+            trainer.opponent_pool.begin_session()
+
+            # --- Delegate game-playing to trainer ---
+            batched_exps, batched_stats, sk_exps, sk_stats = (
+                await trainer._play_session_batched(
+                    session_idx, game_count, session_start,
+                )
+            )
+
+            all_experiences = list(batched_exps) + list(sk_exps)
+            all_stats = list(batched_stats) + list(sk_stats)
+
+            # Process stats for lab metrics
             session_scores: list[int] = []
             session_wins = 0
+            session_places: list[float] = []
             session_bids = 0
             session_klops = 0
             session_solos = 0
-            session_start = time.time()
 
-            if can_batch:
-                # ── Batched self-play (all games at once) ──
-                runner = BatchGameRunner(
-                    network=_lab.network,
-                    concurrency=min(32, games_per_session),
-                    oracle=_lab.network.oracle_critic_enabled,
-                    compute=compute,
-                )
-                game_offset = session_idx * games_per_session
-                results = runner.run(
-                    total_games=games_per_session,
-                    explore_rate=0.1,
-                    dealer_offset=game_offset,
-                    game_id_offset=game_offset,
-                )
+            for result in all_stats:
+                raw_score = result["raw_score"]
+                is_klop = result["is_klop"]
+                is_solo = result["is_solo"]
+                declarer_p0 = result["declarer_p0"]
+                agent0_bids = result["agent0_bids"]
+                game_mode = result.get("game_mode", "batch")
 
-                for result in results:
-                    scores = result.scores
-                    raw_score = scores.get(0, 0)
+                session_scores.append(raw_score)
+                game_count += 1
+                _lab.self_play_games += 1
 
-                    # Convert GameExperience → Experience with terminal reward
-                    from tarok.adapters.ai.agent import Experience
-                    game_exps: list = []
-                    for gexp in result.experiences:
-                        game_exps.append(Experience(
-                            state=gexp.state,
-                            action=gexp.action,
-                            log_prob=gexp.log_prob,
-                            value=gexp.value,
-                            decision_type=gexp.decision_type,
-                            reward=0.0,
-                            done=False,
-                            oracle_state=gexp.oracle_state,
-                            legal_mask=gexp.legal_mask,
-                            game_id=gexp.game_id,
-                            step_in_game=gexp.step_in_game,
-                        ))
-                    if game_exps:
-                        game_exps[-1].reward = raw_score / 100.0
-                        game_exps[-1].done = True
-                    all_experiences.extend(game_exps)
+                # Win detection
+                if is_klop:
+                    won = raw_score > 0
+                elif declarer_p0:
+                    won = raw_score > 0
+                else:
+                    won = result.get("declarer_lost", False)
 
-                    session_scores.append(raw_score)
-                    _lab.self_play_games += 1
+                if won:
+                    session_wins += 1
+                if is_klop:
+                    session_klops += 1
+                if declarer_p0:
+                    session_bids += 1
+                if is_solo and declarer_p0:
+                    session_solos += 1
 
-                    # Track per-game stats
-                    _, win = _score_game(result.py_state, scores, player_idx=0)
-                    session_wins += int(win)
-                    if result.is_klop:
-                        session_klops += 1
-                    if result.declarer_p0:
-                        session_bids += 1
-                    if result.is_solo and result.declarer_p0:
-                        session_solos += 1
+                # Record to opponent pool for per-type tracking
+                agent_place = float(result.get("agent_place", 4.0))
+                trainer._record_opponent_result(game_mode, OpponentGameResult(
+                    raw_score=raw_score,
+                    won=won,
+                    contract_name=result.get("contract_name", "klop"),
+                    place=agent_place,
+                    declarer_p0=declarer_p0,
+                    bid=bool(agent0_bids),
+                ))
+                session_places.append(agent_place)
 
-                # Yield to API
-                await asyncio.sleep(0)
+                # Track contract stats (declarer vs defender)
+                contract_name = result.get("contract_name", "klop")
+                if contract_name in rolling_contract_stats:
+                    cs = rolling_contract_stats[contract_name]
+                    if declarer_p0:
+                        cs.decl_played += 1
+                        if raw_score > 0:
+                            cs.decl_won += 1
+                        cs.decl_total_score += raw_score
+                    else:
+                        cs.def_played += 1
+                        if won:
+                            cs.def_won += 1
+                        cs.def_total_score += raw_score
 
-            else:
-                # ── Fallback: sequential GameLoop (no Rust engine) ──
-                for agent in agents:
-                    agent.set_training(True)
-                    agent.clear_experiences()
+                # Track tarok count vs contract
+                if result.get("initial_tarok_counts"):
+                    tarok_counts = result["initial_tarok_counts"]
+                    tarok_count = tarok_counts[0] if isinstance(tarok_counts, (list, tuple)) else tarok_counts.get(0, 0)
+                    bucket = tarok_count_bids.setdefault(tarok_count, {})
+                    bucket[contract_name] = bucket.get(contract_name, 0) + 1
 
-                for g in range(games_per_session):
-                    if not _lab.running:
-                        break
-
-                    for agent in agents:
-                        agent.clear_experiences()
-
-                    game = GameLoop(agents)
-                    state, scores = await game.run(dealer=(session_idx * games_per_session + g) % 4)
-
-                    raw_score = scores.get(0, 0)
-                    for i, agent in enumerate(agents):
-                        reward = scores.get(i, 0) / 100.0
-                        agent.finalize_game(reward)
-                        all_experiences.extend(agent.experiences)
-
-                    session_scores.append(raw_score)
-                    _lab.self_play_games += 1
-
-                    _, win = _score_game(state, scores, player_idx=0)
-                    session_wins += int(win)
-                    is_klop = state.contract is not None and state.contract.is_klop
-                    did_bid = state.declarer == 0
-                    is_solo = state.contract is not None and state.contract.is_solo and state.declarer == 0
-                    if did_bid:
-                        session_bids += 1
-                    if is_klop:
-                        session_klops += 1
-                    if is_solo:
-                        session_solos += 1
-
-                    if (g + 1) % 5 == 0 or g == games_per_session - 1:
-                        await asyncio.sleep(0)
+            await asyncio.sleep(0)
 
             if not _lab.running or not all_experiences:
                 break
@@ -1960,7 +3926,7 @@ async def _run_self_play_session(
             # Update per-session metrics
             n = max(len(session_scores), 1)
             elapsed = max(time.time() - session_start, 0.001)
-            _lab.sp_win_rate = session_wins / n
+            _lab.sp_avg_placement = (sum(session_places) / max(len(session_places), 1))
             _lab.sp_avg_reward = sum(s / 100.0 for s in session_scores) / n
             _lab.sp_avg_score = sum(session_scores) / n
             _lab.sp_bid_rate = session_bids / n
@@ -1968,7 +3934,7 @@ async def _run_self_play_session(
             _lab.sp_solo_rate = session_solos / n
             _lab.sp_games_per_second = len(session_scores) / elapsed
 
-            _lab.sp_win_rate_history.append(round(_lab.sp_win_rate, 4))
+            _lab.sp_avg_placement_history.append(round(_lab.sp_avg_placement, 4))
             _lab.sp_avg_reward_history.append(round(_lab.sp_avg_reward, 4))
             _lab.sp_avg_score_history.append(round(_lab.sp_avg_score, 2))
             _lab.sp_loss_history.append(round(_lab.current_loss, 4))
@@ -1978,34 +3944,42 @@ async def _run_self_play_session(
             _lab.sp_min_score_history.append(float(min(session_scores)) if session_scores else 0.0)
             _lab.sp_max_score_history.append(float(max(session_scores)) if session_scores else 0.0)
 
+            # Update contract stats and tarok count distribution
+            _lab.contract_stats = {k: v.to_dict() for k, v in rolling_contract_stats.items()}
+            _lab.tarok_count_bids = {str(k): v for k, v in tarok_count_bids.items()}
+
+            # Build eval_history entry from training game stats (per-opponent)
+            opp_session = trainer.opponent_pool.session_stats_dict()
+            entry: dict = {
+                "step": len(_lab.eval_history),
+                "label": f"Session {session_idx + 1}",
+                "program": "self_play",
+                "loss": _lab.current_loss,
+                "games": _lab.self_play_games,
+            }
+            for opp_name, opp_stats in opp_session.items():
+                entry[f"vs_{opp_name}"] = opp_stats["win_rate"]
+                entry[f"avg_score_{opp_name}"] = opp_stats["avg_score"]
+                entry[f"avg_place_{opp_name}"] = opp_stats.get("avg_place", 4.0)
+            _lab.eval_history.append(entry)
+
+            # Update aggregate opponent pool stats for dashboard
+            _lab.opponent_stats = trainer.opponent_pool.stats_dict()
+
+            # Push current weights to network bank for FSP
+            if fsp_ratio > 0:
+                trainer.network_bank.push(_lab.network.state_dict())
+
             _lab.persona["age"] = _lab.persona.get("age", 0) + 1
 
-            # Periodic evaluation
-            if (session_idx + 1) % eval_interval == 0 or session_idx == num_sessions - 1:
-                _lab.phase = "evaluating"
-                await asyncio.sleep(0)
-
-                results = await _evaluate_vs_selected_bots(_lab.network, eval_games, eval_bots)
-
-                step = len(_lab.eval_history)
-                entry = _eval_results_to_history_entry(
-                    results,
-                    step=step,
-                    label=f"SP Session {session_idx + 1}",
-                    program="self_play",
-                    loss=_lab.current_loss,
-                    experiences=_lab.expert_experiences,
-                    games=_lab.self_play_games,
-                )
-                _lab.eval_history.append(entry)
-
-                _lab.persona["age"] = _lab.persona.get("age", 0) + 1
+            # Periodic HoF save
+            if (session_idx + 1) % hof_interval == 0 or session_idx == num_sessions - 1:
                 _update_persona_hash()
-                info = save_to_hof(
+                snap_info = save_to_hof(
                     _lab.network, _lab.persona, _lab.eval_history,
                     phase_label=f"selfplay-s{session_idx + 1}",
                 )
-                _lab.snapshots.append(info)
+                _lab.snapshots.append(snap_info)
 
         _lab.phase = "done"
         _lab.training_sessions_done = num_sessions
@@ -2058,14 +4032,14 @@ def get_lab_state() -> dict:
         "error": _lab.error,
         "snapshots": _lab.snapshots,
         # Per-session self-play metrics
-        "sp_win_rate": _lab.sp_win_rate,
+        "sp_avg_placement": _lab.sp_avg_placement,
         "sp_avg_reward": _lab.sp_avg_reward,
         "sp_avg_score": _lab.sp_avg_score,
         "sp_bid_rate": _lab.sp_bid_rate,
         "sp_klop_rate": _lab.sp_klop_rate,
         "sp_solo_rate": _lab.sp_solo_rate,
         "sp_games_per_second": _lab.sp_games_per_second,
-        "sp_win_rate_history": _lab.sp_win_rate_history[-500:],
+        "sp_avg_placement_history": _lab.sp_avg_placement_history[-500:],
         "sp_avg_reward_history": _lab.sp_avg_reward_history[-500:],
         "sp_avg_score_history": _lab.sp_avg_score_history[-500:],
         "sp_loss_history": _lab.sp_loss_history[-500:],
@@ -2084,6 +4058,10 @@ def get_lab_state() -> dict:
         "population": _lab.pbt_population,
         "generation_history": _lab.pbt_generation_history[-500:],
         "population_events": _lab.pbt_events[-500:],
+        "training_summary": _lab.training_summary,
+        "opponent_stats": _lab.opponent_stats,
+        "contract_stats": _lab.contract_stats,
+        "tarok_count_bids": _lab.tarok_count_bids,
     }
 
 
@@ -2110,14 +4088,14 @@ def create_lab_network(hidden_size: int = 256):
     _lab.expert_experiences = 0
     _lab.self_play_games = 0
     _lab.self_play_sessions = 0
-    _lab.sp_win_rate = 0.0
+    _lab.sp_avg_placement = 0.0
     _lab.sp_avg_reward = 0.0
     _lab.sp_avg_score = 0.0
     _lab.sp_bid_rate = 0.0
     _lab.sp_klop_rate = 0.0
     _lab.sp_solo_rate = 0.0
     _lab.sp_games_per_second = 0.0
-    _lab.sp_win_rate_history = []
+    _lab.sp_avg_placement_history = []
     _lab.sp_avg_reward_history = []
     _lab.sp_avg_score_history = []
     _lab.sp_loss_history = []
@@ -2251,6 +4229,7 @@ async def start_self_play(
     learning_rate: float = 3e-4,
     stockskis_ratio: float = 0.0,
     fsp_ratio: float = 0.3,
+    hof_ratio: float = 0.0,
     pbt_enabled: bool = False,
     population_size: int = 4,
     exploit_top_ratio: float = 0.25,
@@ -2305,6 +4284,7 @@ async def start_self_play(
                 learning_rate=learning_rate,
                 stockskis_ratio=stockskis_ratio,
                 fsp_ratio=fsp_ratio,
+                hof_ratio=hof_ratio,
             )
         )
 

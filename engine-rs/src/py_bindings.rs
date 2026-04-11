@@ -11,7 +11,6 @@ use rand::rng;
 
 use crate::card::*;
 use crate::encoding;
-use crate::expert_games;
 use crate::game_state::*;
 use crate::legal_moves;
 use crate::scoring;
@@ -591,79 +590,102 @@ fn generate_warmup_data(
     Ok(dict.into())
 }
 
-/// Generate expert experiences from StockŠkis bot games (imitation learning).
+// -----------------------------------------------------------------------
+// Standalone functions — bridge for Python engine replacement
+// -----------------------------------------------------------------------
+
+/// Evaluate a completed trick and return the winner player index.
 ///
-/// Returns dict with numpy arrays:
-///   states:         (N, STATE_SIZE) float32
-///   oracle_states:  (N, ORACLE_STATE_SIZE) float32  — None if include_oracle=False
-///   decision_types: (N,) uint8
-///   actions:        (N,) uint16  — the action index the bot chose
-///   rewards:        (N,) float32 — final game reward for the acting player
-///   legal_masks:    (N, action_size) uint8  — varies per decision type, flattened
-///   num_experiences: int
+/// Args:
+///   cards: list of (player_idx, card_idx) tuples representing the 4-card trick
+///   is_last_trick: whether this is the 12th trick
+///   contract: optional contract id (u8), None for klop
+///
+/// Returns: winner player index (u8)
 #[pyfunction]
-#[pyo3(signature = (num_games, include_oracle=true))]
-fn generate_expert_data(
-    py: Python<'_>,
-    num_games: usize,
-    include_oracle: bool,
-) -> PyResult<PyObject> {
-    let batch = expert_games::generate_expert_batch(num_games, include_oracle);
-    let n = batch.rewards.len();
+#[pyo3(signature = (cards, is_last_trick=false, contract=None))]
+fn evaluate_trick_winner(cards: Vec<(u8, u8)>, is_last_trick: bool, contract: Option<u8>) -> PyResult<u8> {
+    if cards.len() != 4 {
+        return Err(pyo3::exceptions::PyValueError::new_err("Trick must have exactly 4 cards"));
+    }
+    let mut trick = Trick::new(cards[0].0);
+    for &(player, card_idx) in &cards {
+        trick.play(player, Card(card_idx));
+    }
+    let contract_enum = contract.and_then(Contract::from_u8);
+    let result = trick_eval::evaluate_trick(&trick, is_last_trick, contract_enum);
+    Ok(result.winner)
+}
 
-    let dict = pyo3::types::PyDict::new(py);
-
-    let states = numpy::PyArray2::<f32>::from_vec2(
-        py,
-        &batch
-            .states
-            .chunks(batch.state_size)
-            .map(|c| c.to_vec())
-            .collect::<Vec<_>>(),
-    )
-    .map_err(|e| pyo3::exceptions::PyValueError::new_err(format!("states: {e}")))?;
-    dict.set_item("states", states)?;
-
-    if include_oracle && !batch.oracle_states.is_empty() {
-        let oracle = numpy::PyArray2::<f32>::from_vec2(
-            py,
-            &batch
-                .oracle_states
-                .chunks(batch.oracle_state_size)
-                .map(|c| c.to_vec())
-                .collect::<Vec<_>>(),
-        )
-        .map_err(|e| pyo3::exceptions::PyValueError::new_err(format!("oracle: {e}")))?;
-        dict.set_item("oracle_states", oracle)?;
-    } else {
-        dict.set_item("oracle_states", py.None())?;
+/// Compute the legal plays for a player given their hand and the current trick state.
+///
+/// Args:
+///   hand: list of card indices in the player's hand
+///   trick_cards: list of (player_idx, card_idx) tuples already played in the trick (may be empty)
+///   contract: optional contract id (u8)
+///   is_last_trick: whether this is the 12th trick
+///
+/// Returns: list of card indices that are legal to play
+#[pyfunction]
+#[pyo3(signature = (hand, trick_cards, contract=None, is_last_trick=false))]
+fn compute_legal_plays(hand: Vec<u8>, trick_cards: Vec<(u8, u8)>, contract: Option<u8>, is_last_trick: bool) -> Vec<u8> {
+    let mut hand_set = CardSet::EMPTY;
+    for &idx in &hand {
+        hand_set.insert(Card(idx));
     }
 
-    dict.set_item(
-        "decision_types",
-        numpy::PyArray1::<u8>::from_vec(py, batch.decision_types),
-    )?;
-    dict.set_item(
-        "actions",
-        numpy::PyArray1::<u16>::from_vec(py, batch.actions),
-    )?;
-    dict.set_item(
-        "rewards",
-        numpy::PyArray1::<f32>::from_vec(py, batch.rewards),
-    )?;
-    dict.set_item(
-        "legal_masks",
-        numpy::PyArray1::<u8>::from_vec(py, batch.legal_masks),
-    )?;
-    dict.set_item("num_experiences", n)?;
+    let contract_enum = contract.and_then(Contract::from_u8);
+    let contract_name: Option<&'static str> = match contract_enum {
+        Some(Contract::Klop) => Some("klop"),
+        Some(Contract::Berac) => Some("berac"),
+        Some(Contract::BarvniValat) => Some("barvni_valat"),
+        Some(Contract::Three) => Some("three"),
+        Some(Contract::Two) => Some("two"),
+        Some(Contract::One) => Some("one"),
+        Some(Contract::SoloThree) => Some("solo_three"),
+        Some(Contract::SoloTwo) => Some("solo_two"),
+        Some(Contract::SoloOne) => Some("solo_one"),
+        Some(Contract::Solo) => Some("solo"),
+        None => None,
+    };
 
-    Ok(dict.into())
+    let (lead_card, lead_suit, best_card, trick_card_set) = if !trick_cards.is_empty() {
+        let first_card = Card(trick_cards[0].1);
+        let ls = first_card.suit();
+        let mut best = first_card;
+        let mut tcs = CardSet::EMPTY;
+        for &(_, card_idx) in &trick_cards {
+            let c = Card(card_idx);
+            tcs.insert(c);
+            if c.beats(best, ls) {
+                best = c;
+            }
+        }
+        (Some(first_card), ls, Some(best), tcs)
+    } else {
+        (None, None, None, CardSet::EMPTY)
+    };
+
+    let ctx = legal_moves::MoveCtx {
+        hand: hand_set,
+        lead_card,
+        lead_suit,
+        best_card,
+        contract_name,
+        is_last_trick,
+        trick_cards: trick_card_set,
+    };
+
+    let legal = legal_moves::generate_legal_moves(&ctx);
+    legal.iter().map(|c| c.0).collect()
 }
 
 pub fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<PyGameState>()?;
     m.add_function(wrap_pyfunction!(generate_warmup_data, m)?)?;
     m.add_function(wrap_pyfunction!(generate_expert_data, m)?)?;
+    m.add_function(wrap_pyfunction!(evaluate_trick_winner, m)?)?;
+    m.add_function(wrap_pyfunction!(compute_legal_plays, m)?)?;
 
     // Expose constants
     m.add("STATE_SIZE", encoding::STATE_SIZE)?;
@@ -704,128 +726,7 @@ pub fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add("TEAM_DECLARER", Team::DeclarerTeam as u8)?;
     m.add("TEAM_OPPONENT", Team::OpponentTeam as u8)?;
 
-    // Benchmark function
-    m.add_function(wrap_pyfunction!(py_run_benchmark, m)?)?;
-    m.add_function(wrap_pyfunction!(py_eval_vs_bots, m)?)?;
-    m.add_function(wrap_pyfunction!(py_generate_expert_data_v2v3, m)?)?;
-    m.add_function(wrap_pyfunction!(py_generate_expert_data_v2v3v5, m)?)?;
-    m.add_function(wrap_pyfunction!(py_generate_expert_data_v5, m)?)?;
-
     Ok(())
-}
-
-/// Run StockŠkis v1/v2/v3/v4 benchmark from Python.
-#[pyfunction]
-#[pyo3(signature = (num_games=1000))]
-fn py_run_benchmark(num_games: usize) {
-    crate::benchmark::run_benchmark(num_games);
-}
-
-/// Evaluate "player 0" (stub — scores come from heuristic play) against bot opponents.
-/// Returns a dict with win_rate for each bot version opponent.
-/// `bot_version`: 1, 2, or 3 — the opponent bot version to test against.
-/// `num_games`: games to play per configuration.
-/// The "player 0" in this context uses the same bot version just to measure baseline;
-/// the caller (Python) replaces p0 with NN decisions.
-#[pyfunction]
-#[pyo3(signature = (num_games=500))]
-fn py_eval_vs_bots(py: Python<'_>, num_games: usize) -> PyResult<PyObject> {
-    use crate::benchmark::{run_eval_config, BotVersion};
-
-    let dict = pyo3::types::PyDict::new(py);
-
-    // Test each opponent version: NN (player 0) vs 3x V_i
-    // Since we can't run the NN here, we return stats for heuristic baselines
-    for (label, versions) in [
-        ("vs_v1", [BotVersion::V1, BotVersion::V1, BotVersion::V1, BotVersion::V1]),
-        ("vs_v2", [BotVersion::V2, BotVersion::V2, BotVersion::V2, BotVersion::V2]),
-        ("vs_v3", [BotVersion::V3, BotVersion::V3, BotVersion::V3, BotVersion::V3]),
-        ("vs_v4", [BotVersion::V4, BotVersion::V4, BotVersion::V4, BotVersion::V4]),
-        ("vs_v5", [BotVersion::V5, BotVersion::V5, BotVersion::V5, BotVersion::V5]),
-    ] {
-        let stats = run_eval_config(versions, num_games);
-        let inner = pyo3::types::PyDict::new(py);
-        inner.set_item("games", stats.games)?;
-        inner.set_item("wins", stats.wins)?;
-        inner.set_item("win_rate", if stats.games > 0 { stats.wins as f64 / stats.games as f64 } else { 0.0 })?;
-        inner.set_item("avg_score", if stats.games > 0 { stats.total_score as f64 / stats.games as f64 } else { 0.0 })?;
-        inner.set_item("declarer_games", stats.declarer_games)?;
-        inner.set_item("declarer_wins", stats.declarer_wins)?;
-        inner.set_item("declarer_wr", if stats.declarer_games > 0 { stats.declarer_wins as f64 / stats.declarer_games as f64 } else { 0.0 })?;
-        dict.set_item(label, inner)?;
-    }
-
-    Ok(dict.into())
-}
-
-/// Generate expert data from v2 and v3 bots playing against each other
-/// (mixed tables for richer training signal).
-#[pyfunction]
-#[pyo3(signature = (num_games, include_oracle=false))]
-fn py_generate_expert_data_v2v3(py: Python<'_>, num_games: usize, include_oracle: bool) -> PyResult<PyObject> {
-    let batch = crate::expert_games_v2v3::generate_expert_batch_v2v3(num_games, include_oracle);
-    let n_exp = batch.rewards.len();
-
-    let dict = pyo3::types::PyDict::new(py);
-
-    let states = numpy::PyArray2::<f32>::from_vec2(
-        py,
-        &batch.states.chunks(batch.state_size).map(|c| c.to_vec()).collect::<Vec<_>>(),
-    ).map_err(|e| pyo3::exceptions::PyValueError::new_err(format!("states: {e}")))?;
-    dict.set_item("states", states)?;
-
-    if include_oracle && !batch.oracle_states.is_empty() {
-        let oracle = numpy::PyArray2::<f32>::from_vec2(
-            py,
-            &batch.oracle_states.chunks(batch.oracle_state_size).map(|c| c.to_vec()).collect::<Vec<_>>(),
-        ).map_err(|e| pyo3::exceptions::PyValueError::new_err(format!("oracle: {e}")))?;
-        dict.set_item("oracle_states", oracle)?;
-    } else {
-        dict.set_item("oracle_states", py.None())?;
-    }
-
-    dict.set_item("decision_types", numpy::PyArray1::<u8>::from_vec(py, batch.decision_types))?;
-    dict.set_item("actions", numpy::PyArray1::<u16>::from_vec(py, batch.actions))?;
-    dict.set_item("rewards", numpy::PyArray1::<f32>::from_vec(py, batch.rewards))?;
-    dict.set_item("legal_masks", numpy::PyArray1::<u8>::from_vec(py, batch.legal_masks))?;
-    dict.set_item("num_experiences", n_exp)?;
-
-    Ok(dict.into())
-}
-
-/// Generate expert data from v2, v3, and v5 bots playing against each other
-/// (mixed tables with strongest bot for richer training signal).
-#[pyfunction]
-#[pyo3(signature = (num_games, include_oracle=false))]
-fn py_generate_expert_data_v2v3v5(py: Python<'_>, num_games: usize, include_oracle: bool) -> PyResult<PyObject> {
-    let batch = crate::expert_games_v2v3v5::generate_expert_batch_v2v3v5(num_games, include_oracle);
-    let n_exp = batch.rewards.len();
-
-    let dict = pyo3::types::PyDict::new(py);
-
-    let states = numpy::PyArray2::<f32>::from_vec2(
-        py,
-        &batch.states.chunks(batch.state_size).map(|c| c.to_vec()).collect::<Vec<_>>(),
-    ).map_err(|e| pyo3::exceptions::PyValueError::new_err(format!("states: {e}")))?;
-    dict.set_item("states", states)?;
-
-    if include_oracle && !batch.oracle_states.is_empty() {
-        let oracle = numpy::PyArray2::<f32>::from_vec2(
-            py,
-            &batch.oracle_states.chunks(batch.oracle_state_size).map(|c| c.to_vec()).collect::<Vec<_>>(),
-        ).map_err(|e| pyo3::exceptions::PyValueError::new_err(format!("oracle: {e}")))?;
-        dict.set_item("oracle_states", oracle)?;
-    } else {
-        dict.set_item("oracle_states", py.None())?;
-    }
-
-    dict.set_item("decision_types", numpy::PyArray1::<u8>::from_vec(py, batch.decision_types))?;
-    dict.set_item("actions", numpy::PyArray1::<u16>::from_vec(py, batch.actions))?;
-    dict.set_item("rewards", numpy::PyArray1::<f32>::from_vec(py, batch.rewards))?;
-    dict.set_item("legal_masks", numpy::PyArray1::<u8>::from_vec(py, batch.legal_masks))?;
-    dict.set_item("num_experiences", n_exp)?;
-
-    Ok(dict.into())
 }
 
 /// Generate expert data from v5-only bot games.
@@ -834,7 +735,7 @@ fn py_generate_expert_data_v2v3v5(py: Python<'_>, num_games: usize, include_orac
 /// for significantly better throughput with the more expensive v5 bot.
 #[pyfunction]
 #[pyo3(signature = (num_games, include_oracle=false))]
-fn py_generate_expert_data_v5(py: Python<'_>, num_games: usize, include_oracle: bool) -> PyResult<PyObject> {
+fn generate_expert_data(py: Python<'_>, num_games: usize, include_oracle: bool) -> PyResult<PyObject> {
     // Release the GIL while running the CPU-intensive Rust computation
     let batch = py.allow_threads(|| {
         crate::expert_games_v5::generate_expert_batch_v5(num_games, include_oracle)

@@ -9,7 +9,6 @@ from __future__ import annotations
 
 from collections.abc import Iterable
 
-from tarok.adapters.ai.stockskis_v4 import StockSkisPlayerV4
 from tarok.entities.card import Card, DECK
 from tarok.entities.game_state import Announcement, Contract, GameState, Phase
 
@@ -115,7 +114,7 @@ def _sync_python_state_to_rust(state: GameState):
     return gs
 
 
-class StockSkisPlayerV5(StockSkisPlayerV4):
+class StockSkisPlayerV5:
     """Heuristic bot v5 powered by Rust StockSkis logic."""
 
     def __init__(
@@ -124,7 +123,13 @@ class StockSkisPlayerV5(StockSkisPlayerV4):
         strength: float = 1.0,
         seed: int | None = None,
     ):
-        super().__init__(name=name, strength=strength, seed=seed)
+        self._name = name
+        self.strength = strength
+        self.seed = seed
+
+    @property
+    def name(self) -> str:
+        return self._name
 
     async def choose_bid(
         self,

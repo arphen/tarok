@@ -45,6 +45,7 @@ from tarok.entities.game_state import (
     Phase,
 )
 from tarok.ports.observer_port import GameObserverPort
+from tarok.use_cases.game_loop import GameLoop
 
 
 # Map Rust contract u8 → Python Contract enum
@@ -88,7 +89,7 @@ class _NullObserver:
     async def on_king_called(self, player, king, state): pass
     async def on_talon_revealed(self, groups, state): pass
     async def on_talon_group_picked(self, state): pass
-    async def on_talon_exchanged(self, state): pass
+    async def on_talon_exchanged(self, state, picked=None, discarded=None): pass
     async def on_trick_start(self, state): pass
     async def on_card_played(self, player, card, state): pass
     async def on_rule_verified(self, player, rule, state): pass
@@ -118,6 +119,13 @@ class RustGameLoop:
 
     async def run(self, dealer: int = 0) -> tuple[GameState, dict[int, int]]:
         """Play one full game, returning (final_state, {player: score})."""
+        # Universal PlayerPort compatibility:
+        # If any player lacks the tensor fast-path API, delegate to the
+        # canonical Python GameLoop which uses choose_* methods for all players.
+        if not all(hasattr(player, '_decide_from_tensors') for player in self._players):
+            loop = GameLoop(self._players, observer=self._observer, rng=self._rng)
+            return await loop.run(dealer=dealer)
+
         gs = te.RustGameState(dealer)
         gs.deal()
 

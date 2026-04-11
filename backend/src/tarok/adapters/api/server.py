@@ -15,7 +15,7 @@ from pydantic import BaseModel
 from tarok.adapters.ai.agent import RLAgent
 from tarok.adapters.ai.bot_registry import get_registry
 from tarok.adapters.ai.random_agent import RandomPlayer
-from tarok.adapters.ai.trainer import PPOTrainer, TrainingMetrics
+from tarok.adapters.ai.training_lab import PPOTrainer, TrainingMetrics
 from tarok.adapters.api.human_player import HumanPlayer
 from tarok.adapters.api.spectator_observer import SpectatorObserver, list_replays, load_replay
 from tarok.adapters.api.ws_observer import WebSocketObserver
@@ -1469,6 +1469,7 @@ async def lab_self_play(req: dict = {}):
         learning_rate=req.get("learning_rate", 3e-4),
         stockskis_ratio=req.get("stockskis_ratio", 0.0),
         fsp_ratio=req.get("fsp_ratio", 0.3),
+        hof_ratio=req.get("hof_ratio", 0.0),
         pbt_enabled=req.get("pbt_enabled", False),
         population_size=req.get("population_size", 4),
         exploit_top_ratio=req.get("exploit_top_ratio", 0.25),
@@ -1543,3 +1544,49 @@ async def lab_hof():
     """List all Hall of Fame models."""
     from tarok.adapters.ai.training_lab import list_hof
     return {"models": list_hof()}
+
+
+@app.delete("/api/lab/hof/{model_hash}")
+async def lab_hof_remove(model_hash: str):
+    """Remove a model from the Hall of Fame."""
+    from tarok.adapters.ai.training_lab import remove_from_hof
+    removed = remove_from_hof(model_hash)
+    if not removed:
+        from starlette.responses import JSONResponse
+        return JSONResponse({"error": "Model not found"}, status_code=404)
+    return {"ok": True}
+
+
+@app.post("/api/lab/hof/promote")
+async def lab_hof_promote(body: dict):
+    """Promote a checkpoint to the Hall of Fame."""
+    from tarok.adapters.ai.training_lab import promote_checkpoint_to_hof
+    filename = body.get("filename", "")
+    if not filename:
+        from starlette.responses import JSONResponse
+        return JSONResponse({"error": "filename required"}, status_code=400)
+    info = promote_checkpoint_to_hof(filename)
+    if info is None:
+        from starlette.responses import JSONResponse
+        return JSONResponse({"error": "Invalid or missing checkpoint"}, status_code=400)
+    return {"ok": True, **info}
+
+
+@app.post("/api/lab/hof/{model_hash}/pin")
+async def lab_hof_pin(model_hash: str):
+    """Pin a HoF model (exempt from auto-eviction)."""
+    from tarok.adapters.ai.training_lab import pin_hof
+    if not pin_hof(model_hash):
+        from starlette.responses import JSONResponse
+        return JSONResponse({"error": "Model not found"}, status_code=404)
+    return {"ok": True}
+
+
+@app.post("/api/lab/hof/{model_hash}/unpin")
+async def lab_hof_unpin(model_hash: str):
+    """Unpin a HoF model (subject to auto-eviction again)."""
+    from tarok.adapters.ai.training_lab import unpin_hof
+    if not unpin_hof(model_hash):
+        from starlette.responses import JSONResponse
+        return JSONResponse({"error": "Model not found"}, status_code=404)
+    return {"ok": True}

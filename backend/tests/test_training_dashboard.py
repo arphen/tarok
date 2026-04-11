@@ -10,7 +10,7 @@ import torch
 from httpx import ASGITransport, AsyncClient
 
 from tarok.adapters.ai.agent import RLAgent
-from tarok.adapters.ai.trainer import PPOTrainer, TrainingMetrics, _HAS_RUST
+from tarok.adapters.ai.training_lab import PPOTrainer, TrainingMetrics, _HAS_RUST
 from tarok.adapters.api.server import app, _latest_metrics, _checkpoint_cache
 
 
@@ -35,7 +35,7 @@ async def test_trainer_completes_sessions(trainer):
 async def test_trainer_metrics_populated(trainer):
     result = await trainer.train(2)
     assert len(result.reward_history) == 2
-    assert len(result.win_rate_history) == 2
+    assert len(result.avg_placement_history) == 2
     assert len(result.loss_history) == 2
     assert len(result.session_avg_score_history) == 2
     assert result.games_per_second > 0
@@ -75,11 +75,11 @@ async def test_trainer_metrics_callback():
 
 
 async def test_trainer_to_dict():
-    m = TrainingMetrics(episode=10, session=2, total_sessions=5, win_rate=0.5)
+    m = TrainingMetrics(episode=10, session=2, total_sessions=5, avg_placement=2.5)
     d = m.to_dict()
     assert d["episode"] == 10
     assert d["session"] == 2
-    assert d["win_rate"] == 0.5
+    assert d["avg_placement"] == 2.5
     assert "contract_stats" in d
     assert "reward_history" in d
     assert "tarok_count_bids" in d
@@ -88,7 +88,7 @@ async def test_trainer_to_dict():
 async def test_rust_engine_fallback(trainer):
     """When Rust engine is unavailable, use_rust_engine should be False."""
     agents = [RLAgent(name=f"Agent-{i}", hidden_size=64) for i in range(4)]
-    with patch("tarok.adapters.ai.trainer._HAS_RUST", False):
+    with patch("tarok.adapters.ai.training_lab._HAS_RUST", False):
         t = PPOTrainer(agents, lr=3e-4, device="cpu", games_per_session=5, use_rust_engine=True)
         assert t.use_rust_engine is False
         result = await t.train(1)

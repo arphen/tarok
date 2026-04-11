@@ -8,7 +8,6 @@ import type { CardData } from './types/game';
 import './App.css';
 
 // Lazy-load heavy dashboard components — they pull in Recharts and other large deps
-const TrainingDashboard = lazy(() => import('./components/TrainingDashboard'));
 const TrainingLab = lazy(() => import('./components/TrainingLab'));
 const EvoDashboard = lazy(() => import('./components/EvoDashboard'));
 const BreedingDashboard = lazy(() => import('./components/BreedingDashboard'));
@@ -45,7 +44,7 @@ export default function App() {
   };
 
   if (page === 'training') {
-    return <Suspense fallback={<div className="app"><p>Loading dashboard…</p></div>}><TrainingDashboard onBack={() => setPage('home')} /></Suspense>;
+    return <Suspense fallback={<div className="app"><p>Loading…</p></div>}><TrainingLab onBack={() => setPage('home')} /></Suspense>;
   }
 
   if (page === 'lab') {
@@ -274,14 +273,6 @@ export default function App() {
         </div>
 
         <div className="home-actions">
-          <button className="btn-gold btn-large" onClick={() => setPage('training')}>
-            <span className="btn-icon">🧠</span>
-            <span>
-              <strong>Quick Train</strong>
-              <small>Simple PPO self-play training with live charts</small>
-            </span>
-          </button>
-
           <button className="btn-gold btn-large" onClick={() => setPage('lab')}>
             <span className="btn-icon">🧪</span>
             <span>

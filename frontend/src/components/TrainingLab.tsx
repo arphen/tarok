@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useCallback, useMemo } from 'react';
 import {
   LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip,
-  ResponsiveContainer, Legend, BarChart, Bar, Cell, Area, AreaChart,
+  ResponsiveContainer, Legend, BarChart, Bar, Area, AreaChart,
   ReferenceLine,
 } from 'recharts';
 import './TrainingLab.css';
@@ -12,38 +12,11 @@ interface EvalPoint {
   step: number;
   label: string;
   program?: string;
-  vs_v1?: number;
-  vs_v2?: number;
-  vs_v3?: number;
-  vs_v4?: number;
-  vs_v5?: number;
-  avg_score_v1?: number;
-  avg_score_v2?: number;
-  avg_score_v3?: number;
-  avg_score_v4?: number;
-  avg_score_v5?: number;
-  avg_points_v5?: number;
-  avg_place_v5?: number;
-  bid_rate_v5?: number;
-  decl_win_rate_v5?: number;
-  def_win_rate_v5?: number;
-  decl_avg_points_v5?: number;
-  def_avg_points_v5?: number;
-  eval_signal_v5?: number;
-  contract_stats_v5?: Record<string, {
-    games: number;
-    win_rate: number;
-    avg_points: number;
-    decl_games: number;
-    decl_win_rate: number;
-    decl_avg_points: number;
-    def_games: number;
-    def_win_rate: number;
-    def_avg_points: number;
-  }>;
   loss: number;
   experiences?: number;
   games?: number;
+  // Dynamic keys: vs_<opponent_type>, avg_score_<opponent_type>
+  // Also legacy: vs_v1, vs_v5, etc. from PBT/imitation flows
   [key: string]: unknown;
 }
 
@@ -53,9 +26,50 @@ interface Snapshot {
   model_hash: string;
 }
 
+interface TournamentEntry {
+  name: string;
+  persona: { first_name?: string; last_name?: string };
+  filename: string;
+  model_hash: string;
+  island_id?: number;
+  generation: number;
+  wins: number;
+  games: number;
+  win_rate: number;
+  avg_score: number;
+  cumulative_score: number;
+  rank: number;
+  vs_bot_scores?: Record<string, number>;
+}
+
+interface IslandSummary {
+  island_id: number;
+  name: string;
+  persona: { first_name?: string; last_name?: string };
+  generations: number;
+  games: number;
+  fitness: number;
+  games_per_sec: number;
+  [key: string]: unknown;
+}
+
+interface TrainingSummary {
+  num_islands: number;
+  total_games: number;
+  total_time_seconds: number;
+  total_time_display: string;
+  cross_island_sessions: number;
+  tournament_results: TournamentEntry[];
+  champion: TournamentEntry | null;
+  island_summaries: IslandSummary[];
+  eval_bots: string[];
+}
+
 interface PopulationMember {
   index: number;
   label: string;
+  name?: string;
+  persona?: { first_name?: string; last_name?: string };
   fitness: number;
   batch_avg_reward: number;
   batch_win_rate: number;
@@ -124,14 +138,14 @@ interface LabState {
   error: string | null;
   snapshots: Snapshot[];
   // Per-session self-play metrics
-  sp_win_rate: number;
+  sp_avg_placement: number;
   sp_avg_reward: number;
   sp_avg_score: number;
   sp_bid_rate: number;
   sp_klop_rate: number;
   sp_solo_rate: number;
   sp_games_per_second: number;
-  sp_win_rate_history: number[];
+  sp_avg_placement_history: number[];
   sp_avg_reward_history: number[];
   sp_avg_score_history: number[];
   sp_loss_history: number[];
@@ -150,6 +164,17 @@ interface LabState {
   population: PopulationMember[];
   generation_history: GenerationPoint[];
   population_events: Array<{ generation: number; target: number; source: number; hparams: Record<string, number> }>;
+  training_summary?: TrainingSummary | null;
+  opponent_stats?: Record<string, {
+    games: number; wins: number; win_rate: number; avg_score: number; avg_place: number;
+    instances?: Record<string, { games: number; wins: number; win_rate: number; avg_score: number; avg_place: number }>;
+  }>;
+  contract_stats?: Record<string, {
+    played: number;
+    decl_played: number; decl_won: number; decl_win_rate: number; decl_avg_score: number;
+    def_played: number; def_won: number; def_win_rate: number; def_avg_score: number;
+  }>;
+  tarok_count_bids?: Record<string, Record<string, number>>;
 }
 
 const API = '';
@@ -175,10 +200,43 @@ const BOT_COLORS: Record<string, string> = {
 const BOT_LABELS: Record<string, string> = {
   v1: 'V1', v2: 'V2', v3: 'V3', 'v3.2': 'V3.2', v4: 'V4', v5: 'V5',
 };
-/** Sanitize bot version for use as Recharts dataKey (dots break nested access) */
-const sanitizeKey = (v: string) => v.replace(/\./g, '_');
+/** Sanitize bot version for use as Recharts dataKey (dots/colons break nested access) */
+const sanitizeKey = (v: string) => v.replace(/[.:\-]/g, '_');
+
+/** Colors for opponent types appearing in training game stats */
+const OPPONENT_COLORS: Record<string, string> = {
+  'self-play': '#607d8b',
+  'stockskis-v5': '#ff1744',
+  'stockskis-v4': '#ff9100',
+  'stockskis-v3': '#aa00ff',
+  hof: '#ffd600',
+  fsp: '#00a2ff',
+  lookahead: '#00e5ff',
+};
+
+function opponentColor(key: string): string {
+  // key is like "avg_place_self-play", "avg_place_stockskis-v5"
+  const name = key.replace(/^avg_place_/, '').replace(/^vs_/, '');
+  return OPPONENT_COLORS[name] ?? '#aaa';
+}
+
+function opponentLabel(key: string): string {
+  const name = key.replace(/^avg_place_/, '').replace(/^vs_/, '');
+  const labels: Record<string, string> = {
+    'self-play': 'Self-Play',
+    'stockskis-v5': 'StockSkis V5',
+    'stockskis-v4': 'StockSkis V4',
+    'stockskis-v3': 'StockSkis V3',
+    hof: 'Hall of Fame',
+    fsp: 'FSP (Past Self)',
+    lookahead: 'Lookahead',
+  };
+  return labels[name] ?? name;
+}
 
 export default function TrainingLab({ onBack }: Props) {
+  const fromPercent = (percent: number) => Math.max(0, Math.min(100, percent)) / 100;
+
   const [state, setState] = useState<LabState | null>(null);
   const [checkpoints, setCheckpoints] = useState<CheckpointOption[]>([]);
   const [selectedCheckpoint, setSelectedCheckpoint] = useState('');
@@ -195,16 +253,18 @@ export default function TrainingLab({ onBack }: Props) {
   const [spGamesPerSession, setSpGamesPerSession] = useState(20);
   const [spEvalInterval, setSpEvalInterval] = useState(5);
   const [spLearningRate, setSpLearningRate] = useState(0.0003);
-  const [spFspRatio, setSpFspRatio] = useState(0.3);
-  const [pbtEnabled, setPbtEnabled] = useState(false);
+  const [spFspRatio, setSpFspRatio] = useState(30);
+  const [spStockSkisRatio, setSpStockSkisRatio] = useState(20);
+  const [spHofRatio, setSpHofRatio] = useState(0);
   const [pbtPopulationSize, setPbtPopulationSize] = useState(4);
   const [pbtTopRatio, setPbtTopRatio] = useState(0.25);
   const [pbtBottomRatio, setPbtBottomRatio] = useState(0.25);
   const [pbtMutationScale, setPbtMutationScale] = useState(1.0);
   const [timeLimitMinutes, setTimeLimitMinutes] = useState(5);
   const [smoothing, setSmoothing] = useState(0.6);
+  const [selectedProgram, setSelectedProgram] = useState<'imitation' | 'self_play' | 'island'>('imitation');
 
-  const [tab, setTab] = useState<'progress' | 'population' | 'live' | 'winrate' | 'scores' | 'hof'>('progress');
+  const [tab, setTab] = useState<'progress' | 'population' | 'live' | 'winrate' | 'scores' | 'contracts' | 'hof'>('progress');
 
   // Poll state
   const poll = useCallback(async () => {
@@ -273,6 +333,7 @@ export default function TrainingLab({ onBack }: Props) {
   };
 
   const startSelfPlay = async () => {
+    const isPbt = selectedProgram === 'island';
     const params: Record<string, unknown> = {
       num_sessions: spSessions,
       games_per_session: spGamesPerSession,
@@ -280,10 +341,12 @@ export default function TrainingLab({ onBack }: Props) {
       eval_bots: evalBots,
       eval_interval: spEvalInterval,
       learning_rate: spLearningRate,
-      fsp_ratio: spFspRatio,
-      pbt_enabled: pbtEnabled,
+      fsp_ratio: fromPercent(spFspRatio),
+      stockskis_ratio: fromPercent(spStockSkisRatio),
+      hof_ratio: fromPercent(spHofRatio),
+      pbt_enabled: isPbt,
     };
-    if (pbtEnabled) {
+    if (isPbt) {
       params.population_size = pbtPopulationSize;
       params.exploit_top_ratio = pbtTopRatio;
       params.exploit_bottom_ratio = pbtBottomRatio;
@@ -317,60 +380,85 @@ export default function TrainingLab({ onBack }: Props) {
     poll();
   };
 
+  // --- Hall of Fame management ---
+  const [hofModels, setHofModels] = useState<Array<Record<string, unknown>>>([]);
+  const [hofLoading, setHofLoading] = useState(false);
+
+  const loadHof = useCallback(async () => {
+    try {
+      const res = await fetch(`${API}/api/lab/hof`);
+      const data = await res.json();
+      setHofModels(data.models ?? []);
+    } catch { /* ignore */ }
+  }, []);
+
+  const removeFromHof = async (modelHash: string) => {
+    setHofLoading(true);
+    await fetch(`${API}/api/lab/hof/${modelHash}`, { method: 'DELETE' });
+    await loadHof();
+    setHofLoading(false);
+  };
+
+  const promoteToHof = async (filename: string) => {
+    setHofLoading(true);
+    await fetch(`${API}/api/lab/hof/promote`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ filename }),
+    });
+    await loadHof();
+    setHofLoading(false);
+  };
+
+  // Load HoF when tab switches to it
+  useEffect(() => {
+    if (tab === 'hof') loadHof();
+  }, [tab, loadHof]);
+
   const isRunning = state?.running ?? false;
   const hasNetwork = state?.has_network ?? false;
   const phase = state?.phase ?? 'idle';
   const phaseInfo = PHASE_LABELS[phase] ?? PHASE_LABELS.idle;
   const persona = state?.persona;
 
-  // Chart data
+  // Chart data — training game stats (per-opponent placement per session)
   const evalData = useMemo(() => {
     if (!state?.eval_history?.length) return [];
     return state.eval_history.map(e => {
       const row: Record<string, unknown> = { ...e };
-      for (const v of ALL_BOT_VERSIONS) {
-        const wr = (e as Record<string, unknown>)[`vs_${v}`];
-        const sk = sanitizeKey(v);
-        row[`vs_${sk}_pct`] = wr != null ? +((wr as number) * 100).toFixed(1) : undefined;
-        const sc = (e as Record<string, unknown>)[`avg_score_${v}`];
-        if (sc != null) row[`avg_score_${sk}`] = sc;
+      // Convert all avg_place_* keys to numeric placement values for the chart
+      for (const [key, val] of Object.entries(e as Record<string, unknown>)) {
+        if (key.startsWith('avg_place_') && typeof val === 'number') {
+          const sk = sanitizeKey(key);
+          row[`${sk}_value`] = +(val as number).toFixed(2);
+        }
       }
-      row.avg_points_v5 = (e as Record<string, unknown>).avg_points_v5;
-      row.avg_place_v5 = (e as Record<string, unknown>).avg_place_v5;
-      row.bid_rate_v5_pct = ((e as Record<string, unknown>).bid_rate_v5 as number | undefined) != null
-        ? +(((e as Record<string, unknown>).bid_rate_v5 as number) * 100).toFixed(1)
-        : undefined;
-      row.decl_win_rate_v5_pct = ((e as Record<string, unknown>).decl_win_rate_v5 as number | undefined) != null
-        ? +(((e as Record<string, unknown>).decl_win_rate_v5 as number) * 100).toFixed(1)
-        : undefined;
-      row.def_win_rate_v5_pct = ((e as Record<string, unknown>).def_win_rate_v5 as number | undefined) != null
-        ? +(((e as Record<string, unknown>).def_win_rate_v5 as number) * 100).toFixed(1)
-        : undefined;
-      row.eval_signal_v5_pct = ((e as Record<string, unknown>).eval_signal_v5 as number | undefined) != null
-        ? +(((e as Record<string, unknown>).eval_signal_v5 as number) * 100).toFixed(1)
-        : undefined;
       return row;
     });
   }, [state?.eval_history]);
 
-  const latestEval = state?.eval_history?.length ? state.eval_history[state.eval_history.length - 1] : null;
-
-  const v5ContractRows = useMemo(() => {
-    const cs = latestEval?.contract_stats_v5;
-    if (!cs) return [];
-    return Object.entries(cs)
-      .filter(([, v]) => v.games > 0)
-      .map(([name, v]) => ({
-        name,
-        games: v.games,
-        winRate: +(v.win_rate * 100).toFixed(1),
-        avgPoints: +v.avg_points.toFixed(1),
-        declGames: v.decl_games,
-        declWinRate: +(v.decl_win_rate * 100).toFixed(1),
-        defGames: v.def_games,
-        defWinRate: +(v.def_win_rate * 100).toFixed(1),
-      }));
-  }, [latestEval]);
+  // Discover opponent type keys – whitelist only known aggregate types
+  const KNOWN_OPPONENT_KEYS = new Set([
+    'avg_place_self-play', 'avg_place_stockskis-v5', 'avg_place_stockskis-v4', 'avg_place_stockskis-v3',
+    'avg_place_hof', 'avg_place_fsp', 'avg_place_lookahead',
+  ]);
+  const opponentKeys = useMemo(() => {
+    if (!state?.eval_history?.length) return [];
+    const keys = new Set<string>();
+    for (const e of state.eval_history) {
+      for (const key of Object.keys(e as Record<string, unknown>)) {
+        if (KNOWN_OPPONENT_KEYS.has(key)) {
+          keys.add(key);
+        }
+      }
+    }
+    // Put stockskis-v5 last so it renders on top
+    return Array.from(keys).sort((a, b) => {
+      if (a === 'avg_place_stockskis-v5') return 1;
+      if (b === 'avg_place_stockskis-v5') return -1;
+      return a.localeCompare(b);
+    });
+  }, [state?.eval_history]);
 
   const lossData = useMemo(() => {
     if (!state?.eval_history?.length) return [];
@@ -412,11 +500,11 @@ export default function TrainingLab({ onBack }: Props) {
   }, [smoothing]);
 
   const sessionHistoryData = useMemo(() => {
-    const hist = state?.sp_win_rate_history ?? [];
+    const hist = state?.sp_avg_placement_history ?? [];
     if (!hist.length) return [];
     const raw = hist.map((_, i) => ({
       session: i + 1,
-      winRate: +((state?.sp_win_rate_history?.[i] ?? 0) * 100).toFixed(1),
+      avgPlacement: +((state?.sp_avg_placement_history?.[i] ?? 0)).toFixed(2),
       avgReward: +(state?.sp_avg_reward_history?.[i] ?? 0).toFixed(3),
       avgScore: +(state?.sp_avg_score_history?.[i] ?? 0).toFixed(1),
       loss: +(state?.sp_loss_history?.[i] ?? 0).toFixed(4),
@@ -426,8 +514,8 @@ export default function TrainingLab({ onBack }: Props) {
       minScore: +(state?.sp_min_score_history?.[i] ?? 0),
       maxScore: +(state?.sp_max_score_history?.[i] ?? 0),
     }));
-    return applySmoothing(raw, ['winRate', 'avgReward', 'avgScore', 'loss', 'bidRate', 'klopRate', 'soloRate']);
-  }, [state?.sp_win_rate_history, state?.sp_avg_reward_history, state?.sp_avg_score_history,
+    return applySmoothing(raw, ['avgPlacement', 'avgReward', 'avgScore', 'loss', 'bidRate', 'klopRate', 'soloRate']);
+  }, [state?.sp_avg_placement_history, state?.sp_avg_reward_history, state?.sp_avg_score_history,
       state?.sp_loss_history, state?.sp_bid_rate_history, state?.sp_klop_rate_history, state?.sp_solo_rate_history,
       state?.sp_min_score_history, state?.sp_max_score_history, applySmoothing]);
 
@@ -435,6 +523,11 @@ export default function TrainingLab({ onBack }: Props) {
 
   const formatPercent = (value: number) => `${(value * 100).toFixed(1)}%`;
   const formatMaybe = (value?: number | null, digits = 3) => value === undefined || value === null ? '—' : value.toFixed(digits);
+  const formatDuration = (seconds: number) => {
+    if (seconds < 60) return `${Math.round(seconds)}s`;
+    if (seconds < 3600) return `${Math.floor(seconds / 60)}m ${Math.round(seconds % 60)}s`;
+    return `${Math.floor(seconds / 3600)}h ${Math.floor((seconds % 3600) / 60)}m`;
+  };
   const formatHparams = (member: PopulationMember) => {
     const hp = member.hparams;
     return `lr ${hp.lr?.toExponential?.(1) ?? hp.lr} · batch ${hp.batch_size ?? '—'} · ent ${formatMaybe(hp.entropy_coef, 3)} · eps ${formatMaybe(hp.clip_epsilon, 2)}`;
@@ -449,7 +542,6 @@ export default function TrainingLab({ onBack }: Props) {
     const parts: string[] = [];
     if (checkpoint.session) parts.push(`S${checkpoint.session}`);
     if (checkpoint.episode) parts.push(`Ep ${checkpoint.episode}`);
-    if (checkpoint.win_rate) parts.push(`${(checkpoint.win_rate * 100).toFixed(0)}% win`);
     return parts.length ? `${checkpoint.filename} (${parts.join(', ')})` : checkpoint.filename;
   };
 
@@ -494,7 +586,7 @@ export default function TrainingLab({ onBack }: Props) {
           <div>
             <h3>Welcome to the Training Lab</h3>
             <p>Create a fresh neural network with a unique identity. Train it with imitation learning
-            from expert bots, then further strengthen it with self-play. Watch its win rates climb
+            from expert bots, then further strengthen it with self-play. Track average placement and score over time
             and save snapshots to the Hall of Fame for use in Play vs AI and Spectate modes.</p>
           </div>
         </div>
@@ -557,139 +649,188 @@ export default function TrainingLab({ onBack }: Props) {
         </div>
       )}
 
-      {/* Training Programs — two distinct cards */}
+      {/* Training Program — single dropdown with full-width config */}
       {hasNetwork && !isRunning && (
-        <div className="lab-programs">
-          {/* Imitation Learning */}
-          <div className="lab-program-card">
-            <div className="lab-program-header">
-              <span className="lab-program-icon">📚</span>
-              <div>
-                <h3>Imitation Learning</h3>
-                <p>Learn by watching expert bots play</p>
+        <div className="lab-program-card lab-program-full">
+          <div className="lab-controls-row">
+            <label className="lab-field">
+              <span>Training Program</span>
+              <select value={selectedProgram} onChange={e => setSelectedProgram(e.target.value as 'imitation' | 'self_play' | 'island')}>
+                <option value="imitation">📚 Imitation Learning</option>
+                <option value="self_play">🎮 Self-Play (PPO)</option>
+                <option value="island">🏝️ Island Model (PBT)</option>
+              </select>
+            </label>
+            <label className="lab-field">
+              <span>Eval Opponents</span>
+              <div className="lab-checkbox-group">
+                {ALL_BOT_VERSIONS.map(v => (
+                  <label key={v} className="lab-checkbox">
+                    <input type="checkbox" checked={evalBots.includes(v)}
+                      onChange={e => {
+                        if (e.target.checked) setEvalBots(prev => [...prev, v].sort());
+                        else setEvalBots(prev => prev.filter(b => b !== v));
+                      }} />
+                    <span style={{ color: BOT_COLORS[v] }}>{BOT_LABELS[v]}</span>
+                  </label>
+                ))}
               </div>
-            </div>
-            <div className="lab-program-fields">
-              <label className="lab-field">
-                <span>Expert Source</span>
-                <select value={expertSource} onChange={e => setExpertSource(e.target.value)}>
-                  <option value="v5">v5 Only</option>
-                  <option value="v2v3">v2 & v3 Mix</option>
-                  <option value="v2v3v5">v2, v3 & v5 Mix</option>
-                </select>
-              </label>
-              <label className="lab-field">
-                <span>Eval Opponents</span>
-                <div className="lab-checkbox-group">
-                  {ALL_BOT_VERSIONS.map(v => (
-                    <label key={v} className="lab-checkbox">
-                      <input type="checkbox" checked={evalBots.includes(v)}
-                        onChange={e => {
-                          if (e.target.checked) setEvalBots(prev => [...prev, v].sort());
-                          else setEvalBots(prev => prev.filter(b => b !== v));
-                        }} />
-                      <span style={{ color: BOT_COLORS[v] }}>{BOT_LABELS[v]}</span>
-                    </label>
-                  ))}
-                </div>
-              </label>
-              <label className="lab-field">
-                <span>Expert Games</span>
-                <input type="number" value={expertGames} onChange={e => setExpertGames(Number(e.target.value))}
-                  min={10000} step={50000} />
-              </label>
-              <label className="lab-field">
-                <span>Rounds</span>
-                <input type="number" value={numRounds} onChange={e => setNumRounds(Number(e.target.value))}
-                  min={1} max={50} />
-              </label>
-              <label className="lab-field">
-                <span>Eval Games</span>
-                <input type="number" value={evalGames} onChange={e => setEvalGames(Number(e.target.value))}
-                  min={10} step={10} />
-              </label>
-              <label className="lab-field">
-                <span>Learning Rate</span>
-                <input type="number" value={ilLearningRate} onChange={e => setIlLearningRate(Number(e.target.value))}
-                  min={0.0001} max={0.01} step={0.0001} />
-              </label>
-            </div>
-            <button className="btn-gold btn-lab" onClick={startImitation}>
-              <span className="btn-icon">📚</span> Start Imitation Learning
-            </button>
+            </label>
+            <label className="lab-field">
+              <span>Eval Games</span>
+              <input type="number" value={evalGames} onChange={e => setEvalGames(Number(e.target.value))}
+                min={10} step={10} />
+            </label>
           </div>
 
-          {/* Self-Play */}
-          <div className="lab-program-card lab-program-sp">
-            <div className="lab-program-header">
-              <span className="lab-program-icon">🎮</span>
-              <div>
-                <h3>Self-Play (PPO)</h3>
-                <p>Train the agent by playing against itself using PPO reinforcement learning</p>
+          {/* Imitation Learning fields */}
+          {selectedProgram === 'imitation' && (
+            <>
+              <div className="lab-program-fields">
+                <label className="lab-field">
+                  <span>Expert Source</span>
+                  <select value={expertSource} onChange={e => setExpertSource(e.target.value)}>
+                    <option value="v5">v5 Only</option>
+                    <option value="v2v3">v2 & v3 Mix</option>
+                    <option value="v2v3v5">v2, v3 & v5 Mix</option>
+                  </select>
+                </label>
+                <label className="lab-field">
+                  <span>Expert Games</span>
+                  <input type="number" value={expertGames} onChange={e => setExpertGames(Number(e.target.value))}
+                    min={10000} step={50000} />
+                </label>
+                <label className="lab-field">
+                  <span>Rounds</span>
+                  <input type="number" value={numRounds} onChange={e => setNumRounds(Number(e.target.value))}
+                    min={1} max={50} />
+                </label>
+                <label className="lab-field">
+                  <span>Learning Rate</span>
+                  <input type="number" value={ilLearningRate} onChange={e => setIlLearningRate(Number(e.target.value))}
+                    min={0.0001} max={0.01} step={0.0001} />
+                </label>
               </div>
-            </div>
-            <div className="lab-program-fields">
-              <label className="lab-field">
-                <span>Mode</span>
-                <select value={pbtEnabled ? 'pbt' : 'single'} onChange={e => setPbtEnabled(e.target.value === 'pbt')}>
-                  <option value="single">Self-Play PPO</option>
-                  <option value="pbt">Island Model (experimental, parallel)</option>
-                </select>
-              </label>
-              <label className="lab-field">
-                <span>Sessions</span>
-                <input type="number" value={spSessions} onChange={e => setSpSessions(Number(e.target.value))}
-                  min={5} max={500} />
-              </label>
-              <label className="lab-field">
-                <span>Games/Session</span>
-                <input type="number" value={spGamesPerSession} onChange={e => setSpGamesPerSession(Number(e.target.value))}
-                  min={5} max={100} />
-              </label>
-              <label className="lab-field">
-                <span>Eval Interval</span>
-                <input type="number" value={spEvalInterval} onChange={e => setSpEvalInterval(Number(e.target.value))}
-                  min={1} max={50} />
-              </label>
-              <label className="lab-field">
-                <span>Learning Rate</span>
-                <input type="number" value={spLearningRate} onChange={e => setSpLearningRate(Number(e.target.value))}
-                  min={0.00001} max={0.01} step={0.00001} />
-              </label>
-              <label className="lab-field">
-                <span>FSP %</span>
-                <input type="number" value={spFspRatio} onChange={e => setSpFspRatio(Number(e.target.value))}
-                  min={0} max={1} step={0.1} />
-              </label>
-              {pbtEnabled && (
-                <>
-                  <label className="lab-field">
-                    <span>Islands</span>
-                    <input type="number" value={pbtPopulationSize} onChange={e => setPbtPopulationSize(Number(e.target.value))}
-                      min={2} max={8} />
-                  </label>
-                  <label className="lab-field">
-                    <span>Time (min)</span>
-                    <input type="number" value={timeLimitMinutes} onChange={e => setTimeLimitMinutes(Number(e.target.value))}
-                      min={1} max={480} />
-                  </label>
-                  <label className="lab-field">
-                    <span>Mutation</span>
-                    <input type="number" value={pbtMutationScale} onChange={e => setPbtMutationScale(Number(e.target.value))}
-                      min={0.1} max={2} step={0.1} />
-                  </label>
-                </>
-              )}
-            </div>
-            <button className="btn-gold btn-lab" onClick={startSelfPlay}>
-              <span className="btn-icon">🎮</span> Start {pbtEnabled ? 'Island Training' : 'Self-Play Training'}
-            </button>
-            {pbtEnabled && (
-              <button className="btn-gold btn-lab" onClick={startOvernight} style={{ marginLeft: 8, background: 'linear-gradient(135deg, #1a237e, #4a148c)' }}>
-                <span className="btn-icon">🌙</span> Run Overnight
+              <button className="btn-gold btn-lab" onClick={startImitation}>
+                <span className="btn-icon">📚</span> Start Imitation Learning
               </button>
-            )}
-          </div>
+            </>
+          )}
+
+          {/* Self-Play PPO fields */}
+          {selectedProgram === 'self_play' && (
+            <>
+              <div className="lab-program-fields">
+                <label className="lab-field">
+                  <span>Sessions</span>
+                  <input type="number" value={spSessions} onChange={e => setSpSessions(Number(e.target.value))}
+                    min={5} max={500} />
+                </label>
+                <label className="lab-field">
+                  <span>Games/Session</span>
+                  <input type="number" value={spGamesPerSession} onChange={e => setSpGamesPerSession(Number(e.target.value))}
+                    min={5} max={100} />
+                </label>
+                <label className="lab-field">
+                  <span>Eval Interval</span>
+                  <input type="number" value={spEvalInterval} onChange={e => setSpEvalInterval(Number(e.target.value))}
+                    min={1} max={50} />
+                </label>
+                <label className="lab-field">
+                  <span>Learning Rate</span>
+                  <input type="number" value={spLearningRate} onChange={e => setSpLearningRate(Number(e.target.value))}
+                    min={0.00001} max={0.01} step={0.00001} />
+                </label>
+              </div>
+
+              {/* Opponent Mix */}
+              <div className="lab-opponent-section">
+                <h4 className="lab-section-title">Opponent Mix</h4>
+                <p className="lab-section-desc">
+                  Configure what percentage of games are played against each opponent type.
+                  Remaining percentage uses pure self-play (shared network).
+                </p>
+                <div className="lab-program-fields">
+                  <label className="lab-field">
+                    <span>FSP %</span>
+                    <input type="number" value={spFspRatio} onChange={e => setSpFspRatio(Math.max(0, Math.min(100, Number(e.target.value))))}
+                      min={0} max={100} step={5} />
+                  </label>
+                  <label className="lab-field">
+                    <span>StockSkis V5 %</span>
+                    <input type="number" value={spStockSkisRatio} onChange={e => setSpStockSkisRatio(Math.max(0, Math.min(100, Number(e.target.value))))}
+                      min={0} max={100} step={5} />
+                  </label>
+                  <label className="lab-field">
+                    <span>Hall of Fame %</span>
+                    <input type="number" value={spHofRatio} onChange={e => setSpHofRatio(Math.max(0, Math.min(100, Number(e.target.value))))}
+                      min={0} max={100} step={5} />
+                  </label>
+                  <div className="lab-field">
+                    <span>Pure Self-Play</span>
+                    <span className="lab-ratio-remainder">
+                      {Math.max(0, 100 - spFspRatio - spStockSkisRatio - spHofRatio).toFixed(0)}%
+                    </span>
+                  </div>
+                </div>
+              </div>
+
+              <button className="btn-gold btn-lab" onClick={startSelfPlay}>
+                <span className="btn-icon">🎮</span> Start Self-Play Training
+              </button>
+            </>
+          )}
+
+          {/* Island Model (PBT) fields */}
+          {selectedProgram === 'island' && (
+            <>
+              <div className="lab-program-fields">
+                <label className="lab-field">
+                  <span>Islands</span>
+                  <input type="number" value={pbtPopulationSize} onChange={e => setPbtPopulationSize(Number(e.target.value))}
+                    min={2} max={8} />
+                </label>
+                <label className="lab-field">
+                  <span>Time (min)</span>
+                  <input type="number" value={timeLimitMinutes} onChange={e => setTimeLimitMinutes(Number(e.target.value))}
+                    min={1} max={480} />
+                </label>
+                <label className="lab-field">
+                  <span>Games/Session</span>
+                  <input type="number" value={spGamesPerSession} onChange={e => setSpGamesPerSession(Number(e.target.value))}
+                    min={5} max={100} />
+                </label>
+                <label className="lab-field">
+                  <span>Eval Interval</span>
+                  <input type="number" value={spEvalInterval} onChange={e => setSpEvalInterval(Number(e.target.value))}
+                    min={1} max={50} />
+                </label>
+                <label className="lab-field">
+                  <span>Learning Rate</span>
+                  <input type="number" value={spLearningRate} onChange={e => setSpLearningRate(Number(e.target.value))}
+                    min={0.00001} max={0.01} step={0.00001} />
+                </label>
+                <label className="lab-field">
+                  <span>FSP %</span>
+                  <input type="number" value={spFspRatio} onChange={e => setSpFspRatio(Math.max(0, Math.min(100, Number(e.target.value))))}
+                    min={0} max={100} step={5} />
+                </label>
+                <label className="lab-field">
+                  <span>Mutation</span>
+                  <input type="number" value={pbtMutationScale} onChange={e => setPbtMutationScale(Number(e.target.value))}
+                    min={0.1} max={2} step={0.1} />
+                </label>
+              </div>
+              <div className="lab-controls-actions">
+                <button className="btn-gold btn-lab" onClick={startSelfPlay}>
+                  <span className="btn-icon">🏝️</span> Start Island Training
+                </button>
+                <button className="btn-gold btn-lab" onClick={startOvernight} style={{ background: 'linear-gradient(135deg, #1a237e, #4a148c)' }}>
+                  <span className="btn-icon">🌙</span> Run Overnight
+                </button>
+              </div>
+            </>
+          )}
         </div>
       )}
 
@@ -724,6 +865,105 @@ export default function TrainingLab({ onBack }: Props) {
         </div>
       )}
 
+      {/* Training finished summary */}
+      {hasNetwork && !isRunning && phase === 'done' && state?.training_summary && (() => {
+        const summary = state.training_summary!;
+        const champion = summary.champion;
+        return (
+          <div className="lab-card" style={{ marginBottom: 24 }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 16 }}>
+              <span style={{ fontSize: 28 }}>🏆</span>
+              <div>
+                <h3 style={{ margin: 0, color: '#d4a843' }}>Training Complete</h3>
+                <span style={{ color: '#888', fontSize: 13 }}>
+                  {summary.num_islands} islands · {summary.total_games.toLocaleString()} games · {summary.total_time_display}
+                  {summary.cross_island_sessions > 0 && ` · ${summary.cross_island_sessions} cross-island sessions`}
+                </span>
+              </div>
+            </div>
+
+            {champion && (
+              <div style={{ background: 'rgba(212, 168, 67, 0.1)', border: '1px solid rgba(212, 168, 67, 0.3)', borderRadius: 8, padding: 16, marginBottom: 16 }}>
+                <div style={{ fontSize: 16, fontWeight: 700, color: '#d4a843', marginBottom: 4 }}>
+                  👑 Champion: {champion.name}
+                </div>
+                <div style={{ color: '#ccc', fontSize: 13 }}>
+                  Avg Score: {champion.avg_score.toFixed(1)} · {champion.games} tournament games
+                  {champion.island_id != null && ` · Island ${champion.island_id}`}
+                  {champion.generation > 0 && ` · Gen ${champion.generation}`}
+                </div>
+              </div>
+            )}
+
+            {summary.tournament_results.length > 1 && (
+              <div style={{ marginBottom: 16 }}>
+                <h4 style={{ margin: '0 0 8px', color: '#fff', fontSize: 14 }}>🏅 Tournament Ranking</h4>
+                <div style={{ overflowX: 'auto' }}>
+                  <table className="lab-table" style={{ width: '100%' }}>
+                    <thead>
+                      <tr>
+                        <th>Rank</th>
+                        <th>Name</th>
+                        <th>Wins</th>
+                        <th>Avg Score</th>
+                        <th>Games</th>
+                        <th>Island</th>
+                        <th>Gen</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {summary.tournament_results.map((entry, i) => (
+                        <tr key={entry.model_hash} style={i === 0 ? { background: 'rgba(212, 168, 67, 0.08)' } : undefined}>
+                          <td style={{ fontWeight: 700 }}>{entry.rank}</td>
+                          <td>{entry.name}</td>
+                          <td>{(entry.win_rate * 100).toFixed(1)}%</td>
+                          <td>{entry.avg_score.toFixed(1)}</td>
+                          <td>{entry.games}</td>
+                          <td>{entry.island_id ?? '—'}</td>
+                          <td>{entry.generation}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+            )}
+
+            {summary.island_summaries.length > 0 && (
+              <div>
+                <h4 style={{ margin: '0 0 8px', color: '#fff', fontSize: 14 }}>🏝️ Island Summary</h4>
+                <div style={{ overflowX: 'auto' }}>
+                  <table className="lab-table" style={{ width: '100%' }}>
+                    <thead>
+                      <tr>
+                        <th>Island</th>
+                        <th>Name</th>
+                        <th>Generations</th>
+                        <th>Games</th>
+                        <th>Games/sec</th>
+                        <th>Fitness</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {summary.island_summaries.map((island) => (
+                        <tr key={island.island_id}>
+                          <td style={{ fontWeight: 700 }}>{island.island_id}</td>
+                          <td>{island.name}</td>
+                          <td>{island.generations}</td>
+                          <td>{island.games.toLocaleString()}</td>
+                          <td>{island.games_per_sec.toFixed(1)}</td>
+                          <td style={{ color: '#d4a843' }}>{island.fitness.toFixed(4)}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+            )}
+          </div>
+        );
+      })()}
+
       {/* Progress bar */}
       {isRunning && (
         <div className="lab-progress">
@@ -733,16 +973,19 @@ export default function TrainingLab({ onBack }: Props) {
             </div>
           </div>
           <span className="lab-progress-text">
-            {state?.active_program === 'self_play_pbt' ? 'Time' : state?.active_program === 'self_play' ? 'Session' : 'Round'}{' '}
-            {state?.active_program === 'self_play_pbt'
-              ? `${state?.training_sessions_done ?? 0}/${state?.total_training_sessions ?? 0} min`
-              : `${state?.training_sessions_done ?? 0}/${state?.total_training_sessions ?? 0}`}
+            {state?.active_program === 'self_play_pbt' || state?.active_program === 'island_tournament' || state?.active_program === 'cross_island_learning'
+              ? `${formatDuration(state?.training_sessions_done ?? 0)} / ${formatDuration(state?.total_training_sessions ?? 0)}`
+              : state?.active_program === 'self_play' ? `Session ${state?.training_sessions_done ?? 0}/${state?.total_training_sessions ?? 0}` : `Round ${state?.training_sessions_done ?? 0}/${state?.total_training_sessions ?? 0}`}
             {state?.active_program === 'imitation' && state?.expert_games_generated
               ? ` · ${(state.expert_games_generated / 1000).toFixed(0)}K expert games` : ''}
             {state?.active_program === 'self_play' && state?.self_play_games
               ? ` · ${state.self_play_games} self-play games` : ''}
             {state?.active_program === 'self_play_pbt' && state?.self_play_games
               ? ` · ${state.pbt_population_size} islands · ${state.self_play_games.toLocaleString()} games · ${(state.sp_games_per_second ?? 0).toFixed(0)} gps` : ''}
+            {state?.active_program === 'island_tournament'
+              ? ` · Matchup ${state?.pbt_member_index ?? 0}/${state?.pbt_member_total ?? 0}` : ''}
+            {state?.active_program === 'cross_island_learning'
+              ? ` · 4 agents learning together` : ''}
           </span>
         </div>
       )}
@@ -751,13 +994,13 @@ export default function TrainingLab({ onBack }: Props) {
       {hasNetwork && (
         <div className="lab-stats">
           {ALL_BOT_VERSIONS.map(v => {
-            const wr = latest ? (latest as Record<string, unknown>)[`vs_${v}`] : undefined;
+            const place = latest ? (latest as Record<string, unknown>)[`avg_place_${v}`] : undefined;
             return (
               <StatCard
                 key={v}
                 label={`vs ${BOT_LABELS[v]} Bots`}
-                value={wr != null ? `${((wr as number) * 100).toFixed(1)}%` : '—'}
-                sublabel="Win Rate"
+                value={place != null ? (place as number).toFixed(2) : '—'}
+                sublabel="Avg Placement"
                 color={BOT_COLORS[v]}
               />
             );
@@ -787,8 +1030,8 @@ export default function TrainingLab({ onBack }: Props) {
       {hasNetwork && hasSelfPlayData && (
         <div className="lab-stats">
           <StatCard
-            label="SP Win Rate"
-            value={`${((state?.sp_win_rate ?? 0) * 100).toFixed(1)}%`}
+            label="SP Avg Placement"
+            value={(state?.sp_avg_placement ?? 0).toFixed(2)}
             sublabel="Self-Play"
             color="#4caf50"
           />
@@ -829,9 +1072,9 @@ export default function TrainingLab({ onBack }: Props) {
       {(evalData.length > 0 || hasSelfPlayData) && (
         <>
           <div className="lab-tabs">
-            {(['progress', ...(state?.pbt_enabled ? ['population'] as const : []), ...(hasSelfPlayData ? ['live'] as const : []), 'winrate', 'scores', 'hof'] as const).map(t => (
+            {(['progress', ...(state?.pbt_enabled ? ['population'] as const : []), ...(hasSelfPlayData ? ['live'] as const : []), 'winrate', 'scores', ...(hasSelfPlayData ? ['contracts'] as const : []), 'hof'] as const).map(t => (
               <button key={t} className={`lab-tab ${tab === t ? 'active' : ''}`} onClick={() => setTab(t)}>
-                {t === 'progress' ? '📈 Progress' : t === 'population' ? '🏝️ Islands' : t === 'live' ? '🎮 Live Metrics' : t === 'winrate' ? '🎯 Win Rates' : t === 'scores' ? '📊 Scores' : '🏆 Hall of Fame'}
+                {t === 'progress' ? '📈 Progress' : t === 'population' ? '🏝️ Islands' : t === 'live' ? '🎮 Live Metrics' : t === 'winrate' ? '🎯 Placements' : t === 'scores' ? '📊 Scores' : t === 'contracts' ? '🃏 Contracts' : '🏆 Hall of Fame'}
               </button>
             ))}
           </div>
@@ -839,26 +1082,35 @@ export default function TrainingLab({ onBack }: Props) {
           <div className="lab-tab-content">
             {tab === 'progress' && (
               <div className="lab-charts">
-                <ChartCard title="Win Rate vs All Bot Versions" wide>
+                <ChartCard title="Average Placement vs Opponents (Training Games)" wide>
                   <ResponsiveContainer width="100%" height={320}>
                     <AreaChart data={evalData}>
                       <defs>
-                        {ALL_BOT_VERSIONS.map(v => (
-                          <linearGradient key={v} id={`grad${BOT_LABELS[v]}`} x1="0" y1="0" x2="0" y2="1">
-                            <stop offset="5%" stopColor={BOT_COLORS[v]} stopOpacity={0.3} />
-                            <stop offset="95%" stopColor={BOT_COLORS[v]} stopOpacity={0} />
-                          </linearGradient>
-                        ))}
+                        {opponentKeys.map(key => {
+                          const color = opponentColor(key);
+                          const sk = sanitizeKey(key);
+                          return (
+                            <linearGradient key={sk} id={`grad_${sk}`} x1="0" y1="0" x2="0" y2="1">
+                              <stop offset="5%" stopColor={color} stopOpacity={0.3} />
+                              <stop offset="95%" stopColor={color} stopOpacity={0} />
+                            </linearGradient>
+                          );
+                        })}
                       </defs>
                       <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.08)" />
                       <XAxis dataKey="label" stroke="#666" fontSize={11} />
-                      <YAxis stroke="#666" fontSize={11} domain={[0, 100]} unit="%" />
+                      <YAxis stroke="#666" fontSize={11} domain={[1, 4]} reversed />
                       <Tooltip {...tooltipStyle} />
                       <Legend />
-                      <ReferenceLine y={25} stroke="rgba(255,255,255,0.15)" strokeDasharray="5 5" label={{ value: "Random (25%)", fill: '#555', fontSize: 10 }} />
-                      {ALL_BOT_VERSIONS.map(v => (
-                        <Area key={v} type="monotone" dataKey={`vs_${sanitizeKey(v)}_pct`} stroke={BOT_COLORS[v]} fill={`url(#grad${BOT_LABELS[v]})`} strokeWidth={2} name={`vs ${BOT_LABELS[v]}`} />
-                      ))}
+                      <ReferenceLine y={2.5} stroke="rgba(255,255,255,0.15)" strokeDasharray="5 5" label={{ value: "Neutral (~2.5)", fill: '#555', fontSize: 10 }} />
+                      {opponentKeys.map(key => {
+                        const sk = sanitizeKey(key);
+                        const color = opponentColor(key);
+                        const isV5 = key === 'avg_place_stockskis-v5';
+                        return (
+                          <Area key={key} type="monotone" dataKey={`${sk}_value`} stroke={color} fill={`url(#grad_${sk})`} strokeWidth={isV5 ? 3 : 2} name={opponentLabel(key)} connectNulls dot={isV5 ? { r: 3, fill: color } : false} />
+                        );
+                      })}
                     </AreaChart>
                   </ResponsiveContainer>
                 </ChartCard>
@@ -889,7 +1141,7 @@ export default function TrainingLab({ onBack }: Props) {
                         <Line type="monotone" dataKey="max_fitness" stroke="#d4a843" strokeWidth={3} dot={{ r: 3 }} name="Best Fitness" />
                         <Line type="monotone" dataKey="avg_fitness" stroke="#4a9eff" strokeWidth={2} dot={false} name="Average Fitness" />
                         <Line type="monotone" dataKey="min_fitness" stroke="#ff6b6b" strokeWidth={2} dot={false} name="Worst Fitness" />
-                        <Line type="monotone" dataKey="avg_v3" stroke="#7fd17f" strokeWidth={2} dot={false} name="Avg V3 Win Rate" />
+                        <Line type="monotone" dataKey="avg_v3" stroke="#7fd17f" strokeWidth={2} dot={false} name="Avg V3 Signal" />
                       </LineChart>
                     </ResponsiveContainer>
                   </ChartCard>
@@ -911,22 +1163,34 @@ export default function TrainingLab({ onBack }: Props) {
                           <tr>
                             <th>Island</th>
                             <th>Status</th>
+                            <th>Progress</th>
                             <th>Gen</th>
                             <th>Games</th>
                             <th>Games/sec</th>
                             <th>Fitness</th>
                             <th>vs V1</th>
                             <th>vs V3</th>
-                            <th>vs V3.2</th>
                             <th>Loss</th>
                             <th>Hyperparameters</th>
                           </tr>
                         </thead>
                         <tbody>
-                          {populationData.map((member, idx) => (
+                          {populationData.map((member, idx) => {
+                            const elapsed = (member as any).elapsed ?? 0;
+                            const timeLimit = (member as any).time_limit ?? 0;
+                            const pct = timeLimit > 0 ? Math.min(100, (elapsed / timeLimit) * 100) : 0;
+                            return (
                             <tr key={member.index} className={idx === 0 ? 'lab-row-baseline' : ''}>
-                              <td style={{ fontWeight: 'bold' }}>🏝️ {member.index}</td>
+                              <td style={{ fontWeight: 'bold' }}>🏝️ {member.name || member.label || member.index}</td>
                               <td>{member.status}</td>
+                              <td style={{ minWidth: 120 }}>
+                                <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                                  <div style={{ flex: 1, height: 6, background: 'rgba(255,255,255,0.08)', borderRadius: 3, overflow: 'hidden' }}>
+                                    <div style={{ width: `${pct}%`, height: '100%', background: member.status === 'stopped' ? '#666' : '#4a9eff', borderRadius: 3, transition: 'width 0.3s' }} />
+                                  </div>
+                                  <span style={{ fontSize: 11, color: '#888', whiteSpace: 'nowrap' }}>{formatDuration(elapsed)}</span>
+                                </div>
+                              </td>
                               <td>{(member as any).generation ?? 0}</td>
                               <td>{(member.games ?? 0).toLocaleString()}</td>
                               <td>{((member as any).games_per_sec ?? 0).toFixed(1)}</td>
@@ -936,7 +1200,8 @@ export default function TrainingLab({ onBack }: Props) {
                               <td>{member.loss.toFixed(4)}</td>
                               <td style={{ maxWidth: 320 }}>{formatHparams(member)}</td>
                             </tr>
-                          ))}
+                            );
+                          })}
                         </tbody>
                       </table>
                     </div>
@@ -947,26 +1212,22 @@ export default function TrainingLab({ onBack }: Props) {
 
             {tab === 'winrate' && (
               <div className="lab-charts">
-                {ALL_BOT_VERSIONS.map((v, vi) => {
-                  const sk = sanitizeKey(v);
-                  const dataKey = `vs_${sk}_pct`;
+                {opponentKeys.filter(k => k !== 'avg_place_self-play').map((key, vi) => {
+                  const sk = sanitizeKey(key);
+                  const dataKey = `${sk}_value`;
                   const hasData = evalData.some(e => e[dataKey] != null);
                   if (!hasData) return null;
-                  const hueBase = [120, 200, 270, 340, 30, 0][vi] ?? 0;
+                  const color = opponentColor(key);
                   return (
-                    <ChartCard key={v} title={`Win Rate vs ${BOT_LABELS[v]}`} wide={vi === 0}>
+                    <ChartCard key={key} title={`Avg Placement vs ${opponentLabel(key)}`} wide={vi === 0}>
                       <ResponsiveContainer width="100%" height={280}>
                         <BarChart data={evalData}>
                           <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.08)" />
                           <XAxis dataKey="label" stroke="#666" fontSize={11} />
-                          <YAxis stroke="#666" fontSize={11} domain={[0, 100]} unit="%" />
+                          <YAxis stroke="#666" fontSize={11} domain={[1, 4]} reversed />
                           <Tooltip {...tooltipStyle} />
-                          <ReferenceLine y={25} stroke="rgba(255,255,255,0.2)" strokeDasharray="5 5" />
-                          <Bar dataKey={dataKey} name={`Win % vs ${BOT_LABELS[v]}`} radius={[4, 4, 0, 0]}>
-                            {evalData.map((e, i) => (
-                              <Cell key={i} fill={(e as Record<string, unknown>).program === 'self_play' ? '#e040fb' : i === 0 ? '#555' : `hsl(${hueBase + 30 * (((e[dataKey] as number) ?? 0) / 50)}, 70%, 45%)`} />
-                            ))}
-                          </Bar>
+                          <ReferenceLine y={2.5} stroke="rgba(255,255,255,0.2)" strokeDasharray="5 5" />
+                          <Bar dataKey={dataKey} name={`Avg Place vs ${opponentLabel(key)}`} fill={color} radius={[4, 4, 0, 0]} />
                         </BarChart>
                       </ResponsiveContainer>
                     </ChartCard>
@@ -977,7 +1238,7 @@ export default function TrainingLab({ onBack }: Props) {
 
             {tab === 'scores' && (
               <div className="lab-charts">
-                <ChartCard title="Average Score vs Each Bot Version" wide>
+                <ChartCard title="Average Score vs Each Opponent" wide>
                   <ResponsiveContainer width="100%" height={300}>
                     <LineChart data={evalData}>
                       <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.08)" />
@@ -986,110 +1247,42 @@ export default function TrainingLab({ onBack }: Props) {
                       <Tooltip {...tooltipStyle} />
                       <Legend />
                       <ReferenceLine y={0} stroke="rgba(255,255,255,0.2)" />
-                      {ALL_BOT_VERSIONS.map(v => (
-                        <Line key={v} type="monotone" dataKey={`avg_score_${sanitizeKey(v)}`} stroke={BOT_COLORS[v]} strokeWidth={2} dot={{ r: 4 }} name={`vs ${BOT_LABELS[v]} Score`} />
+                      {opponentKeys.filter(k => k !== 'avg_place_self-play').map(key => (
+                        <Line key={key} type="monotone" dataKey={`avg_score_${key.replace(/^avg_place_/, '')}`} stroke={opponentColor(key)} strokeWidth={2} dot={{ r: 4 }} name={`${opponentLabel(key)} Score`} connectNulls />
                       ))}
                     </LineChart>
                   </ResponsiveContainer>
                 </ChartCard>
 
-                <ChartCard title="V5 Detailed Signal" wide>
-                  <ResponsiveContainer width="100%" height={300}>
-                    <LineChart data={evalData}>
-                      <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.08)" />
-                      <XAxis dataKey="label" stroke="#666" fontSize={11} />
-                      <YAxis stroke="#666" fontSize={11} />
-                      <Tooltip {...tooltipStyle} />
-                      <Legend />
-                      <ReferenceLine y={0} stroke="rgba(255,255,255,0.2)" />
-                      <Line type="monotone" dataKey="avg_points_v5" stroke="#f44336" strokeWidth={2} dot={{ r: 4 }} name="V5 Avg Points" connectNulls />
-                      <Line type="monotone" dataKey="avg_place_v5" stroke="#00bcd4" strokeWidth={2} dot={{ r: 4 }} name="V5 Avg Place (lower better)" connectNulls />
-                      <Line type="monotone" dataKey="bid_rate_v5_pct" stroke="#ff9800" strokeWidth={2} dot={{ r: 4 }} name="V5 Bid Rate %" connectNulls />
-                      <Line type="monotone" dataKey="eval_signal_v5_pct" stroke="#8bc34a" strokeWidth={3} dot={{ r: 4 }} name="V5 Eval Signal %" connectNulls />
-                    </LineChart>
-                  </ResponsiveContainer>
-                </ChartCard>
-
-                {v5ContractRows.length > 0 && (
-                  <ChartCard title="Latest V5 Contract Breakdown" wide>
-                    <div style={{ overflowX: 'auto' }}>
-                      <table className="lab-table">
-                        <thead>
-                          <tr>
-                            <th>Contract</th>
-                            <th>Games</th>
-                            <th>Win %</th>
-                            <th>Avg Points</th>
-                            <th>Decl Games</th>
-                            <th>Decl Win %</th>
-                            <th>Def Games</th>
-                            <th>Def Win %</th>
-                          </tr>
-                        </thead>
-                        <tbody>
-                          {v5ContractRows.map((row) => (
-                            <tr key={row.name}>
-                              <td>{row.name}</td>
-                              <td>{row.games}</td>
-                              <td>{row.winRate}%</td>
-                              <td>{row.avgPoints.toFixed(1)}</td>
-                              <td>{row.declGames}</td>
-                              <td>{row.declWinRate}%</td>
-                              <td>{row.defGames}</td>
-                              <td>{row.defWinRate}%</td>
-                            </tr>
-                          ))}
-                        </tbody>
-                      </table>
-                    </div>
-                  </ChartCard>
-                )}
-
-                <ChartCard title="Evaluation History" wide>
+                <ChartCard title="Training Stats History" wide>
                   <div style={{ overflowX: 'auto' }}>
                     <table className="lab-table">
                       <thead>
                         <tr>
-                          <th>Round</th>
-                          <th>Program</th>
-                          {ALL_BOT_VERSIONS.map(v => (
-                            <th key={`wr-${v}`}>vs {BOT_LABELS[v]} WR</th>
+                          <th>Session</th>
+                          {opponentKeys.map(key => (
+                            <th key={`wr-${key}`}>{opponentLabel(key)} Avg Place</th>
                           ))}
-                          {ALL_BOT_VERSIONS.map(v => (
-                            <th key={`sc-${v}`}>Score {BOT_LABELS[v]}</th>
+                          {opponentKeys.filter(k => k !== 'avg_place_self-play').map(key => (
+                            <th key={`sc-${key}`}>{opponentLabel(key)} Score</th>
                           ))}
-                          <th>V5 Points</th>
-                          <th>V5 Place</th>
-                          <th>V5 Bid %</th>
-                          <th>V5 Decl WR</th>
-                          <th>V5 Def WR</th>
-                          <th>V5 Signal</th>
                           <th>Loss</th>
                         </tr>
                       </thead>
                       <tbody>
                         {evalData.map((e, i) => (
-                          <tr key={i} className={i === 0 ? 'lab-row-baseline' : ''}>
+                          <tr key={i}>
                             <td>{e.label as string}</td>
-                            <td>
-                              {e.program === 'imitation' && <span className="lab-badge-il">📚 IL</span>}
-                              {e.program === 'self_play' && <span className="lab-badge-sp">🎮 SP</span>}
-                              {e.program === 'init' && <span style={{ color: '#666' }}>—</span>}
-                            </td>
-                            {ALL_BOT_VERSIONS.map(v => {
-                              const pct = e[`vs_${sanitizeKey(v)}_pct`];
-                              return <td key={`wr-${v}`} style={{ color: BOT_COLORS[v] }}>{pct != null ? `${pct}%` : '—'}</td>;
+                            {opponentKeys.map(key => {
+                              const sk = sanitizeKey(key);
+                              const val = e[`${sk}_value`];
+                              return <td key={`wr-${key}`} style={{ color: opponentColor(key) }}>{val != null ? (val as number).toFixed(2) : '—'}</td>;
                             })}
-                            {ALL_BOT_VERSIONS.map(v => {
-                              const sc = e[`avg_score_${sanitizeKey(v)}`];
-                              return <td key={`sc-${v}`}>{sc != null ? (sc as number).toFixed(1) : '—'}</td>;
+                            {opponentKeys.filter(k => k !== 'avg_place_self-play').map(key => {
+                              const name = key.replace(/^avg_place_/, '');
+                              const sc = e[`avg_score_${name}`];
+                              return <td key={`sc-${key}`}>{sc != null ? (sc as number).toFixed(1) : '—'}</td>;
                             })}
-                            <td>{e.avg_points_v5 != null ? (e.avg_points_v5 as number).toFixed(1) : '—'}</td>
-                            <td>{e.avg_place_v5 != null ? (e.avg_place_v5 as number).toFixed(2) : '—'}</td>
-                            <td>{e.bid_rate_v5 != null ? `${((e.bid_rate_v5 as number) * 100).toFixed(1)}%` : '—'}</td>
-                            <td>{e.decl_win_rate_v5 != null ? `${((e.decl_win_rate_v5 as number) * 100).toFixed(1)}%` : '—'}</td>
-                            <td>{e.def_win_rate_v5 != null ? `${((e.def_win_rate_v5 as number) * 100).toFixed(1)}%` : '—'}</td>
-                            <td>{e.eval_signal_v5 != null ? `${((e.eval_signal_v5 as number) * 100).toFixed(1)}%` : '—'}</td>
                             <td>{(e.loss as number) ? (e.loss as number).toFixed(4) : '—'}</td>
                           </tr>
                         ))}
@@ -1100,16 +1293,117 @@ export default function TrainingLab({ onBack }: Props) {
               </div>
             )}
 
+            {tab === 'contracts' && hasSelfPlayData && (
+              <div className="lab-charts">
+                {/* Contract Breakdown Table (Declarer vs Defender) */}
+                <ChartCard title="Contract Breakdown (Declarer vs Defender)" wide>
+                  <div style={{ overflowX: 'auto' }}>
+                    <table className="lab-table">
+                      <thead>
+                        <tr>
+                          <th>Contract</th>
+                          <th>Total</th>
+                          <th>Decl Played</th>
+                          <th>Decl Win%</th>
+                          <th>Decl Avg Score</th>
+                          <th>Def Played</th>
+                          <th>Def Win%</th>
+                          <th>Def Avg Score</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {state?.contract_stats && Object.entries(state.contract_stats)
+                          .filter(([, v]) => v.played > 0)
+                          .sort(([, a], [, b]) => b.played - a.played)
+                          .map(([name, cs]) => (
+                            <tr key={name}>
+                              <td style={{ color: '#d4a843', fontWeight: 'bold' }}>{name}</td>
+                              <td>{cs.played}</td>
+                              <td>{cs.decl_played}</td>
+                              <td style={{ color: cs.decl_win_rate > 0.5 ? '#4caf50' : '#ef5350' }}>
+                                {(cs.decl_win_rate * 100).toFixed(1)}%
+                              </td>
+                              <td>{cs.decl_avg_score.toFixed(1)}</td>
+                              <td>{cs.def_played}</td>
+                              <td style={{ color: cs.def_win_rate > 0.5 ? '#4caf50' : '#ef5350' }}>
+                                {(cs.def_win_rate * 100).toFixed(1)}%
+                              </td>
+                              <td>{cs.def_avg_score.toFixed(1)}</td>
+                            </tr>
+                          ))}
+                      </tbody>
+                    </table>
+                  </div>
+                </ChartCard>
+
+                {/* Declarer Average Score by Contract */}
+                {state?.contract_stats && (() => {
+                  const barData = Object.entries(state.contract_stats)
+                    .filter(([, v]) => v.decl_played > 0)
+                    .map(([name, cs]) => ({ name, declAvgScore: cs.decl_avg_score, defAvgScore: cs.def_avg_score }));
+                  return barData.length > 0 ? (
+                    <ChartCard title="Average Score by Contract & Role" wide>
+                      <ResponsiveContainer width="100%" height={300}>
+                        <BarChart data={barData}>
+                          <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.08)" />
+                          <XAxis dataKey="name" stroke="#666" fontSize={11} />
+                          <YAxis stroke="#666" fontSize={11} />
+                          <Tooltip {...tooltipStyle} />
+                          <Legend />
+                          <ReferenceLine y={0} stroke="rgba(255,255,255,0.2)" />
+                          <Bar dataKey="declAvgScore" fill="#4caf50" name="Declarer Avg Score" />
+                          <Bar dataKey="defAvgScore" fill="#ef5350" name="Defender Avg Score" />
+                        </BarChart>
+                      </ResponsiveContainer>
+                    </ChartCard>
+                  ) : null;
+                })()}
+
+                {/* Tarok Count Distribution */}
+                {state?.tarok_count_bids && (() => {
+                  const tarokData = Object.entries(state.tarok_count_bids)
+                    .map(([count, contracts]) => {
+                      const total = Object.values(contracts).reduce((s, n) => s + n, 0);
+                      return { tarokCount: parseInt(count), total, ...contracts };
+                    })
+                    .filter(d => d.total > 0)
+                    .sort((a, b) => a.tarokCount - b.tarokCount);
+                  const allContracts = [...new Set(tarokData.flatMap(d => Object.keys(d).filter(k => k !== 'tarokCount' && k !== 'total')))];
+                  const contractColors: Record<string, string> = {
+                    klop: '#9e9e9e', three: '#4caf50', two: '#2196f3', one: '#ff9800',
+                    solo_three: '#8bc34a', solo_two: '#03a9f4', solo_one: '#ffc107',
+                    solo: '#e91e63', berac: '#9c27b0',
+                  };
+                  return tarokData.length > 0 ? (
+                    <ChartCard title="Contract Distribution by Tarok Count at Deal" wide>
+                      <ResponsiveContainer width="100%" height={300}>
+                        <BarChart data={tarokData}>
+                          <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.08)" />
+                          <XAxis dataKey="tarokCount" stroke="#666" fontSize={11} label={{ value: 'Taroks in Hand', position: 'insideBottom', offset: -5, fill: '#888' }} />
+                          <YAxis stroke="#666" fontSize={11} />
+                          <Tooltip {...tooltipStyle} />
+                          <Legend />
+                          {allContracts.map(c => (
+                            <Bar key={c} dataKey={c} stackId="a" fill={contractColors[c] || '#666'} name={c} />
+                          ))}
+                        </BarChart>
+                      </ResponsiveContainer>
+                    </ChartCard>
+                  ) : null;
+                })()}
+              </div>
+            )}
+
             {tab === 'live' && hasSelfPlayData && (
               <div className="lab-charts">
-                <ChartCard title="Self-Play Win Rate" wide>
+                <ChartCard title="Self-Play Avg Placement" wide>
                   <ResponsiveContainer width="100%" height={300}>
                     <LineChart data={sessionHistoryData}>
                       <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.08)" />
                       <XAxis dataKey="session" stroke="#666" fontSize={11} />
-                      <YAxis stroke="#666" fontSize={11} domain={[0, 100]} tickFormatter={(v: number) => `${v}%`} />
+                      <YAxis stroke="#666" fontSize={11} domain={[1, 4]} reversed />
                       <Tooltip {...tooltipStyle} />
-                      <Line type="monotone" dataKey="winRate" stroke="#4caf50" strokeWidth={2} dot={false} name="Win Rate %" />
+                      <Line type="monotone" dataKey="avgPlacement" stroke="#4caf50" strokeWidth={2} dot={false} name="Avg Placement" />
                     </LineChart>
                   </ResponsiveContainer>
                 </ChartCard>
@@ -1185,10 +1479,10 @@ export default function TrainingLab({ onBack }: Props) {
 
             {tab === 'hof' && (
               <div className="lab-charts">
-                <ChartCard title="Hall of Fame — Saved Snapshots" wide>
-                  {(state?.snapshots?.length ?? 0) === 0 ? (
+                <ChartCard title={`Hall of Fame — ${hofModels.length} Models`} wide>
+                  {hofModels.length === 0 ? (
                     <p style={{ color: '#666', textAlign: 'center', padding: 20 }}>
-                      No snapshots yet. Snapshots are saved automatically after each evaluation round.
+                      No models in the Hall of Fame yet.
                     </p>
                   ) : (
                     <div style={{ overflowX: 'auto' }}>
@@ -1198,16 +1492,40 @@ export default function TrainingLab({ onBack }: Props) {
                             <th>#</th>
                             <th>Name</th>
                             <th>Hash</th>
-                            <th>File</th>
+                            <th>Phase</th>
+                            <th>vs V1</th>
+                            <th>vs V2</th>
+                            <th>vs V3</th>
+                            <th>vs V5</th>
+                            <th></th>
                           </tr>
                         </thead>
                         <tbody>
-                          {state!.snapshots.map((s, i) => (
-                            <tr key={i}>
+                          {hofModels.map((m, i) => (
+                            <tr key={`${m.model_hash}-${i}`}>
                               <td>{i + 1}</td>
-                              <td style={{ color: '#d4a843' }}>{s.display_name}</td>
-                              <td style={{ fontFamily: 'monospace', color: '#888' }}>{s.model_hash}</td>
-                              <td style={{ fontFamily: 'monospace', fontSize: 11, color: '#666' }}>{s.filename}</td>
+                              <td style={{ color: '#d4a843', maxWidth: 200, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                                {(m.display_name as string) || '—'}
+                              </td>
+                              <td style={{ fontFamily: 'monospace', color: '#888' }}>{m.model_hash as string}</td>
+                              <td style={{ fontSize: 11, color: '#666' }}>{(m.phase_label as string) || '—'}</td>
+                              <td>{m.vs_v1 != null ? `${((m.vs_v1 as number) * 100).toFixed(0)}%` : '—'}</td>
+                              <td>{m.vs_v2 != null ? `${((m.vs_v2 as number) * 100).toFixed(0)}%` : '—'}</td>
+                              <td>{m.vs_v3 != null ? `${((m.vs_v3 as number) * 100).toFixed(0)}%` : '—'}</td>
+                              <td>{m.vs_v5 != null ? `${((m.vs_v5 as number) * 100).toFixed(0)}%` : '—'}</td>
+                              <td>
+                                <button
+                                  onClick={() => removeFromHof(m.model_hash as string)}
+                                  disabled={hofLoading}
+                                  style={{
+                                    background: 'transparent', border: '1px solid #c62828', color: '#ef5350',
+                                    borderRadius: 4, padding: '2px 8px', cursor: 'pointer', fontSize: 11,
+                                  }}
+                                  title="Remove from Hall of Fame"
+                                >
+                                  ✕
+                                </button>
+                              </td>
                             </tr>
                           ))}
                         </tbody>
@@ -1215,6 +1533,35 @@ export default function TrainingLab({ onBack }: Props) {
                     </div>
                   )}
                 </ChartCard>
+
+                <ChartCard title="Promote Checkpoint to Hall of Fame" wide>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '8px 0' }}>
+                    <select
+                      value={selectedCheckpoint}
+                      onChange={e => setSelectedCheckpoint(e.target.value)}
+                      style={{
+                        background: '#232529', color: '#fff', border: '1px solid #444',
+                        padding: '6px 10px', borderRadius: 4, fontSize: 13, flex: 1, maxWidth: 400,
+                      }}
+                    >
+                      {checkpoints.filter(c => !c.is_hof).map(c => (
+                        <option key={c.filename} value={c.filename}>{c.filename}</option>
+                      ))}
+                    </select>
+                    <button
+                      className="btn-gold btn-lab"
+                      onClick={() => selectedCheckpoint && promoteToHof(selectedCheckpoint)}
+                      disabled={hofLoading || !selectedCheckpoint}
+                      style={{ margin: 0 }}
+                    >
+                      Promote to HoF
+                    </button>
+                  </div>
+                  <p style={{ color: '#666', fontSize: 12, marginTop: 4 }}>
+                    Select a checkpoint and manually promote it to the Hall of Fame.
+                  </p>
+                </ChartCard>
+
                 <ChartCard title="How to Use These Models">
                   <div style={{ color: '#aaa', fontSize: 13, padding: '8px 0', lineHeight: 1.6 }}>
                     <p>Hall of Fame models appear in the model selection dropdowns for:</p>
@@ -1222,7 +1569,12 @@ export default function TrainingLab({ onBack }: Props) {
                       <li><strong>Play vs AI</strong> — choose any snapshot as an opponent</li>
                       <li><strong>Spectate AI vs AI</strong> — pit different life stages against each other</li>
                       <li><strong>Fictitious Self-Play</strong> — used as historical opponents for training diversity</li>
+                      <li><strong>Post-training Tournament</strong> — HoF models compete in round-robin</li>
                     </ul>
+                    <p style={{ marginTop: 12 }}>
+                      <strong>Tip:</strong> Remove weak or duplicate models to speed up the post-training tournament
+                      (matchups scale as N×(N-1)/2).
+                    </p>
                   </div>
                 </ChartCard>
               </div>

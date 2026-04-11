@@ -14,12 +14,23 @@ use rand::rng;
 
 use crate::card::*;
 use crate::encoding;
-use crate::expert_games::ExpertBatch;
 use crate::game_state::*;
 use crate::legal_moves;
 use crate::scoring;
 use crate::stockskis_v5;
 use crate::trick_eval;
+
+/// Batch result from expert game generation.
+pub struct ExpertBatch {
+    pub states: Vec<f32>,
+    pub oracle_states: Vec<f32>,
+    pub decision_types: Vec<u8>,
+    pub actions: Vec<u16>,
+    pub rewards: Vec<f32>,
+    pub legal_masks: Vec<u8>,
+    pub state_size: usize,
+    pub oracle_state_size: usize,
+}
 
 struct ExpertExp {
     state: [f32; encoding::STATE_SIZE],
