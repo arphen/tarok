@@ -515,7 +515,471 @@ line-length = 100
 
 ---
 
-## 12. Open Questions
+## 12. Backend Orchestration Layer (Composition Root)
+
+The backend is the **composition root** — it wires together two independent
+libraries (game domain + training lab) and exposes the result through FastAPI.
+This is NOT a "thin adapter."  There is real orchestration logic here.
+
+### 12.1 Decision Framework: What Lives Where
+
+For each piece of code, ask: **does it need game-domain types
+(`Card`, `GameState`, `PlayerPort`, `GameLoop`)?**
+
+| Answer | Location | Examples |
+|--------|----------|---------|
+| **No** — operates on raw tensors, numpy arrays, indices | `training-lab` | TarokNet, PPO algorithm, ExperienceBuffer, compute backends, RustBatchGameRunner |
+| **Yes** — needs to understand cards, game state, player decisions | `backend` | RLAgent, StockSkisPlayerV5, PythonGameSimulator, encoding bridge, opponent management |
+| **Both** — bridges the two | `backend/adapters/training/` | TrainingOrchestrator, GameSimulatorAdapter |
+
+### 12.2 Backend Orchestration Use Cases
+
+These live in `backend/src/tarok/use_cases/` (or a new
+`backend/src/tarok/adapters/training/` directory).  They compose
+training-lab use cases with game-domain objects.
+
+#### `SetUpTrainingRun`
+
+The most important orchestrator.  Takes an API request and wires everything:
+
+```python
+class SetUpTrainingRun:
+    """Compose a training run from game-domain + training-lab objects."""
+
+    def __call__(self, request: TrainingRequest) -> RunPPOTraining:
+        # 1. Create network (from training_lab)
+        network = TarokNet(...)
+
+        # 2. Create game simulator adapter
+        #    - If Rust engine available: use training_lab's RustBatchGameRunner
+        #      (pure tensor path, no game-domain types needed)
+        #    - Else: create PythonGameSimulator (wraps GameLoop + RLAgent)
+        if request.use_rust_engine:
+            simulator = RustBatchGameRunner(compute, concurrency=128)
+        else:
+            simulator = PythonGameSimulator(
+                game_loop_factory=GameLoop,
+                agent_factory=RLAgent,
+                encoding_bridge=TarokEncodingBridge(),
+            )
+
+        # 3. Configure opponents (game-domain knowledge)
+        opponent_config = OpponentMix(
+            self_play_ratio=0.70,
+            stockskis_ratio=request.stockskis_ratio,  # e.g. 0.10
+            stockskis_strength=request.stockskis_strength,
+            fsp_ratio=request.fsp_ratio,  # e.g. 0.20
+            hof_models=self.hof_manager.list_auto(),
+        )
+
+        # 4. Wire up and return the training-lab use case
+        return RunPPOTraining(
+            simulator=simulator,
+            compute=create_backend(),
+            store=FileCheckpointStore(self.checkpoint_dir),
+            config=TrainingConfig.from_request(request),
+            opponent_config=opponent_config,
+        )
+```
+
+#### `SetUpPipeline`
+
+Orchestrates the 3-phase pipeline by composing training-lab use cases:
+
+```python
+class SetUpPipeline:
+    def __call__(self, request: PipelineRequest) -> RunPipeline:
+        # Phase 1: Imitation — uses Rust expert data (pure tensor path)
+        imitation = RunImitationPretraining(
+            expert_data_source=RustExpertDataSource(),  # calls tarok_engine
+            compute=create_backend(),
+        )
+
+        # Phase 2: PPO — needs opponent management (game-domain knowledge)
+        ppo_setup = SetUpTrainingRun(...)
+        ppo = ppo_setup(request.ppo_config)
+
+        # Phase 3: FSP — same PPO but with FSP-heavy opponent mix
+        fsp_config = request.ppo_config.with_fsp_ratio(0.5)
+        fsp = ppo_setup(fsp_config)
+
+        return RunPipeline(phases=[imitation, ppo, fsp])
+```
+
+#### `PlayHumanVsAI`
+
+Creates a live game with a WebSocket-backed human and trained agents:
+
+```python
+class PlayHumanVsAI:
+    def __call__(self, ws, checkpoint_path, observer) -> GameLoop:
+        # Load trained network from training_lab
+        network = TarokNet(...)
+        network.load_state_dict(torch.load(checkpoint_path))
+
+        # Create game-domain agents
+        human = HumanPlayer(ws)
+        agents = [human] + [RLAgent(network) for _ in range(3)]
+
+        return GameLoop(agents, observer=observer)
+```
+
+#### `PlaySpectatorGame`
+
+All-AI game for spectating:
+
+```python
+class PlaySpectatorGame:
+    def __call__(self, agent_configs, observer) -> GameLoop:
+        agents = []
+        for cfg in agent_configs:
+            if cfg.type == "nn":
+                agents.append(RLAgent(load_network(cfg.checkpoint)))
+            elif cfg.type == "stockskis":
+                agents.append(StockSkisPlayerV5(strength=cfg.strength))
+            elif cfg.type == "random":
+                agents.append(RandomPlayer())
+        return GameLoop(agents, observer=observer)
+```
+
+#### `EvaluateAgainstBots`
+
+Benchmark a trained model against reference opponents:
+
+```python
+class EvaluateAgainstBots:
+    def __call__(self, network, n_games, bot_strength) -> EvalResult:
+        agent = RLAgent(network, explore_rate=0.0)
+        bots = [StockSkisPlayerV5(strength=bot_strength) for _ in range(3)]
+        agents = [agent] + bots
+
+        results = []
+        for _ in range(n_games):
+            loop = GameLoop(agents)
+            state, scores = await loop.run()
+            results.append(scores)
+
+        return EvalResult(
+            win_rate=..., avg_score=..., avg_placement=...
+        )
+```
+
+#### `AnalyzePosition`
+
+Run the network on a specific game state for card/bid recommendations:
+
+```python
+class AnalyzePosition:
+    def __call__(self, state: GameState, player: int, network) -> list[Recommendation]:
+        # Encode game state to tensor (bridge function)
+        state_tensor = TarokEncodingBridge().encode(state, player)
+        legal_mask = TarokEncodingBridge().encode_legal_mask(state, player)
+
+        # Run inference (pure training_lab)
+        logits, value = compute.forward_batch(network, state_tensor, ...)
+
+        # Map back to game-domain objects (Card, Contract)
+        return TarokEncodingBridge().decode_recommendations(logits, legal_mask)
+```
+
+### 12.3 The RLAgent Boundary Object
+
+`RLAgent` is the **most important boundary class**.  It lives in the backend
+because it implements `PlayerPort` (a game-domain interface), but it uses
+`TarokNet` and `Experience` from training-lab.
+
+```
+                    backend                          training-lab
+              ┌──────────────────┐            ┌──────────────────┐
+              │   PlayerPort     │            │   TarokNet       │
+              │   (Protocol)     │            │   (nn.Module)    │
+              │                  │            │                  │
+              │ choose_bid()     │            │ forward_batch()  │
+              │ choose_card()    │            │                  │
+              │ choose_king()    │            │   Experience     │
+              │ choose_talon()   │            │   (dataclass)    │
+              │ choose_discard() │            │                  │
+              │ choose_announce()│            │   DecisionType   │
+              └────────┬─────────┘            └────────┬─────────┘
+                       │ implements                     │ uses
+                       ▼                                │
+              ┌──────────────────────────────────────────┘
+              │
+              │   RLAgent (backend/adapters/ai/agent.py)
+              │
+              │   • Implements PlayerPort
+              │   • Owns a TarokNet reference
+              │   • Encodes GameState → tensor (via encoding bridge)
+              │   • Samples actions from network output
+              │   • Records Experience objects
+              │   • Applies BehavioralProfile biases
+              │
+              └──────────────────────────────────────────
+```
+
+`RLAgent` is only needed for:
+1. **Human-vs-AI games** (live play via WebSocket)
+2. **Spectator games** (AI-vs-AI demo)
+3. **Python fallback game simulator** (when Rust engine unavailable)
+4. **Analysis endpoints** (camera agent recommendations)
+
+It is **NOT needed** on the main training hot path when using
+`RustBatchGameRunner`, which operates on raw tensors from the Rust engine
+without ever constructing `Card` or `GameState` Python objects.
+
+### 12.4 The Encoding Bridge
+
+The encoding bridge converts between game-domain types and raw tensor
+indices.  It lives in the backend because it knows about both domains.
+
+```python
+class TarokEncodingBridge:
+    """Converts tarok.entities objects ↔ training_lab tensor indices."""
+
+    def encode_state(self, state: GameState, player: int) -> torch.Tensor:
+        """GameState → 450-dim float tensor."""
+        ...
+
+    def encode_oracle_state(self, state: GameState, player: int) -> torch.Tensor:
+        """GameState → 612-dim float tensor (perfect info)."""
+        ...
+
+    def encode_legal_mask(self, state: GameState, player: int,
+                          decision_type: DecisionType) -> torch.Tensor:
+        """Legal moves → binary mask tensor."""
+        ...
+
+    def card_to_index(self, card: Card) -> int: ...
+    def index_to_card(self, idx: int) -> Card: ...
+    def contract_to_bid_index(self, contract: Contract) -> int: ...
+    def bid_index_to_contract(self, idx: int) -> Contract | None: ...
+```
+
+This bridge is needed by `RLAgent` and `PythonGameSimulator` but NOT by
+`RustBatchGameRunner` (Rust engine encodes states directly to numpy arrays).
+
+### 12.5 The Two Game Simulators
+
+There are two implementations of `training_lab.ports.GameSimulatorPort`,
+and they live in **different packages** because of their dependencies:
+
+```
+training_lab.ports.GameSimulatorPort (Protocol)
+  │
+  ├── training_lab.adapters.engine.RustBatchGameRunner
+  │     │
+  │     ├── Depends on: tarok_engine (Rust FFI), torch, numpy
+  │     ├── Does NOT depend on: tarok.entities, GameLoop, PlayerPort
+  │     ├── Operates on: raw tensors, integer indices, numpy arrays
+  │     └── This is the PRIMARY/FAST path
+  │
+  └── backend.adapters.training.PythonGameSimulator
+        │
+        ├── Depends on: tarok.entities, tarok.use_cases.GameLoop,
+        │               RLAgent, StockSkisPlayerV5, encoding bridge
+        ├── Operates on: Card, GameState, PlayerPort objects
+        └── This is the FALLBACK path (no Rust engine)
+```
+
+Why `RustBatchGameRunner` can live in training-lab:  the Rust engine
+(`tarok_engine`) returns pre-encoded numpy arrays (states, legal_masks,
+actions, rewards).  The batch runner never constructs `Card`, `GameState`,
+or any Python game-domain object.  The data flow is:
+
+```
+Rust engine (game state)
+  → encode_state_v2() [in Rust, returns numpy]
+  → Python receives numpy array
+  → torch.from_numpy() → GPU forward pass
+  → action index → back to Rust
+```
+
+No game-domain types cross the boundary.
+
+### 12.6 Opponent Management
+
+Opponent selection is **game-domain knowledge** that stays in the backend.
+Understanding what "StockSkis strength 3" means, or which HoF model to
+load, or how to configure FSP bank ratios — all of this involves
+game-specific concepts.
+
+The backend converts opponent configurations into an `OpponentMix`
+dataclass that the training lab understands:
+
+```python
+# backend/adapters/training/opponent_config.py
+
+@dataclass
+class OpponentMix:
+    """Game-agnostic opponent configuration for training lab."""
+    self_play_ratio: float = 0.70
+    heuristic_ratio: float = 0.10
+    fsp_ratio: float = 0.20
+
+    # Heuristic bot callable — returns (state, legal_mask) → action_idx
+    # The training lab just calls this function; it doesn't know it's StockSkis
+    heuristic_policy: Callable[[np.ndarray, np.ndarray], int] | None = None
+
+    # FSP checkpoints (training lab loads these into frozen networks)
+    fsp_checkpoint_paths: list[Path] = field(default_factory=list)
+
+    # HoF checkpoints (same as FSP, just from a different source)
+    hof_checkpoint_paths: list[Path] = field(default_factory=list)
+```
+
+The training lab's `RustBatchGameRunner` uses these ratios and callables
+without knowing anything about the game domain.
+
+### 12.7 Updated Backend Directory Structure
+
+```
+backend/src/tarok/
+├── entities/              # Card, GameState, Scoring (UNCHANGED)
+├── engine/                # Trick eval, legal moves (UNCHANGED)
+├── ports/                 # PlayerPort, ObserverPort (UNCHANGED)
+├── use_cases/             # GameLoop, Deal, Bid, … (UNCHANGED)
+└── adapters/
+    ├── api/               # FastAPI routes, WebSocket, schemas
+    │   ├── server.py          # Routes (delegates to orchestrators)
+    │   ├── schemas.py         # Pydantic request/response models
+    │   ├── human_player.py    # HumanPlayer (implements PlayerPort)
+    │   ├── ws_observer.py     # WebSocket game event broadcasting
+    │   └── spectator_observer.py
+    │
+    ├── ai/                # Game-domain-aware AI components
+    │   ├── agent.py           # RLAgent (PlayerPort + TarokNet bridge)
+    │   ├── encoding_bridge.py # GameState ↔ tensor conversion
+    │   ├── stockskis_v5.py    # Heuristic bot (implements PlayerPort)
+    │   ├── random_agent.py    # Random player (implements PlayerPort)
+    │   └── lookahead_agent.py # MCTS/lookahead (implements PlayerPort)
+    │
+    └── training/          # NEW — orchestration layer
+        ├── __init__.py
+        ├── orchestrator.py     # SetUpTrainingRun, SetUpPipeline
+        ├── game_simulator.py   # PythonGameSimulator (fallback)
+        ├── opponent_config.py  # OpponentMix, opponent selection logic
+        ├── evaluator.py        # EvaluateAgainstBots
+        └── analyzer.py         # AnalyzePosition (camera agent)
+```
+
+### 12.8 Complete Data Flow: API Request → Training
+
+```
+POST /api/training/start { sessions: 1000, stockskis_ratio: 0.1, ... }
+  │
+  ▼
+server.py: start_training(request)
+  │
+  ▼
+SetUpTrainingRun(request)                    ◄── backend/adapters/training/
+  │
+  ├── TarokNet(config)                       ◄── training_lab/entities/
+  ├── RustBatchGameRunner(compute, 128)      ◄── training_lab/adapters/engine/
+  ├── FileCheckpointStore(checkpoint_dir)    ◄── training_lab/adapters/storage/
+  ├── OpponentMix(                           ◄── backend/adapters/training/
+  │     stockskis_policy=StockSkisV5(...),       (game-domain knowledge)
+  │     fsp_paths=network_bank.list(),
+  │     hof_paths=hof_manager.list(),
+  │   )
+  ├── QueueMetricsSink(api_queue)            ◄── training_lab/adapters/
+  └── TrainingConfig.from_request(request)   ◄── training_lab/entities/
+  │
+  ▼
+RunPPOTraining(                              ◄── training_lab/use_cases/
+    simulator, compute, store,
+    config, opponent_config,
+    metrics_sink, progress,
+)
+  │
+  ├── Producer thread:
+  │     RustBatchGameRunner.play_continuous(network_copy, opponent_config)
+  │       │
+  │       ├── tarok_engine drives Rust games
+  │       ├── Batched forward_batch() for NN decisions
+  │       ├── StockSkis decisions via opponent_config.heuristic_policy()
+  │       └── Completed experiences → ExperienceBuffer
+  │
+  └── Consumer thread:
+        ExperienceBuffer.pull_batch(min_size=5000)
+          │
+          ├── Compute GAE per game
+          ├── Group by DecisionType
+          ├── PPO update (6 epochs × 256-batch)
+          ├── optimizer.step()
+          └── Signal producer: refresh frozen network copy
+```
+
+### 12.9 What's Left in Backend's `adapters/ai/` After Migration
+
+Only the **game-domain-aware player implementations:**
+
+| File | Why it stays |
+|------|-------------|
+| `agent.py` (RLAgent) | Implements `PlayerPort`, needs `Card`, `GameState` |
+| `encoding_bridge.py` | Converts `GameState` ↔ tensor, needs `Card`, `Contract`, etc. |
+| `stockskis_v5.py` | Implements `PlayerPort`, game heuristics |
+| `random_agent.py` | Implements `PlayerPort` |
+| `lookahead_agent.py` | Implements `PlayerPort`, needs `GameState` for search |
+
+Everything else moves to `training-lab` or `backend/adapters/training/`.
+
+### 12.10 Dependency Arrows (Final)
+
+```
+┌─────────────────────────────────────────────────────────────────┐
+│                        frontend (React)                          │
+│                    polls /api/training/metrics                    │
+└───────────────────────────────┬──────────────────────────────────┘
+                                │ HTTP / WebSocket
+                                ▼
+┌─────────────────────────────────────────────────────────────────┐
+│                    backend (FastAPI)                              │
+│                                                                  │
+│  ┌──────────────┐  ┌──────────────────┐  ┌───────────────────┐  │
+│  │  adapters/api │  │ adapters/training │  │   adapters/ai     │  │
+│  │  (routes,     │  │ (orchestration,  │  │   (RLAgent,       │  │
+│  │   schemas,    │──│  opponent config,│──│    StockSkis,     │  │
+│  │   WebSocket)  │  │  PythonGameSim)  │  │    encoding       │  │
+│  └──────────────┘  └────────┬─────────┘  │    bridge)         │  │
+│                             │             └───────────────────┘  │
+│  ┌──────────────┐  ┌───────┴──────────┐                         │
+│  │  entities/    │  │   use_cases/     │                         │
+│  │  (Card,       │  │   (GameLoop,     │                         │
+│  │   GameState,  │  │    Deal, Bid,    │                         │
+│  │   Scoring)    │  │    PlayTrick)    │                         │
+│  └──────────────┘  └─────────────────┘                          │
+└───────────────────────────────┬──────────────────────────────────┘
+                                │ imports (local path dep)
+                                ▼
+┌─────────────────────────────────────────────────────────────────┐
+│                    training-lab (standalone)                      │
+│                                                                  │
+│  ┌──────────────┐  ┌──────────────────┐  ┌───────────────────┐  │
+│  │  entities/    │  │   use_cases/     │  │   adapters/       │  │
+│  │  (TarokNet,   │  │   (RunPPO,       │  │   (GpuBackend,   │  │
+│  │   Experience, │  │    RunImitation,  │  │    RustBatchGame  │  │
+│  │   ExpBuffer,  │  │    RunBreeding,   │  │    Runner,        │  │
+│  │   Checkpoint, │  │    RunPipeline,   │  │    FileCheckpoint │  │
+│  │   Config)     │  │    RunEvolution)  │  │    Store, HoF)    │  │
+│  └──────────────┘  └──────────────────┘  └───────────────────┘  │
+│                                                                  │
+│  ┌──────────────┐                                                │
+│  │  ports/       │  ← GameSimulatorPort, ComputeBackendPort,     │
+│  │  (interfaces) │    CheckpointStorePort, HoFPort, etc.         │
+│  └──────────────┘                                                │
+└───────────────────────────────┬──────────────────────────────────┘
+                                │ FFI (PyO3)
+                                ▼
+┌─────────────────────────────────────────────────────────────────┐
+│                    engine-rs (Rust + PyO3)                        │
+│  game logic, encoding, expert data generation, warmup data       │
+│  returns numpy arrays — no Python game-domain types              │
+└─────────────────────────────────────────────────────────────────┘
+```
+
+---
+
+## 13. Open Questions
 
 - **Shared `tarok_engine` type definitions?**  Both `backend` and `training-lab`
   depend on `tarok_engine` (Rust).  The Rust engine returns raw numpy arrays,
@@ -524,7 +988,9 @@ line-length = 100
 - **CLI entry point?**  Should `training-lab` have a `__main__.py` for
   standalone training runs (no FastAPI), or does that stay in `backend`?
   Recommendation: add a minimal CLI (`python -m training_lab train ...`)
-  for headless training without the web server.
+  for headless training without the web server.  This requires training-lab
+  to bundle a default `OpponentMix` that doesn't need backend game types
+  (Rust-only path with no StockSkis PlayerPort, just heuristic indices).
 
 - **Test data fixtures?**  Training tests need sample game data.
   Use `tarok_engine.generate_expert_data()` in test fixtures, or ship
