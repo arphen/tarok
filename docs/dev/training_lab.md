@@ -93,21 +93,21 @@ Use cases do not know about FastAPI, Rust FFI details, or filesystem paths.
 | Use Case | Responsibility |
 |----------|---------------|
 | `RunPPOTraining` | The main self-play + PPO loop.  **NEW async producer-consumer architecture** (see §4). |
-| `RunImitationPretraining` | Phase 1: Generate expert data via `GameSimulatorPort`, train supervised. |
+| `RunImitationPretraining` | Generate expert data via Rust engine, train supervised. |
 | `RunWarmup` | Value-network bootstrap from random play data. |
-| `RunPipeline` | Orchestrates Phase 1 → Phase 2 → Phase 3 in sequence. |
-| `RunBreeding` | DEAP-based behavioral trait evolution. |
-| `RunEvolution` | DEAP-based hyperparameter search. |
 | `EvaluateModel` | Run N games vs reference opponents, compute win_rate/placement. |
-| `ExportModel` | Export checkpoint to ONNX (for Rust-native inference, Phase 3 optimization). |
 | `ManageHoF` | Save / pin / unpin / prune Hall of Fame entries. |
+
+**Deliberately excluded (run manually, still in git history):**
+Pipeline orchestration (Phase 1→2→3), DEAP breeding, DEAP hyperparameter
+evolution.  These can be added back later as use cases if needed, but for
+now the user runs imitation / PPO / evaluation steps by hand.
 
 ### 3.4 Adapters (outermost ring — implement ports)
 
 | Adapter | Implements | Notes |
 |---------|-----------|-------|
-| `RustBatchGameRunner` | `GameSimulatorPort` | Wraps `BatchGameRunner` logic: M concurrent Rust games + batched NN inference. |
-| `PythonGameRunner` | `GameSimulatorPort` | Fallback: sequential `GameLoop` from `backend/use_cases`. |
+| `RustBatchGameRunner` | `GameSimulatorPort` | M concurrent Rust games + batched NN inference via `tarok_engine`. Only game simulator — no Python fallback. |
 | `GpuBackend` | `ComputeBackendPort` | AMP, torch.compile, pinned memory, non-blocking transfers. |
 | `CpuBackend` | `ComputeBackendPort` | Plain CPU inference. |
 | `MpsBackend` | `ComputeBackendPort` | Apple Silicon GPU. |
@@ -115,6 +115,11 @@ Use cases do not know about FastAPI, Rust FFI details, or filesystem paths.
 | `FileHoFManager` | `HoFPort` | JSON metadata + `.pt` weights in `hall_of_fame/` directory. |
 | `QueueMetricsSink` | `MetricsSinkPort` | Pushes metrics into `asyncio.Queue` readable by the API layer. |
 | `CallbackProgress` | `ProgressPort` | Invokes a callback / sets shared state for API polling. |
+
+**No PythonGameRunner fallback.**  `tarok_engine` (Rust) is required.
+The Rust engine is the single source of truth for game simulation in
+training.  `GameLoop` + `PlayerPort` in the backend is only for live
+human-vs-AI and spectator games.
 
 ---
 
@@ -249,11 +254,7 @@ training-lab/
         │   ├── ppo_training.py       # RunPPOTraining (async producer-consumer)
         │   ├── imitation.py          # RunImitationPretraining
         │   ├── warmup.py             # RunWarmup
-        │   ├── pipeline.py           # RunPipeline (Phase 1→2→3)
-        │   ├── breeding.py           # RunBreeding (DEAP behavioral)
-        │   ├── evolution.py          # RunEvolution (DEAP hyperparams)
         │   ├── evaluate.py           # EvaluateModel
-        │   ├── export_model.py       # ExportModel (ONNX)
         │   └── manage_hof.py         # ManageHoF
         │
         ├── adapters/
@@ -266,9 +267,7 @@ training-lab/
         │   │   └── factory.py        # create_backend() auto-detect
         │   ├── engine/
         │   │   ├── __init__.py
-        │   │   ├── rust_batch_runner.py   # RustBatchGameRunner
-        │   │   ├── python_game_runner.py  # PythonGameRunner (fallback)
-        │   │   └── rust_game_loop.py      # Single-game Rust loop
+        │   │   └── rust_batch_runner.py   # RustBatchGameRunner (only simulator)
         │   └── storage/
         │       ├── __init__.py
         │       ├── file_checkpoint_store.py
@@ -288,8 +287,7 @@ training-lab/
 training-lab
 ├── torch               # Neural network, tensors
 ├── numpy               # Array interchange with Rust
-├── deap                # Evolutionary algorithms (breeding, evo)
-└── tarok_engine        # Rust engine (optional — graceful fallback)
+└── tarok_engine        # Rust engine (REQUIRED — no fallback)
 
 backend
 ├── training-lab        # Local path dependency
@@ -435,16 +433,13 @@ class TrainingAdapter:
 | `trainer.py` | `use_cases/ppo_training.py` | Rewrite with producer-consumer |
 | `imitation.py` | `use_cases/imitation.py` | Supervised learning |
 | `warmup.py` | `use_cases/warmup.py` | Value pre-training |
-| `breeding.py` | `use_cases/breeding.py` | DEAP behavioral |
-| `evo_optimizer.py` | `use_cases/evolution.py` | DEAP hyperparams |
-| `training_lab.py` | `use_cases/pipeline.py` + `infra/lab_state.py` | Split orchestration vs state |
 | `hof_manager.py` | `adapters/storage/file_hof_manager.py` | Filesystem HoF |
 | `network_bank.py` | `adapters/storage/network_bank.py` | FSP snapshot storage |
-| `island_worker.py` | `adapters/engine/island_worker.py` | PBT worker |
-| `tournament_results.py` | `adapters/storage/tournament_results.py` | Results I/O |
-| `stockskis_v5.py` | `adapters/engine/stockskis_adapter.py` | Heuristic bot bridge |
-| `bot_registry.py` | `adapters/engine/bot_registry.py` | Bot catalog |
-| `lookahead_agent.py` | `adapters/engine/lookahead_agent.py` | MCTS/lookahead |
+| `breeding.py` | NOT COPIED — git history only | Re-add later if needed |
+| `evo_optimizer.py` | NOT COPIED — git history only | Re-add later if needed |
+| `training_lab.py` | NOT COPIED — git history only | Re-add later if needed |
+| `island_worker.py` | NOT COPIED — git history only | Re-add later if needed |
+| `tournament_results.py` | NOT COPIED — git history only | Re-add later if needed |
 | `random_agent.py` | stays in backend | Used by game play, not training |
 | `agent.py` (RLAgent class) | stays in backend (uses `training_lab.entities.network`) | Implements `PlayerPort` for game play |
 
@@ -461,7 +456,6 @@ requires-python = ">=3.12"
 dependencies = [
     "torch>=2.4",
     "numpy>=2.0",
-    "deap>=1.4",
     "shortuuid>=1.0.13",
 ]
 
@@ -550,18 +544,8 @@ class SetUpTrainingRun:
         # 1. Create network (from training_lab)
         network = TarokNet(...)
 
-        # 2. Create game simulator adapter
-        #    - If Rust engine available: use training_lab's RustBatchGameRunner
-        #      (pure tensor path, no game-domain types needed)
-        #    - Else: create PythonGameSimulator (wraps GameLoop + RLAgent)
-        if request.use_rust_engine:
-            simulator = RustBatchGameRunner(compute, concurrency=128)
-        else:
-            simulator = PythonGameSimulator(
-                game_loop_factory=GameLoop,
-                agent_factory=RLAgent,
-                encoding_bridge=TarokEncodingBridge(),
-            )
+        # 2. Create game simulator — Rust engine only, no fallback
+        simulator = RustBatchGameRunner(compute, concurrency=128)
 
         # 3. Configure opponents (game-domain knowledge)
         opponent_config = OpponentMix(
@@ -580,30 +564,6 @@ class SetUpTrainingRun:
             config=TrainingConfig.from_request(request),
             opponent_config=opponent_config,
         )
-```
-
-#### `SetUpPipeline`
-
-Orchestrates the 3-phase pipeline by composing training-lab use cases:
-
-```python
-class SetUpPipeline:
-    def __call__(self, request: PipelineRequest) -> RunPipeline:
-        # Phase 1: Imitation — uses Rust expert data (pure tensor path)
-        imitation = RunImitationPretraining(
-            expert_data_source=RustExpertDataSource(),  # calls tarok_engine
-            compute=create_backend(),
-        )
-
-        # Phase 2: PPO — needs opponent management (game-domain knowledge)
-        ppo_setup = SetUpTrainingRun(...)
-        ppo = ppo_setup(request.ppo_config)
-
-        # Phase 3: FSP — same PPO but with FSP-heavy opponent mix
-        fsp_config = request.ppo_config.with_fsp_ratio(0.5)
-        fsp = ppo_setup(fsp_config)
-
-        return RunPipeline(phases=[imitation, ppo, fsp])
 ```
 
 #### `PlayHumanVsAI`
@@ -766,25 +726,16 @@ and they live in **different packages** because of their dependencies:
 ```
 training_lab.ports.GameSimulatorPort (Protocol)
   │
-  ├── training_lab.adapters.engine.RustBatchGameRunner
-  │     │
-  │     ├── Depends on: tarok_engine (Rust FFI), torch, numpy
-  │     ├── Does NOT depend on: tarok.entities, GameLoop, PlayerPort
-  │     ├── Operates on: raw tensors, integer indices, numpy arrays
-  │     └── This is the PRIMARY/FAST path
-  │
-  └── backend.adapters.training.PythonGameSimulator
+  └── training_lab.adapters.engine.RustBatchGameRunner
         │
-        ├── Depends on: tarok.entities, tarok.use_cases.GameLoop,
-        │               RLAgent, StockSkisPlayerV5, encoding bridge
-        ├── Operates on: Card, GameState, PlayerPort objects
-        └── This is the FALLBACK path (no Rust engine)
+        ├── Depends on: tarok_engine (Rust FFI), torch, numpy
+        ├── Does NOT depend on: tarok.entities, GameLoop, PlayerPort
+        ├── Operates on: raw tensors, integer indices, numpy arrays
+        └── This is the ONLY game simulator — Rust engine is required
 ```
 
-Why `RustBatchGameRunner` can live in training-lab:  the Rust engine
-(`tarok_engine`) returns pre-encoded numpy arrays (states, legal_masks,
-actions, rewards).  The batch runner never constructs `Card`, `GameState`,
-or any Python game-domain object.  The data flow is:
+The `GameLoop` + `PlayerPort` path in the backend is only for live
+human-vs-AI and spectator games.  It is NOT used for training.
 
 ```
 Rust engine (game state)
@@ -855,8 +806,7 @@ backend/src/tarok/
     │
     └── training/          # NEW — orchestration layer
         ├── __init__.py
-        ├── orchestrator.py     # SetUpTrainingRun, SetUpPipeline
-        ├── game_simulator.py   # PythonGameSimulator (fallback)
+        ├── orchestrator.py     # SetUpTrainingRun
         ├── opponent_config.py  # OpponentMix, opponent selection logic
         ├── evaluator.py        # EvaluateAgainstBots
         └── analyzer.py         # AnalyzePosition (camera agent)
