@@ -473,6 +473,42 @@ impl PyGameState {
         let hand = self.state.hands[player as usize];
         crate::stockskis_v5::choose_card_v5(hand, &self.state, player).0
     }
+
+    // -- StockŠkis M6 decision functions --
+
+    fn m6_choose_bid(&self, player: u8) -> Option<u8> {
+        let hand = self.state.hands[player as usize];
+        let highest = self.state.bids.iter()
+            .filter_map(|b| b.contract)
+            .max_by_key(|c| c.strength());
+        crate::stockskis_m6::evaluate_bid_m6(hand, highest).map(|c| c as u8)
+    }
+
+    fn m6_choose_king(&self, player: u8) -> Option<u8> {
+        let hand = self.state.hands[player as usize];
+        crate::stockskis_m6::choose_king_m6(hand).map(|c| c.0)
+    }
+
+    fn m6_choose_talon_group(&self, player: u8, groups: Vec<Vec<u8>>) -> usize {
+        let hand = self.state.hands[player as usize];
+        let groups_cards: Vec<Vec<Card>> = groups.iter()
+            .map(|g| g.iter().map(|&idx| Card(idx)).collect())
+            .collect();
+        crate::stockskis_m6::choose_talon_group_m6(
+            &groups_cards, hand, self.state.called_king
+        )
+    }
+
+    fn m6_choose_discards(&self, player: u8, must_discard: usize) -> Vec<u8> {
+        let hand = self.state.hands[player as usize];
+        crate::stockskis_m6::choose_discards_m6(hand, must_discard, self.state.called_king)
+            .iter().map(|c| c.0).collect()
+    }
+
+    fn m6_choose_card(&self, player: u8) -> u8 {
+        let hand = self.state.hands[player as usize];
+        crate::stockskis_m6::choose_card_m6(hand, &self.state, player).0
+    }
 }
 
 /// Play a single random game (for benchmarking throughput).
@@ -743,6 +779,7 @@ fn run_self_play(
 
     let mut bot_v5: Option<Arc<dyn BatchPlayer>> = None;
     let mut bot_v6: Option<Arc<dyn BatchPlayer>> = None;
+    let mut bot_m6: Option<Arc<dyn BatchPlayer>> = None;
 
     let mut players: Vec<Arc<dyn BatchPlayer>> = Vec::with_capacity(4);
     for &label in &seat_labels {
@@ -760,9 +797,15 @@ fn run_self_play(
                 }
                 bot_v6.as_ref().unwrap().clone()
             }
+            "bot_m6" => {
+                if bot_m6.is_none() {
+                    bot_m6 = Some(Arc::new(StockSkisPlayer::m6()));
+                }
+                bot_m6.as_ref().unwrap().clone()
+            }
             other => {
                 return Err(pyo3::exceptions::PyValueError::new_err(
-                    format!("Unknown seat type '{}'. Use 'nn', 'bot_v5', or 'bot_v6'.", other)
+                    format!("Unknown seat type '{}'. Use 'nn', 'bot_v5', 'bot_v6', or 'bot_m6'.", other)
                 ));
             }
         };

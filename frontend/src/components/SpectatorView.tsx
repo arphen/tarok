@@ -47,7 +47,7 @@ type TeamRole = 'declarer' | 'defender' | null;
 export default function SpectatorView({ onBack, checkpoints }: SpectatorViewProps) {
   const spectator = useSpectator();
   const [agents, setAgents] = useState<AgentSetup[]>(DEFAULT_AGENTS);
-  const [stockskisTypes, setStockskisTypes] = useState<string[]>(['stockskis_v2', 'stockskis_v3', 'stockskis_v4', 'stockskis_v5']);
+  const [stockskisTypes, setStockskisTypes] = useState<string[]>(['stockskis_v2', 'stockskis_v3', 'stockskis_v4', 'stockskis_v5', 'stockskis_m6']);
   const [selectedTrick, setSelectedTrick] = useState<number | null>(null);
   const [replays, setReplays] = useState<ReplayOption[]>([]);
   const [selectedReplay, setSelectedReplay] = useState('');

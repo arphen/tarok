@@ -563,10 +563,12 @@ def _build_spectate_agent(cfg: dict, idx: int):
 async def list_stockskis_versions():
     """List available StockŠkis heuristic versions for UI dropdowns."""
     versions = _available_stockskis_versions()
+    registry = get_registry()
+    all_types = registry.stockskis_types
     return {
         "versions": [f"v{v}" for v in versions],
         "latest": (f"v{max(versions)}" if versions else None),
-        "types": ([f"stockskis_v{v}" for v in versions] if versions else []),
+        "types": all_types if all_types else [],
     }
 
 

@@ -11,6 +11,7 @@ pub mod scoring;
 pub mod self_play;
 pub mod stockskis_v5;
 pub mod stockskis_v6;
+pub mod stockskis_m6;
 pub mod trick_eval;
 pub mod warmup;
 
