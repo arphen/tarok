@@ -35,6 +35,8 @@ const INITIAL_STATE: SpectatorState = {
   trick_summary: null,
 };
 
+let spectatorLogSeq = 0;
+
 function formatSpectatorEvent(
   event: string,
   data: Record<string, unknown>,
@@ -42,32 +44,33 @@ function formatSpectatorEvent(
 ): SpectatorLogEntry | null {
   const name = (idx: number) => names[idx] ?? `Player ${idx}`;
   const ts = Date.now();
+  const id = ++spectatorLogSeq;
 
   switch (event) {
     case 'game_start':
-      return { id: ts, message: 'Game started.', category: 'system', timestamp: ts };
+      return { id, message: 'Game started.', category: 'system', timestamp: ts };
     case 'deal':
-      return { id: ts, message: 'Cards dealt to all players.', category: 'system', timestamp: ts };
+      return { id, message: 'Cards dealt to all players.', category: 'system', timestamp: ts };
     case 'bid': {
       const p = data.player as number;
       const c = data.contract as number | null;
       const bidText = c !== null ? (CONTRACT_NAMES[c] ?? `${c}`) : 'Pass';
-      return { id: ts, message: `${name(p)} bids: ${bidText}`, category: 'bid', player: p, timestamp: ts };
+      return { id, message: `${name(p)} bids: ${bidText}`, category: 'bid', player: p, timestamp: ts };
     }
     case 'contract_won': {
       const p = data.player as number;
       const c = data.contract as number;
       const who = p === -1 ? 'Nobody' : name(p);
-      return { id: ts, message: `${who} wins the contract: ${CONTRACT_NAMES[c] ?? c}`, category: 'bid', player: p, timestamp: ts };
+      return { id, message: `${who} wins the contract: ${CONTRACT_NAMES[c] ?? c}`, category: 'bid', player: p, timestamp: ts };
     }
     case 'king_called': {
       const p = data.player as number;
       const king = data.king as { suit?: string; label?: string };
       const suit = king.suit ? (SUIT_SYMBOLS[king.suit] ?? king.suit) : '';
-      return { id: ts, message: `${name(p)} calls ${suit} King`, category: 'king', player: p, timestamp: ts };
+      return { id, message: `${name(p)} calls ${suit} King`, category: 'king', player: p, timestamp: ts };
     }
     case 'talon_revealed':
-      return { id: ts, message: 'Talon revealed.', category: 'talon', timestamp: ts };
+      return { id, message: 'Talon revealed.', category: 'talon', timestamp: ts };
     case 'talon_exchanged': {
       const picked = data.picked as { label?: string }[] | undefined;
       const discarded = data.discarded as { label?: string }[] | undefined;
@@ -76,28 +79,28 @@ function formatSpectatorEvent(
       let msg = 'Talon exchange complete.';
       if (pickedStr) msg += ` Picked: ${pickedStr}.`;
       if (discardedStr) msg += ` Put down: ${discardedStr}.`;
-      return { id: ts, message: msg, category: 'talon', timestamp: ts };
+      return { id, message: msg, category: 'talon', timestamp: ts };
     }
     case 'card_played': {
       const p = data.player as number;
       const card = data.card as { label?: string };
-      return { id: ts, message: `${name(p)} plays ${card.label ?? '?'}`, category: 'play', player: p, timestamp: ts };
+      return { id, message: `${name(p)} plays ${card.label ?? '?'}`, category: 'play', player: p, timestamp: ts };
     }
     case 'rule_verified': {
       const p = data.player as number;
       const rule = data.rule as string;
-      return { id: ts, message: `[Rule Check] ${name(p)} ${rule}`, category: 'announce', player: p, timestamp: ts };
+      return { id, message: `[Rule Check] ${name(p)} ${rule}`, category: 'announce', player: p, timestamp: ts };
     }
     case 'trick_won': {
       const w = data.winner as number;
-      return { id: ts, message: `${name(w)} wins the trick!`, category: 'trick', player: w, timestamp: ts };
+      return { id, message: `${name(w)} wins the trick!`, category: 'trick', player: w, timestamp: ts };
     }
     case 'game_end': {
       const scores = data.scores as Record<string, number>;
       const lines = Object.entries(scores)
         .map(([pid, s]) => `${name(Number(pid))}: ${s > 0 ? '+' : ''}${s}`)
         .join(' | ');
-      return { id: ts, message: `Game over — ${lines}`, category: 'score', timestamp: ts };
+      return { id, message: `Game over — ${lines}`, category: 'score', timestamp: ts };
     }
     default:
       return null;
@@ -140,6 +143,7 @@ export function useSpectator() {
   const [loading, setLoading] = useState(false);
   const [mode, setMode] = useState<'live' | 'replay'>('live');
   const [replayName, setReplayName] = useState<string | null>(null);
+  const liveReplayRef = useRef<string | null>(null);
   const wsRef = useRef<WebSocket | null>(null);
   const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
@@ -157,6 +161,24 @@ export function useSpectator() {
     setIsPlaying(false);
     setMode('live');
     setReplayName(null);
+    liveReplayRef.current = null;
+  }, []);
+
+  const backfillFromReplayIfLonger = useCallback(async (filename: string) => {
+    try {
+      const res = await fetch(`/api/replays/${encodeURIComponent(filename)}`);
+      if (!res.ok) return;
+      const payload = await res.json();
+      const replayTimeline = ((payload.timeline ?? []) as SpectatorEvent[]).map(toTimelineItem);
+      setTimeline(prev => {
+        if (replayTimeline.length > prev.length) {
+          return replayTimeline;
+        }
+        return prev;
+      });
+    } catch {
+      // Best-effort backfill only.
+    }
   }, []);
 
   const startGame = useCallback(async (agents: AgentConfig[], numGames?: number) => {
@@ -182,6 +204,7 @@ export function useSpectator() {
       });
       const data = await res.json();
       const id = data.game_id;
+      liveReplayRef.current = data.replay_name ?? null;
       setGameId(id);
 
       const protocol = window.location.protocol === 'https:' ? 'wss' : 'ws';
@@ -198,16 +221,24 @@ export function useSpectator() {
           }
           return newState;
         });
+        if (msg.event === 'game_end' && liveReplayRef.current) {
+          void backfillFromReplayIfLonger(liveReplayRef.current);
+        }
       };
 
-      ws.onclose = () => setConnected(false);
+      ws.onclose = () => {
+        setConnected(false);
+        if (liveReplayRef.current) {
+          void backfillFromReplayIfLonger(liveReplayRef.current);
+        }
+      };
       ws.onerror = () => setConnected(false);
 
       wsRef.current = ws;
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [backfillFromReplayIfLonger]);
 
   const loadReplay = useCallback(async (filename: string) => {
     setLoading(true);
@@ -237,7 +268,13 @@ export function useSpectator() {
       timerRef.current = setInterval(() => {
         setCurrentIndex(idx => {
           if (idx < timeline.length - 1) return idx + 1;
-          setIsPlaying(false);
+          // In live mode, timeline grows as websocket events arrive.
+          // Don't pause just because we've reached the current end; wait for more.
+          const lastState = timeline[timeline.length - 1]?.state;
+          const isFinished = lastState?.phase === 'finished';
+          if (mode === 'replay' || isFinished) {
+            setIsPlaying(false);
+          }
           return idx;
         });
       }, playbackSpeed);
@@ -247,7 +284,7 @@ export function useSpectator() {
     return () => {
       if (timerRef.current) clearInterval(timerRef.current);
     };
-  }, [isPlaying, playbackSpeed, timeline.length]);
+  }, [isPlaying, playbackSpeed, timeline, mode]);
 
   const togglePlay = () => setIsPlaying(p => !p);
 
@@ -328,6 +365,7 @@ export function useSpectator() {
       });
       const data = await res.json();
       const id = data.game_id;
+      liveReplayRef.current = data.replay_name ?? null;
       setGameId(id);
 
       const protocol = window.location.protocol === 'https:' ? 'wss' : 'ws';
@@ -351,15 +389,23 @@ export function useSpectator() {
           if (newState.length === 1) setIsPlaying(true);
           return newState;
         });
+        if (msg.event === 'game_end' && liveReplayRef.current) {
+          void backfillFromReplayIfLonger(liveReplayRef.current);
+        }
       };
 
-      ws.onclose = () => setConnected(false);
+      ws.onclose = () => {
+        setConnected(false);
+        if (liveReplayRef.current) {
+          void backfillFromReplayIfLonger(liveReplayRef.current);
+        }
+      };
       ws.onerror = () => setConnected(false);
       wsRef.current = ws;
     } finally {
       setLoading(false);
     }
-  }, [gameFinished, state.scores]);
+  }, [backfillFromReplayIfLonger, gameFinished, state.scores]);
 
   const currentEventName = currentItem?.eventName ?? null;
 

@@ -3,7 +3,7 @@
 import asyncio
 import pytest
 from tarok.adapters.ai.random_agent import RandomPlayer
-from tarok.use_cases.game_loop import GameLoop
+from tarok.adapters.ai.rust_game_loop import RustGameLoop as GameLoop
 
 
 @pytest.mark.asyncio

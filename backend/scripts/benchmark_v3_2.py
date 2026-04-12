@@ -26,7 +26,7 @@ from tarok.adapters.ai.stockskis_v2 import StockSkisPlayerV2
 from tarok.adapters.ai.stockskis_v3 import StockSkisPlayerV3
 from tarok.adapters.ai.stockskis_v3_2 import StockSkisPlayerV3_2
 from tarok.adapters.ai.stockskis_v4 import StockSkisPlayerV4
-from tarok.use_cases.game_loop import GameLoop
+from tarok.adapters.ai.rust_game_loop import RustGameLoop as GameLoop
 
 
 async def run_config(

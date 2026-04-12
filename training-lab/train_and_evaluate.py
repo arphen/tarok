@@ -616,8 +616,9 @@ Examples:
     print()
 
     # Option 4: Play against it
-    print(f"  [4] Play against this model in the browser:")
-    print(f"      cp {model_pt} backend/checkpoints/tarok_agent_latest.pt && make run")
+    print(f"  [4] Play in the browser (no checkpoint copy):")
+    print("      make run")
+    print(f"      Then select this checkpoint in the UI: {model_pt}")
     print()
 
     # Option 5: Train a new model from scratch

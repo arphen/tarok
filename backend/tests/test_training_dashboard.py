@@ -379,7 +379,7 @@ async def test_trainer_survives_game_exception():
     _original_run = None
 
     # Patch GameLoop.run to fail on the 3rd game
-    from tarok.use_cases.game_loop import GameLoop
+    from tarok.adapters.ai.rust_game_loop import RustGameLoop as GameLoop
     _original_run = GameLoop.run
 
     async def flaky_run(self, *a, **kw):
@@ -403,7 +403,7 @@ async def test_trainer_survives_all_games_crash():
     agents = [RLAgent(name=f"Agent-{i}", hidden_size=64) for i in range(4)]
     t = PPOTrainer(agents, lr=3e-4, device="cpu", games_per_session=3)
 
-    from tarok.use_cases.game_loop import GameLoop
+    from tarok.adapters.ai.rust_game_loop import RustGameLoop as GameLoop
 
     async def always_crash(self, *a, **kw):
         raise RuntimeError("total failure")
@@ -427,7 +427,7 @@ async def test_agent_mode_restored_after_crash():
 
     original_agent_names = [a.name for a in t.agents]
 
-    from tarok.use_cases.game_loop import GameLoop
+    from tarok.adapters.ai.rust_game_loop import RustGameLoop as GameLoop
     _orig = GameLoop.run
 
     call_count = 0
@@ -464,7 +464,7 @@ async def test_training_task_preserves_metrics_on_crash(client):
     import tarok.adapters.api.server as srv
 
     # Start training that will fail
-    from tarok.use_cases.game_loop import GameLoop
+    from tarok.adapters.ai.rust_game_loop import RustGameLoop as GameLoop
     async def crash_run(self, *a, **kw):
         raise RuntimeError("deliberate crash")
 

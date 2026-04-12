@@ -10,7 +10,7 @@ from tarok.adapters.api.server import app
 from tarok.adapters.api.ws_observer import _build_card_tracker, _state_for_player
 from tarok.entities.card import Card, CardType, Suit, SuitRank, DECK
 from tarok.entities.game_state import GameState, Phase, Contract, Trick
-from tarok.use_cases.game_loop import GameLoop, NullObserver
+from tarok.adapters.ai.rust_game_loop import RustGameLoop as GameLoop, NullObserver
 
 
 # ---- Fixtures ----

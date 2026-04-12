@@ -17,7 +17,7 @@ from tarok.entities.game_state import (
     Bid, Contract, GameState, Phase, PlayerRole, Trick,
 )
 from tarok.entities.scoring import score_game
-from tarok.use_cases.game_loop import GameLoop, NullObserver
+from tarok.adapters.ai.rust_game_loop import RustGameLoop as GameLoop, NullObserver
 from tarok.use_cases.deal import deal
 from tarok.use_cases.play_trick import start_trick, play_card
 

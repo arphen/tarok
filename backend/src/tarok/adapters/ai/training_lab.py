@@ -74,12 +74,11 @@ from tarok.adapters.ai.opponent_pool import (
 )
 from tarok.adapters.ai.stockskis_v5 import StockSkisPlayerV5
 from tarok.adapters.api.spectator_observer import SpectatorObserver
-from tarok.use_cases.game_loop import GameLoop
+from tarok.adapters.ai.rust_game_loop import RustGameLoop
 
 try:
     from tarok.adapters.ai.batch_game_runner import BatchGameRunner, GameResult, GameExperience
     from tarok.adapters.ai.compute import ComputeBackend, create_backend
-    from tarok.adapters.ai.rust_game_loop import RustGameLoop
     import tarok_engine as _te_check
     _HAS_RUST = _te_check is not None
 except Exception:
@@ -973,11 +972,8 @@ class PPOTrainer:
                         if hasattr(agent, 'clear_experiences'):
                             agent.clear_experiences()
 
-                    # Play one game (Rust engine or Python engine)
-                    if self.use_rust_engine and not use_stockskis:
-                        game = RustGameLoop(self.agents)
-                    else:
-                        game = GameLoop(self.agents)
+                    # Play one game via RustGameLoop (all game mechanics in Rust)
+                    game = RustGameLoop(self.agents)
                     try:
                         state, scores = await game.run(dealer=(game_count + g) % 4)
                     except Exception:

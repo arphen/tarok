@@ -16,7 +16,7 @@ from tarok.adapters.ai.lookahead_agent import (
 from tarok.adapters.ai.random_agent import RandomPlayer
 from tarok.entities.card import Card, CardType, DECK, Suit, SuitRank
 from tarok.entities.game_state import Contract, GameState, Phase
-from tarok.use_cases.game_loop import GameLoop
+from tarok.adapters.ai.rust_game_loop import RustGameLoop as GameLoop
 
 
 # ---- Helper: quick seeded game state after dealing ----

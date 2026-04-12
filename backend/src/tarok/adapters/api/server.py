@@ -27,7 +27,7 @@ from tarok.adapters.api.schemas import (
 )
 from tarok.entities.card import Card, CardType, Suit, SuitRank, DECK
 from tarok.entities.game_state import Bid, Contract, GameState, Phase, PlayerRole, Trick
-from tarok.use_cases.game_loop import GameLoop
+from tarok.adapters.ai.rust_game_loop import RustGameLoop as GameLoop
 
 # --- Globals managed by lifespan ---
 _trainer: PPOTrainer | None = None
@@ -654,7 +654,7 @@ async def spectate_websocket(ws: WebSocket, game_id: str):
                 "game_id": game_id,
             },
         )
-        game_loop = GameLoop(agents, observer=observer)
+        game_loop = GameLoop(agents, observer=observer, allow_berac=False)
         game_info["observer"] = observer
         game_info["game_task"] = asyncio.create_task(game_loop.run())
 

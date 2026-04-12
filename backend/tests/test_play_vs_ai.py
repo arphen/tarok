@@ -18,7 +18,7 @@ from tarok.adapters.api.human_player import HumanPlayer
 from tarok.adapters.api.ws_observer import _state_for_player
 from tarok.entities.card import Card, CardType, Suit, SuitRank
 from tarok.entities.game_state import Bid, Contract, GameState, Phase
-from tarok.use_cases.game_loop import GameLoop, NullObserver
+from tarok.adapters.ai.rust_game_loop import RustGameLoop as GameLoop, NullObserver
 
 
 NAMES = ["You", "AI-1", "AI-2", "AI-3"]
