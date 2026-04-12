@@ -89,3 +89,17 @@ average placement (lower is better).
 1. **katja vidmar 52** — best single-tournament average (2.50), perfect top-half rate
 2. **katja vidmar 39** — strong 2nd place, consistent top-4 finisher (17/20)
 3. **ula bizjak 31** — best combined average across T1+T2 (2.93)
+
+---
+
+## Arena Checkpoint Leaderboard (Live)
+
+For continuously updated checkpoint rankings from large Bot Arena runs, use the
+dedicated **Arena Leaderboard** page in the app home screen.
+
+- Data source: persisted arena runs in `backend/data/arena_results.json`
+- API endpoint: `GET /api/arena/leaderboard/checkpoints`
+- Sorting: lower average placement is better
+
+Unlike static tournament snapshots, this leaderboard aggregates all persisted
+arena runs and updates as new runs complete.

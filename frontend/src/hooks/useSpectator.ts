@@ -181,7 +181,11 @@ export function useSpectator() {
     }
   }, []);
 
-  const startGame = useCallback(async (agents: AgentConfig[], numGames?: number) => {
+  const startGame = useCallback(async (
+    agents: AgentConfig[],
+    numGames?: number,
+    options?: { autoJumpToEndOnFinish?: boolean },
+  ) => {
     setLoading(true);
     setTimeline([]);
     setCurrentIndex(0);
@@ -218,6 +222,10 @@ export function useSpectator() {
           const newState = [...prev, toTimelineItem(msg)];
           if (newState.length === 1) {
             setIsPlaying(true);
+          }
+          if (options?.autoJumpToEndOnFinish && msg.event === 'game_end') {
+            setCurrentIndex(newState.length - 1);
+            setIsPlaying(false);
           }
           return newState;
         });

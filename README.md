@@ -25,6 +25,8 @@ experiments.
   (aggressive bidder, solo specialist, …)
 - **Tournament bracket** — Round-robin or bracket tournaments between any mix
   of RL, lookahead, and random agents
+- **Arena checkpoint leaderboard** — Dedicated page that ranks RL checkpoints
+  using persisted Bot Arena results (survives refresh and browser restart)
 - **High-performance Rust engine** — Optional PyO3-based engine for legal-move
   generation, trick evaluation, and state encoding (10–100× faster than pure
   Python)
@@ -105,6 +107,18 @@ make test-e2e          # Playwright end-to-end tests
 make test-coverage     # Backend coverage report
 make test-quick        # Backend, fail-fast
 ```
+
+## Arena Persistence and Leaderboard
+
+Bot Arena saves completed runs to backend storage at `backend/data/arena_results.json`.
+Saved runs are available after a frontend refresh or browser restart.
+
+- `GET /api/arena/history` — returns persisted arena runs
+- `GET /api/arena/history?checkpoint=<filename>` — filter runs by checkpoint
+- `GET /api/arena/leaderboard/checkpoints` — aggregated, checkpoint-focused leaderboard
+
+From the home screen, open **Arena Leaderboard** to view checkpoint rankings in a
+separate page (not inside Bot Arena tabs).
 
 ## Training
 

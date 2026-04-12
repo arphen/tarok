@@ -902,6 +902,8 @@ fn run_self_play(
 ///   - `contracts`: numpy (n_games,) uint8
 ///   - `declarers`: numpy (n_games,) int8
 ///   - `partners`: numpy (n_games,) int8
+///   - `bid_contracts`: numpy (n_games, 4) int8
+///   - `taroks_in_hand`: numpy (n_games, 4) uint8
 ///   - `n_games`: int
 #[pyfunction]
 #[pyo3(signature = (n_games, seat_config="bot_v5,bot_v5,bot_v5,bot_v5"))]
@@ -940,12 +942,16 @@ fn run_arena_games(
     let mut contracts: Vec<u8> = Vec::with_capacity(total);
     let mut declarers: Vec<i8> = Vec::with_capacity(total);
     let mut partners: Vec<i8> = Vec::with_capacity(total);
+    let mut flat_bid_contracts: Vec<i8> = Vec::with_capacity(total * 4);
+    let mut flat_taroks_in_hand: Vec<u8> = Vec::with_capacity(total * 4);
 
     for r in &results {
         flat_scores.extend_from_slice(&r.scores);
         contracts.push(r.contract);
         declarers.push(r.declarer);
         partners.push(r.partner);
+        flat_bid_contracts.extend_from_slice(&r.bid_contracts);
+        flat_taroks_in_hand.extend_from_slice(&r.taroks_in_hand);
     }
 
     let dict = pyo3::types::PyDict::new(py);
@@ -956,6 +962,14 @@ fn run_arena_games(
     dict.set_item("contracts", numpy::PyArray1::<u8>::from_vec(py, contracts))?;
     dict.set_item("declarers", numpy::PyArray1::<i8>::from_vec(py, declarers))?;
     dict.set_item("partners", numpy::PyArray1::<i8>::from_vec(py, partners))?;
+    let bid_contracts_arr = PyArray1::<i8>::from_vec(py, flat_bid_contracts)
+        .reshape([total, 4])
+        .map_err(|e| pyo3::exceptions::PyValueError::new_err(format!("bid_contracts: {e}")))?;
+    dict.set_item("bid_contracts", bid_contracts_arr)?;
+    let taroks_in_hand_arr = PyArray1::<u8>::from_vec(py, flat_taroks_in_hand)
+        .reshape([total, 4])
+        .map_err(|e| pyo3::exceptions::PyValueError::new_err(format!("taroks_in_hand: {e}")))?;
+    dict.set_item("taroks_in_hand", taroks_in_hand_arr)?;
     dict.set_item("n_games", total)?;
 
     Ok(dict.into())

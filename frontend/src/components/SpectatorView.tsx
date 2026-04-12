@@ -44,6 +44,30 @@ const SOLO_CONTRACTS = new Set([-3, -2, -1, 0, -100, -101]);
 
 type TeamRole = 'declarer' | 'defender' | null;
 
+interface CardInGroup {
+  label: string;
+  points: number;
+  player: number;
+}
+
+interface CountingGroup {
+  cards: CardInGroup[];
+  rawSum: number;
+  deduction: number;
+  value: number;
+  isComplete: boolean;
+  perCardValues: number[];  // per-card adjusted values (used for display in incomplete groups)
+}
+
+interface CountingTeamView {
+  key: string;
+  label: string;
+  players: number[];
+  allCards: CardInGroup[];
+  groups: CountingGroup[];
+  total: number;
+}
+
 export default function SpectatorView({ onBack, checkpoints }: SpectatorViewProps) {
   const spectator = useSpectator();
   const [agents, setAgents] = useState<AgentSetup[]>(DEFAULT_AGENTS);
@@ -56,6 +80,7 @@ export default function SpectatorView({ onBack, checkpoints }: SpectatorViewProp
   const [callerCounts, setCallerCounts] = useState<Record<string, number>>({});
   const [calledCounts, setCalledCounts] = useState<Record<string, number>>({});
   const [roundHistory, setRoundHistory] = useState<RoundResult[]>([]);
+  const [showCountingCards, setShowCountingCards] = useState(false);
 
   useEffect(() => {
     fetch('/api/replays')
@@ -96,6 +121,25 @@ export default function SpectatorView({ onBack, checkpoints }: SpectatorViewProp
     setCalledCounts({});
     setRoundHistory([]);
     spectator.startGame(configs, numGames);
+  };
+
+  const handleCountingExamStart = () => {
+    const preferredType = stockskisTypes.includes('stockskis_v5')
+      ? 'stockskis_v5'
+      : stockskisTypes[0] ?? 'stockskis_v5';
+
+    const configs: AgentConfig[] = [0, 1, 2, 3].map(i => ({
+      name: `Stockskis-${i}`,
+      type: preferredType,
+    }));
+
+    setAgents(configs.map(c => ({ name: c.name, type: c.type, checkpoint: '' })));
+    setNumGames(1);
+    setCallerCounts({});
+    setCalledCounts({});
+    setRoundHistory([]);
+    setShowCountingCards(false);
+    spectator.startGame(configs, 1, { autoJumpToEndOnFinish: true });
   };
 
   // Auto-advance to next game in tournament mode
@@ -258,6 +302,10 @@ export default function SpectatorView({ onBack, checkpoints }: SpectatorViewProp
           <button className="btn-gold btn-large" onClick={handleStart} disabled={spectator.loading}>
             {spectator.loading ? 'Starting…' : 'Start Game'}
           </button>
+
+          <button className="btn-secondary btn-large" onClick={handleCountingExamStart} disabled={spectator.loading}>
+            {spectator.loading ? 'Starting…' : 'Run Counting Exam (Stockskis)'}
+          </button>
         </div>
         <ModelLeaderboard />
       </div>
@@ -273,6 +321,8 @@ export default function SpectatorView({ onBack, checkpoints }: SpectatorViewProp
     if (!isSolo && state.partner_revealed && state.partner === playerIdx) return 'declarer';
     return 'defender';
   };
+
+  const countingTeams = buildCountingExam(state.trick_summary, state.roles, names, state.contract, state.put_down, state.talon_groups);
 
   // Trick-won animation: when timeline is at a trick_won event, show sweep animation
   const isTrickWon = spectator.currentEventName === 'trick_won';
@@ -544,6 +594,93 @@ export default function SpectatorView({ onBack, checkpoints }: SpectatorViewProp
                           </table>
                         </div>
                       )}
+
+                      {countingTeams.length > 0 && (
+                        <div className="counting-exam" data-testid="counting-exam-panel">
+                          <div className="counting-exam-header-row">
+                            <h4>Card Counting Examination</h4>
+                            <button
+                              className="btn-secondary btn-sm"
+                              onClick={() => setShowCountingCards(v => !v)}
+                              type="button"
+                            >
+                              {showCountingCards ? 'Hide Cards' : 'Show Cards'}
+                            </button>
+                          </div>
+                          <p className="breakdown-explanation">
+                            Cards are grouped in threes. Full groups: sum of card points &minus; 2.
+                            Incomplete last group: each card &minus; round(2/3 &times; card value).
+                            {' '}Grand total: {countingTeams.reduce((s, t) => s + t.total, 0)} (should be ~70).
+                          </p>
+                          <div className="counting-exam-grid">
+                            {countingTeams.map(team => (
+                              <div key={team.key} className="counting-team-card">
+                                <div className="counting-team-header">
+                                  <span className="counting-team-title">{team.label}</span>
+                                  <span className="counting-team-players">
+                                    {team.key === 'talon' ? 'Talon' : team.players.map(pid => names[pid]).join(' + ')}
+                                  </span>
+                                </div>
+
+                                {showCountingCards && team.allCards.length > 0 && (
+                                  <div className="counting-all-cards">
+                                    <span className="counting-all-cards-label">All {team.key === 'talon' ? 'talon' : 'won'} cards ({team.allCards.length}):</span>
+                                    <div className="counting-all-cards-list">
+                                      {team.allCards.map((c, i) => (
+                                        <span key={i} className="counting-card-chip" title={`${c.points} pts`}>{c.label}</span>
+                                      ))}
+                                    </div>
+                                  </div>
+                                )}
+
+                                <table className="counting-team-table">
+                                  <thead>
+                                    <tr>
+                                      <th>Group</th>
+                                      <th>Cards</th>
+                                      <th>Calculation</th>
+                                      <th>Value</th>
+                                    </tr>
+                                  </thead>
+                                  <tbody>
+                                    {team.groups.map((g, gi) => (
+                                      <tr key={gi} className={!g.isComplete ? 'counting-incomplete-group' : ''}>
+                                        <td>#{gi + 1}{!g.isComplete && ' *'}</td>
+                                        <td className="counting-cards-cell">
+                                          {g.cards.map(c => c.label).join(', ')}
+                                        </td>
+                                        <td className="counting-calc-cell">
+                                          {g.isComplete
+                                            ? <>({g.cards.map(c => c.points).join(' + ')}) &minus; 2</>
+                                            : g.cards.map((c, ci) => (
+                                                <span key={ci}>
+                                                  {ci > 0 && ' + '}
+                                                  ({c.points} &minus; {Math.round(c.points * 2 / 3)})
+                                                </span>
+                                              ))
+                                          }
+                                        </td>
+                                        <td className="counting-value-cell">{g.value}</td>
+                                      </tr>
+                                    ))}
+                                    {team.groups.length === 0 && (
+                                      <tr>
+                                        <td colSpan={4} className="counting-empty">No cards{team.key === 'talon' ? '' : ' won'}</td>
+                                      </tr>
+                                    )}
+                                  </tbody>
+                                  <tfoot>
+                                    <tr>
+                                      <td colSpan={3}>Total ({team.allCards.length} cards, {team.groups.length} groups)</td>
+                                      <td className="counting-value-cell">{team.total}</td>
+                                    </tr>
+                                  </tfoot>
+                                </table>
+                              </div>
+                            ))}
+                          </div>
+                        </div>
+                      )}
                     </div>
                   )}
 
@@ -730,3 +867,125 @@ const CATEGORY_ICONS: Record<string, string> = {
   score: '🏆',
   announce: '📢',
 };
+
+// Contracts where no talon exchange happens (talon sits aside)
+const NO_TALON_CONTRACTS = new Set([0, -100, -101]); // Solo, Berač, Barvni Valat
+
+function buildCountingExam(
+  trickSummary: TrickSummaryEntry[] | null,
+  roles: Record<string, string>,
+  names: string[],
+  contract: number | null,
+  putDown: CardData[],
+  talonGroups: CardData[][] | null,
+): CountingTeamView[] {
+  if (!trickSummary || trickSummary.length === 0) return [];
+  if (contract === -99) return []; // klop — individual scoring
+
+  const declarerPlayers = new Set<number>();
+  const defenderPlayers = new Set<number>();
+  const maxPlayerIdx = Math.max(3, names.length - 1);
+
+  for (let p = 0; p <= maxPlayerIdx; p += 1) {
+    const role = roles[String(p)];
+    if (role === 'declarer' || role === 'partner') {
+      declarerPlayers.add(p);
+    } else {
+      defenderPlayers.add(p);
+    }
+  }
+
+  if (declarerPlayers.size === 0) return [];
+
+  const isNoTalon = contract !== null && NO_TALON_CONTRACTS.has(contract);
+
+  // Collect all cards per team in trick order (as they appeared on the table)
+  const declCards: CardInGroup[] = [];
+  const defCards: CardInGroup[] = [];
+
+  for (const trick of trickSummary) {
+    const isDeclWinner = declarerPlayers.has(trick.winner);
+    const target = isDeclWinner ? declCards : defCards;
+    for (const c of trick.cards) {
+      target.push({ label: c.label, points: c.points, player: c.player });
+    }
+  }
+
+  // For contracts WITH talon exchange, put-down cards count for the declarer
+  if (!isNoTalon && putDown.length > 0) {
+    for (const c of putDown) {
+      declCards.push({ label: c.label, points: c.points, player: -1 });
+    }
+  }
+
+  const declResult = groupCards(declCards);
+  const defResult = groupCards(defCards);
+
+  const teams: CountingTeamView[] = [
+    {
+      key: 'decl',
+      label: declarerPlayers.size > 1 ? 'Declarer Team (2v2)' : 'Declarer Team (Solo)',
+      players: Array.from(declarerPlayers).sort((a, b) => a - b),
+      allCards: declCards,
+      groups: declResult.groups,
+      total: declResult.total,
+    },
+    {
+      key: 'def',
+      label: defenderPlayers.size > 1 ? 'Defenders Team' : 'Defender',
+      players: Array.from(defenderPlayers).sort((a, b) => a - b),
+      allCards: defCards,
+      groups: defResult.groups,
+      total: defResult.total,
+    },
+  ];
+
+  // For contracts without talon, show talon counted separately
+  if (isNoTalon && talonGroups && talonGroups.length > 0) {
+    const talonCards: CardInGroup[] = [];
+    for (const group of talonGroups) {
+      for (const c of group) {
+        talonCards.push({ label: c.label, points: c.points, player: -1 });
+      }
+    }
+    if (talonCards.length > 0) {
+      const talonResult = groupCards(talonCards);
+      teams.push({
+        key: 'talon',
+        label: 'Talon (not exchanged)',
+        players: [],
+        allCards: talonCards,
+        groups: talonResult.groups,
+        total: talonResult.total,
+      });
+    }
+  }
+
+  return teams;
+}
+
+function groupCards(cards: CardInGroup[]): { groups: CountingGroup[]; total: number } {
+  const groups: CountingGroup[] = [];
+  let total = 0;
+  for (let i = 0; i < cards.length; i += 3) {
+    const chunk = cards.slice(i, i + 3);
+    const rawSum = chunk.reduce((s, c) => s + c.points, 0);
+    const isComplete = chunk.length === 3;
+
+    let deduction: number;
+    let perCardValues: number[];
+    if (isComplete) {
+      // Full group: sum − 2
+      deduction = 2;
+      perCardValues = chunk.map(c => c.points);
+    } else {
+      // Incomplete last group: each card − round(2/3 × card_value)
+      perCardValues = chunk.map(c => c.points - Math.round(c.points * 2 / 3));
+      deduction = chunk.reduce((s, c) => s + Math.round(c.points * 2 / 3), 0);
+    }
+    const value = rawSum - deduction;
+    groups.push({ cards: chunk, rawSum, deduction, value, isComplete, perCardValues });
+    total += value;
+  }
+  return { groups, total };
+}

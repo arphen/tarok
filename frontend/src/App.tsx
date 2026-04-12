@@ -13,8 +13,9 @@ const CameraAgent = lazy(() => import('./components/CameraAgent'));
 const SpectatorView = lazy(() => import('./components/SpectatorView'));
 const TournamentBracket = lazy(() => import('./components/TournamentBracket'));
 const BotArena = lazy(() => import('./components/BotArena'));
+const ArenaCheckpointLeaderboard = lazy(() => import('./components/ArenaCheckpointLeaderboard'));
 
-type Page = 'home' | 'training' | 'lab' | 'play' | 'lobby' | 'camera' | 'spectate' | 'tournament' | 'arena';
+type Page = 'home' | 'training' | 'lab' | 'play' | 'lobby' | 'camera' | 'spectate' | 'tournament' | 'arena' | 'arenaLeaderboard';
 
 export default function App() {
   const [page, setPage] = useState<Page>('home');
@@ -64,6 +65,10 @@ export default function App() {
 
   if (page === 'arena') {
     return <Suspense fallback={<div className="app"><p>Loading…</p></div>}><BotArena onBack={() => setPage('home')} checkpoints={checkpoints} /></Suspense>;
+  }
+
+  if (page === 'arenaLeaderboard') {
+    return <Suspense fallback={<div className="app"><p>Loading…</p></div>}><ArenaCheckpointLeaderboard onBack={() => setPage('home')} checkpoints={checkpoints} /></Suspense>;
   }
 
   if (page === 'lobby') {
@@ -313,6 +318,14 @@ export default function App() {
             <span>
               <strong>Bot Arena</strong>
               <small>Mass-simulate 100K+ games with detailed analytics</small>
+            </span>
+          </button>
+
+          <button className="btn-secondary btn-large" onClick={() => setPage('arenaLeaderboard')}>
+            <span className="btn-icon">📈</span>
+            <span>
+              <strong>Arena Leaderboard</strong>
+              <small>Checkpoint-focused ranking from persisted arena runs</small>
             </span>
           </button>
         </div>

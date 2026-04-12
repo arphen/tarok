@@ -25,14 +25,21 @@ interface PlayerAnalytics {
   bids_made: Record<string, number>;
   declared_count: number;
   declared_won: number;
+  bid_won_count: number;
   declared_win_rate: number;
+  avg_declared_win_score: number;
+  avg_declared_loss_score: number;
   defended_count: number;
   defended_won: number;
   defended_win_rate: number;
   announcements_made: Record<string, number>;
   kontra_count: number;
+  times_called: number;
+  avg_taroks_in_hand: number;
   best_game: { score: number | null; game_idx: number | null };
   worst_game: { score: number | null; game_idx: number | null };
+  avg_win_score: number;
+  avg_loss_score: number;
   score_history: number[];
 }
 
@@ -57,6 +64,18 @@ interface ArenaProgress {
   analytics: ArenaAnalytics | null;
 }
 
+interface ArenaHistoryRun {
+  run_id: string;
+  created_at: string;
+  status: string;
+  games_done: number;
+  total_games: number;
+  session_size: number;
+  checkpoints: string[];
+  agents: { name: string; type: string; checkpoint: string }[];
+  analytics: ArenaAnalytics | null;
+}
+
 const DEFAULT_AGENTS: AgentSetup[] = [
   { name: 'Bot-A', type: 'stockskis', checkpoint: '' },
   { name: 'Bot-B', type: 'stockskis', checkpoint: '' },
@@ -66,7 +85,7 @@ const DEFAULT_AGENTS: AgentSetup[] = [
 
 const PLAYER_COLORS = ['#e74c3c', '#3498db', '#2ecc71', '#f39c12'];
 
-type Tab = 'overview' | 'bidding' | 'contracts' | 'announcements' | 'best_worst' | 'scores';
+type Tab = 'overview' | 'bidding' | 'contracts' | 'announcements' | 'best_worst' | 'scores' | 'history';
 
 export default function BotArena({ onBack, checkpoints }: BotArenaProps) {
   const [agents, setAgents] = useState<AgentSetup[]>(DEFAULT_AGENTS.map(a => ({ ...a })));
@@ -76,6 +95,7 @@ export default function BotArena({ onBack, checkpoints }: BotArenaProps) {
   const [running, setRunning] = useState(false);
   const [tab, setTab] = useState<Tab>('overview');
   const [stockskisTypes, setStockskisTypes] = useState<string[]>([]);
+  const [historyRuns, setHistoryRuns] = useState<ArenaHistoryRun[]>([]);
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
   // Fetch available stockskis versions
@@ -101,8 +121,19 @@ export default function BotArena({ onBack, checkpoints }: BotArenaProps) {
             clearInterval(pollRef.current);
             pollRef.current = null;
           }
+          fetch('/api/arena/history')
+            .then(r => r.json())
+            .then(d => setHistoryRuns(d.runs ?? []))
+            .catch(() => {});
         }
       })
+      .catch(() => {});
+  }, []);
+
+  const loadHistory = useCallback(() => {
+    fetch('/api/arena/history')
+      .then(r => r.json())
+      .then(d => setHistoryRuns(d.runs ?? []))
       .catch(() => {});
   }, []);
 
@@ -140,12 +171,23 @@ export default function BotArena({ onBack, checkpoints }: BotArenaProps) {
   };
 
   useEffect(() => {
+    pollProgress();
+    loadHistory();
     return () => {
       if (pollRef.current) clearInterval(pollRef.current);
     };
-  }, []);
+  }, [loadHistory, pollProgress]);
 
   const analytics = progress?.analytics;
+  const latestHistoryAnalytics = [...historyRuns].reverse().find(r => r.analytics)?.analytics ?? null;
+  const displayAnalytics = analytics ?? latestHistoryAnalytics;
+
+  useEffect(() => {
+    if (!displayAnalytics && historyRuns.length > 0 && tab !== 'history') {
+      setTab('history');
+    }
+  }, [displayAnalytics, historyRuns.length, tab]);
+
   const pct = progress ? Math.round((progress.games_done / Math.max(progress.total_games, 1)) * 100) : 0;
 
   return (
@@ -243,10 +285,10 @@ export default function BotArena({ onBack, checkpoints }: BotArenaProps) {
       )}
 
       {/* Analytics */}
-      {analytics && (
+      {(displayAnalytics || historyRuns.length > 0) && (
         <div className="arena-analytics">
           <div className="arena-tabs">
-            {(['overview', 'bidding', 'contracts', 'announcements', 'best_worst', 'scores'] as Tab[]).map(t => (
+            {(['overview', 'bidding', 'contracts', 'announcements', 'best_worst', 'scores', 'history'] as Tab[]).map(t => (
               <button
                 key={t}
                 className={`arena-tab ${tab === t ? 'active' : ''}`}
@@ -257,18 +299,23 @@ export default function BotArena({ onBack, checkpoints }: BotArenaProps) {
                  t === 'contracts' ? 'Contracts' :
                  t === 'announcements' ? 'Announcements' :
                  t === 'best_worst' ? 'Best / Worst' :
-                 'Score Trends'}
+                 t === 'scores' ? 'Score Trends' :
+                 'History'}
               </button>
             ))}
           </div>
 
           <div className="arena-tab-content">
-            {tab === 'overview' && <OverviewTab players={analytics.players} />}
-            {tab === 'bidding' && <BiddingTab players={analytics.players} />}
-            {tab === 'contracts' && <ContractsTab contracts={analytics.contracts} />}
-            {tab === 'announcements' && <AnnouncementsTab players={analytics.players} />}
-            {tab === 'best_worst' && <BestWorstTab players={analytics.players} />}
-            {tab === 'scores' && <ScoresTab players={analytics.players} sessionSize={sessionSize} />}
+            {tab !== 'history' && !displayAnalytics && (
+              <p className="arena-empty">No analytics available yet. Run a new arena session to populate stats.</p>
+            )}
+            {tab === 'overview' && displayAnalytics && <OverviewTab players={displayAnalytics.players} />}
+            {tab === 'bidding' && displayAnalytics && <BiddingTab players={displayAnalytics.players} />}
+            {tab === 'contracts' && displayAnalytics && <ContractsTab contracts={displayAnalytics.contracts} />}
+            {tab === 'announcements' && displayAnalytics && <AnnouncementsTab players={displayAnalytics.players} />}
+            {tab === 'best_worst' && displayAnalytics && <BestWorstTab players={displayAnalytics.players} />}
+            {tab === 'scores' && displayAnalytics && <ScoresTab players={displayAnalytics.players} sessionSize={sessionSize} />}
+            {tab === 'history' && <HistoryTab runs={historyRuns} />}
           </div>
         </div>
       )}
@@ -290,8 +337,12 @@ function OverviewTab({ players }: { players: PlayerAnalytics[] }) {
               <th>Avg Place</th>
               <th>1st %</th>
               <th>Positive %</th>
+              <th>Bid Won</th>
+              <th>Avg Taroks</th>
               <th>Decl WR</th>
-              <th>Def WR</th>
+              <th>Decl Avg Win</th>
+              <th>Decl Avg Loss</th>
+              <th>Called</th>
             </tr>
           </thead>
           <tbody>
@@ -303,44 +354,18 @@ function OverviewTab({ players }: { players: PlayerAnalytics[] }) {
                 <td>{p.avg_placement.toFixed(2)}</td>
                 <td>{p.win_rate.toFixed(1)}%</td>
                 <td>{p.positive_rate.toFixed(1)}%</td>
+                <td>{p.bid_won_count.toLocaleString()}</td>
+                <td>{p.avg_taroks_in_hand.toFixed(2)}</td>
                 <td>{p.declared_win_rate.toFixed(1)}%</td>
-                <td>{p.defended_win_rate.toFixed(1)}%</td>
+                <td className="positive">{p.avg_declared_win_score.toFixed(1)}</td>
+                <td className="negative">{p.avg_declared_loss_score.toFixed(1)}</td>
+                <td>{p.times_called.toLocaleString()}</td>
               </tr>
             ))}
           </tbody>
         </table>
       </div>
 
-      {/* Placement distribution bar charts */}
-      <h3>Placement Distribution</h3>
-      <div className="arena-placement-grid">
-        {players.map((p, i) => {
-          const total = Math.max(p.games_played, 1);
-          return (
-            <div key={i} className="arena-placement-card">
-              <h4 style={{ color: PLAYER_COLORS[i] }}>{p.name}</h4>
-              <div className="arena-placement-bars">
-                {[1, 2, 3, 4].map(place => {
-                  const count = p.placements[place] || 0;
-                  const pct = (count / total * 100);
-                  return (
-                    <div key={place} className="arena-placement-row">
-                      <span className="arena-placement-label">{place}{place === 1 ? 'st' : place === 2 ? 'nd' : place === 3 ? 'rd' : 'th'}</span>
-                      <div className="arena-bar-track">
-                        <div
-                          className="arena-bar-fill"
-                          style={{ width: `${pct}%`, background: PLAYER_COLORS[i], opacity: 1 - (place - 1) * 0.2 }}
-                        />
-                      </div>
-                      <span className="arena-bar-value">{pct.toFixed(1)}%</span>
-                    </div>
-                  );
-                })}
-              </div>
-            </div>
-          );
-        })}
-      </div>
     </div>
   );
 }
@@ -362,6 +387,7 @@ function BiddingTab({ players }: { players: PlayerAnalytics[] }) {
               <th>Player</th>
               {bidNames.map(b => <th key={b}>{formatContractName(b)}</th>)}
               <th>Total Bids</th>
+              <th>Bid Wins</th>
               <th>Declared</th>
             </tr>
           </thead>
@@ -373,6 +399,7 @@ function BiddingTab({ players }: { players: PlayerAnalytics[] }) {
                   <td><span className="arena-dot" style={{ background: PLAYER_COLORS[i] }} />{p.name}</td>
                   {bidNames.map(b => <td key={b}>{(p.bids_made[b] || 0).toLocaleString()}</td>)}
                   <td><strong>{totalBids.toLocaleString()}</strong></td>
+                  <td>{p.bid_won_count.toLocaleString()}</td>
                   <td>{p.declared_count.toLocaleString()}</td>
                 </tr>
               );
@@ -513,6 +540,8 @@ function BestWorstTab({ players }: { players: PlayerAnalytics[] }) {
             <div className="arena-bw-summary">
               <div><strong>Total Score:</strong> {p.total_score.toLocaleString()}</div>
               <div><strong>Avg Score:</strong> {p.avg_score.toFixed(1)}</div>
+              <div><strong>Avg Win Score:</strong> <span className="positive">{p.avg_win_score.toFixed(1)}</span></div>
+              <div><strong>Avg Loss Score:</strong> <span className="negative">{p.avg_loss_score.toFixed(1)}</span></div>
               <div><strong>Score Spread:</strong> {((p.best_game.score ?? 0) - (p.worst_game.score ?? 0)).toLocaleString()}</div>
             </div>
           </div>
@@ -601,4 +630,45 @@ function formatAnnouncement(name: string): string {
     VALAT: 'Valat', BARVNI_VALAT: 'Barvni Valat',
   };
   return map[name] || name;
+}
+
+function HistoryTab({ runs }: { runs: ArenaHistoryRun[] }) {
+  if (runs.length === 0) {
+    return <p className="arena-empty">No persisted arena runs yet.</p>;
+  }
+
+  const ordered = [...runs].reverse();
+  return (
+    <div className="arena-history">
+      <h3>Saved Arena Runs</h3>
+      <div className="arena-table-wrapper">
+        <table className="arena-table">
+          <thead>
+            <tr>
+              <th>Started</th>
+              <th>Status</th>
+              <th>Games</th>
+              <th>Checkpoints</th>
+              <th>Top Bot</th>
+            </tr>
+          </thead>
+          <tbody>
+            {ordered.map((run) => {
+              const players = run.analytics?.players ?? [];
+              const top = [...players].sort((a, b) => a.avg_placement - b.avg_placement)[0];
+              return (
+                <tr key={run.run_id}>
+                  <td>{new Date(run.created_at).toLocaleString()}</td>
+                  <td>{run.status}</td>
+                  <td>{run.games_done.toLocaleString()} / {run.total_games.toLocaleString()}</td>
+                  <td>{run.checkpoints.length ? run.checkpoints.join(', ') : 'none'}</td>
+                  <td>{top ? `${top.name} (${top.avg_placement.toFixed(2)})` : '—'}</td>
+                </tr>
+              );
+            })}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  );
 }

@@ -33,6 +33,8 @@ pub struct ArenaGameResult {
     pub contract: u8,   // Contract as u8 (0=Klop..9=BarvniValat)
     pub declarer: i8,   // -1 if nobody (Klop)
     pub partner: i8,    // -1 if none
+    pub bid_contracts: [i8; 4], // Per-seat chosen bid in this auction (-1=pass)
+    pub taroks_in_hand: [u8; 4], // Tarok count in dealt 12-card hand
 }
 
 /// Run `n_games` arena games in parallel using Rayon.
@@ -103,11 +105,16 @@ fn play_one_game(game_idx: u32, versions: &[BotVersion; 4]) -> ArenaGameResult {
             state.talon.insert(card);
         }
     }
+    let mut taroks_in_hand = [0u8; 4];
+    for (pid, hand) in state.hands.iter().enumerate() {
+        taroks_in_hand[pid] = hand.tarok_count();
+    }
     state.phase = Phase::Bidding;
 
     // --- Bidding ---
     let mut highest: Option<Contract> = None;
     let mut winning_player: Option<u8> = None;
+    let mut bid_contracts = [-1i8; 4];
     let mut bidder = state.current_bidder;
     let forehand = state.forehand();
 
@@ -128,6 +135,7 @@ fn play_one_game(game_idx: u32, versions: &[BotVersion; 4]) -> ArenaGameResult {
         match bid {
             Some(contract) => {
                 state.bids.push(Bid { player: bidder, contract: Some(contract) });
+                bid_contracts[bidder as usize] = contract as i8;
                 highest = Some(contract);
                 winning_player = Some(bidder);
             }
@@ -227,6 +235,8 @@ fn play_one_game(game_idx: u32, versions: &[BotVersion; 4]) -> ArenaGameResult {
         contract: result_contract,
         declarer: result_declarer,
         partner: result_partner,
+        bid_contracts,
+        taroks_in_hand,
     }
 }
 

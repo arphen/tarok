@@ -4,7 +4,9 @@ from __future__ import annotations
 
 import asyncio
 import base64
+import json
 import time
+from datetime import datetime, timezone
 from contextlib import asynccontextmanager
 from pathlib import Path
 
@@ -1490,6 +1492,7 @@ class ArenaRequest(BaseModel):
 
 _arena_task: asyncio.Task | None = None
 _arena_progress: dict | None = None
+_arena_history_path = Path(__file__).resolve().parents[4] / "data" / "arena_results.json"
 
 
 # Contract name lookup (must match engine-rs Contract enum order)
@@ -1498,6 +1501,163 @@ _ARENA_CONTRACT_NAMES = [
     "SOLO_THREE", "SOLO_TWO", "SOLO_ONE", "SOLO",
     "BERAC", "BARVNI_VALAT",
 ]
+
+
+def _load_arena_history() -> dict:
+    if not _arena_history_path.exists():
+        return {"runs": []}
+    try:
+        with open(_arena_history_path, encoding="utf-8") as f:
+            data = json.load(f)
+        if not isinstance(data, dict):
+            return {"runs": []}
+        runs = data.get("runs", [])
+        if not isinstance(runs, list):
+            runs = []
+        return {"runs": runs}
+    except Exception:
+        return {"runs": []}
+
+
+def _save_arena_history(data: dict) -> None:
+    _arena_history_path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = _arena_history_path.with_suffix(".tmp")
+    with open(tmp, "w", encoding="utf-8") as f:
+        json.dump(data, f, indent=2)
+    tmp.replace(_arena_history_path)
+
+
+def _persist_arena_run(req_agents: list[dict], total_games: int, session_size: int, payload: dict) -> None:
+    analytics = payload.get("analytics") or {}
+    checkpoints = sorted({
+        str(a.get("checkpoint", "")).strip()
+        for a in req_agents
+        if str(a.get("type", "")).strip().lower() == "rl" and str(a.get("checkpoint", "")).strip()
+    })
+    run = {
+        "run_id": f"arena-{time.time_ns()}",
+        "created_at": datetime.now(timezone.utc).isoformat(),
+        "status": payload.get("status", "done"),
+        "games_done": int(payload.get("games_done", 0)),
+        "total_games": int(total_games),
+        "session_size": int(session_size),
+        "agents": [
+            {
+                "name": str(a.get("name", "")),
+                "type": str(a.get("type", "")),
+                "checkpoint": str(a.get("checkpoint", "")),
+            }
+            for a in req_agents
+        ],
+        "checkpoints": checkpoints,
+        "analytics": analytics,
+    }
+    history = _load_arena_history()
+    runs = history.get("runs", [])
+    runs.append(run)
+    # Keep recent history bounded.
+    if len(runs) > 200:
+        runs = runs[-200:]
+    history["runs"] = runs
+    _save_arena_history(history)
+
+
+@app.get("/api/arena/history")
+async def arena_history(checkpoint: str | None = None):
+    history = _load_arena_history()
+    runs = history.get("runs", [])
+    if checkpoint:
+        ck = checkpoint.strip()
+        runs = [r for r in runs if ck in (r.get("checkpoints") or [])]
+    return {"runs": runs}
+
+
+def _build_checkpoint_leaderboard(runs: list[dict]) -> list[dict]:
+    agg: dict[str, dict] = {}
+
+    for run in runs:
+        analytics = run.get("analytics") or {}
+        players = analytics.get("players") or []
+        agents = run.get("agents") or []
+
+        for idx, player in enumerate(players):
+            if idx >= len(agents):
+                continue
+            agent = agents[idx]
+            if str(agent.get("type", "")).strip().lower() != "rl":
+                continue
+
+            checkpoint = str(agent.get("checkpoint", "")).strip() or "latest"
+            games_played = int(player.get("games_played", 0) or 0)
+            declared_count = int(player.get("declared_count", 0) or 0)
+            declared_won = int(player.get("declared_won", 0) or 0)
+            declared_lost = max(0, declared_count - declared_won)
+
+            row = agg.setdefault(checkpoint, {
+                "checkpoint": checkpoint,
+                "appearances": 0,
+                "runs": set(),
+                "games": 0,
+                "placement_weighted": 0.0,
+                "bid_wins": 0,
+                "taroks_weighted": 0.0,
+                "declared_games": 0,
+                "declared_wins": 0,
+                "declared_win_score_weighted": 0.0,
+                "declared_loss_score_weighted": 0.0,
+                "times_called": 0,
+                "latest_run_at": "",
+            })
+
+            row["appearances"] += 1
+            row["runs"].add(str(run.get("run_id", "")))
+            row["games"] += games_played
+            row["placement_weighted"] += float(player.get("avg_placement", 0.0) or 0.0) * games_played
+            row["bid_wins"] += int(player.get("bid_won_count", 0) or 0)
+            row["taroks_weighted"] += float(player.get("avg_taroks_in_hand", 0.0) or 0.0) * games_played
+            row["declared_games"] += declared_count
+            row["declared_wins"] += declared_won
+            row["declared_win_score_weighted"] += float(player.get("avg_declared_win_score", 0.0) or 0.0) * declared_won
+            row["declared_loss_score_weighted"] += float(player.get("avg_declared_loss_score", 0.0) or 0.0) * declared_lost
+            row["times_called"] += int(player.get("times_called", 0) or 0)
+            created_at = str(run.get("created_at", ""))
+            if created_at > row["latest_run_at"]:
+                row["latest_run_at"] = created_at
+
+    rows: list[dict] = []
+    for checkpoint, data in agg.items():
+        games = max(1, data["games"])
+        declared_games = data["declared_games"]
+        declared_wins = data["declared_wins"]
+        declared_lost = max(0, declared_games - declared_wins)
+
+        rows.append({
+            "checkpoint": checkpoint,
+            "appearances": data["appearances"],
+            "runs": len(data["runs"]),
+            "games": data["games"],
+            "avg_placement": round(data["placement_weighted"] / games, 3),
+            "bid_wins": data["bid_wins"],
+            "bid_win_rate_per_game": round(data["bid_wins"] / games * 100, 2),
+            "avg_taroks_in_hand": round(data["taroks_weighted"] / games, 3),
+            "declared_games": declared_games,
+            "declared_win_rate": round((declared_wins / max(1, declared_games)) * 100, 2),
+            "avg_declared_win_score": round(data["declared_win_score_weighted"] / max(1, declared_wins), 3),
+            "avg_declared_loss_score": round(data["declared_loss_score_weighted"] / max(1, declared_lost), 3),
+            "times_called": data["times_called"],
+            "latest_run_at": data["latest_run_at"],
+        })
+
+    rows.sort(key=lambda r: (r["avg_placement"], -r["games"], r["checkpoint"]))
+    return rows
+
+
+@app.get("/api/arena/leaderboard/checkpoints")
+async def arena_checkpoint_leaderboard():
+    history = _load_arena_history()
+    runs = history.get("runs", [])
+    leaderboard = _build_checkpoint_leaderboard(runs)
+    return {"leaderboard": leaderboard}
 
 
 def _agent_type_to_seat_label(agent_type: str) -> str | None:
@@ -1510,12 +1670,64 @@ def _agent_type_to_seat_label(agent_type: str) -> str | None:
         return "bot_v5"
     if t == "stockskis_v6":
         return "bot_v6"
+    if t == "rl":
+        return "nn"
     return None
+
+
+def _export_checkpoint_to_torchscript(checkpoint_path: str) -> str:
+    """Load a regular PyTorch checkpoint and export a TorchScript model.
+
+    Returns the path to a temporary TorchScript .pt file.
+    """
+    import tempfile
+    import torch
+    from tarok.adapters.ai.network import TarokNet
+
+    ckpt = torch.load(checkpoint_path, map_location="cpu", weights_only=True)
+    sd = ckpt.get("model_state_dict", ckpt)
+    hidden_size = sd["shared.0.weight"].shape[0]
+    has_oracle = any(k.startswith("critic_backbone.") for k in sd)
+
+    net = TarokNet(hidden_size, oracle_critic=has_oracle)
+    net.load_state_dict(sd, strict=False)
+    net.eval()
+
+    class _AllHeads(torch.nn.Module):
+        def __init__(self, base):
+            super().__init__()
+            self.base = base
+
+        def forward(self, x: torch.Tensor):
+            h = self.base.shared(x)
+            h = self.base.res_blocks(h)
+            cf = self.base._extract_card_features(x)
+            a = self.base.card_attention(cf)
+            h = self.base.fuse(torch.cat([h, a], dim=-1))
+            return (
+                self.base.bid_head(h),
+                self.base.king_head(h),
+                self.base.talon_head(h),
+                self.base.card_head(h),
+                self.base.critic(h).squeeze(-1),
+            )
+
+    wrapper = _AllHeads(net)
+    wrapper.eval()
+    traced = torch.jit.trace(wrapper, torch.randn(1, 450), check_trace=False)
+
+    path = tempfile.mktemp(suffix=".pt", prefix="tarok_arena_ts_")
+    traced.save(path)
+    return path
 
 
 @app.post("/api/arena/start")
 async def start_arena(req: ArenaRequest):
-    """Run a large-scale bot arena via the Rust engine."""
+    """Run a large-scale bot arena.
+
+    Uses the Rust arena engine for pure-bot mixes and Rust self-play with
+    batched NN inference for configurations that include an RL checkpoint.
+    """
     global _arena_task, _arena_progress
 
     if _arena_task and not _arena_task.done():
@@ -1527,24 +1739,51 @@ async def start_arena(req: ArenaRequest):
     while len(agent_configs) < 4:
         agent_configs.append({"name": f"StockŠkis-{len(agent_configs)}", "type": "stockskis"})
 
-    # Validate all agents are bot types supported by Rust arena
+    # Map agent types to Rust seat labels.
     seat_labels = []
     agent_names = []
     agent_types_raw = []
+    has_nn = False
+    nn_checkpoint_path: str | None = None
     for i, cfg in enumerate(agent_configs):
         atype = str(cfg.get("type", "stockskis")).strip().lower()
         aname = cfg.get("name", f"Agent-{i}")
         label = _agent_type_to_seat_label(atype)
         if label is None:
-            return {
-                "status": "error",
-                "detail": f"Seat {i} type '{atype}' not supported. Use stockskis, stockskis_v5, or stockskis_v6.",
-            }
+            return {"status": "error", "message": f"Agent '{aname}' type '{atype}' is not supported. Use stockskis / stockskis_v5 / stockskis_v6 / rl."}
+        if label == "nn":
+            has_nn = True
+            # Resolve checkpoint path (all nn seats share the same model)
+            ckpt = cfg.get("checkpoint", "")
+            if ckpt:
+                from pathlib import Path as _P
+                for candidate in [_P("checkpoints") / ckpt, _P("../checkpoints") / ckpt]:
+                    if candidate.exists():
+                        nn_checkpoint_path = str(candidate)
+                        break
+            if nn_checkpoint_path is None:
+                from pathlib import Path as _P
+                default = _P("checkpoints/tarok_agent_latest.pt")
+                root_default = _P("../checkpoints/tarok_agent_latest.pt")
+                if default.exists():
+                    nn_checkpoint_path = str(default)
+                elif root_default.exists():
+                    nn_checkpoint_path = str(root_default)
         seat_labels.append(label)
         agent_names.append(aname)
         agent_types_raw.append(atype)
 
     seat_config = ",".join(seat_labels)
+
+    # For NN: export checkpoint to TorchScript
+    ts_model_path: str | None = None
+    if has_nn:
+        if nn_checkpoint_path is None:
+            return {"status": "error", "message": "No checkpoint found for RL agent. Place a checkpoint in checkpoints/ or select one."}
+        try:
+            ts_model_path = _export_checkpoint_to_torchscript(nn_checkpoint_path)
+        except Exception as e:
+            return {"status": "error", "message": f"Failed to export checkpoint to TorchScript: {e}"}
 
     _arena_progress = {
         "status": "running",
@@ -1558,14 +1797,14 @@ async def start_arena(req: ArenaRequest):
         import logging
         log = logging.getLogger(__name__)
 
+        import numpy as np
+
         try:
-            import tarok_engine as te
+            import tarok_engine as te  # type: ignore[assignment]
         except ImportError:
             log.error("tarok_engine not available — cannot run arena")
             _arena_progress["status"] = "error"
             return
-
-        import numpy as np
 
         # Per-player accumulators
         player_stats = []
@@ -1577,13 +1816,24 @@ async def start_arena(req: ArenaRequest):
                 "games_played": 0,
                 "placements": {1: 0, 2: 0, 3: 0, 4: 0},
                 "placement_sum": 0.0,
-                "sessions_played": 0,
                 "wins": 0.0,
                 "positive_games": 0,
+                "bids_made": {},
                 "declared_count": 0,
                 "declared_won": 0,
+                "bid_won_count": 0,
+                "declared_win_score_total": 0,
+                "declared_loss_score_total": 0,
+                "declared_win_games": 0,
+                "declared_loss_games": 0,
                 "defended_count": 0,
                 "defended_won": 0,
+                "times_called": 0,
+                "taroks_in_hand_total": 0,
+                "taroks_in_hand_count": 0,
+                "positive_score_total": 0,
+                "negative_game_count": 0,
+                "negative_score_total": 0,
                 "best_game_score": None,
                 "worst_game_score": None,
                 "best_game_idx": None,
@@ -1592,130 +1842,189 @@ async def start_arena(req: ArenaRequest):
             })
         contract_stats: dict = {}
         games_done = 0
+        session_scores = [0, 0, 0, 0]
+        games_in_session = 0
 
-        # Run in batches for progress updates
-        batch_size = min(10_000, total)
+        def _accumulate_scores(scores: "np.ndarray", n_batch: int) -> None:
+            """Accumulate per-game score stats and per-game rankings."""
+            nonlocal games_in_session, session_scores
+
+            # ---- Per-game rankings (vectorized) ----
+            # ranks: 1 = best, 4 = worst; ties get arbitrary adjacent ranks
+            # which average out correctly over many games.
+            order = np.argsort(-scores, axis=1)
+            ranks = np.argsort(order, axis=1) + 1  # 1-indexed
+
+            for pid in range(4):
+                col = scores[:, pid]
+                ps = player_stats[pid]
+                ps["total_score"] += int(col.sum())
+                ps["games_played"] += n_batch
+
+                # Per-game placement stats
+                pid_ranks = ranks[:, pid]
+                ps["placement_sum"] += float(pid_ranks.sum())
+                for place in range(1, 5):
+                    ps["placements"][place] += int((pid_ranks == place).sum())
+                ps["wins"] += float((pid_ranks == 1).sum())
+
+                pos_mask = col > 0
+                neg_mask = ~pos_mask
+                n_pos = int(pos_mask.sum())
+                n_neg = int(neg_mask.sum())
+                ps["positive_games"] += n_pos
+                ps["positive_score_total"] += int(col[pos_mask].sum()) if n_pos else 0
+                ps["negative_game_count"] += n_neg
+                ps["negative_score_total"] += int(col[neg_mask].sum()) if n_neg else 0
+
+                batch_max_idx = int(col.argmax())
+                batch_min_idx = int(col.argmin())
+                batch_max = int(col[batch_max_idx])
+                batch_min = int(col[batch_min_idx])
+                if ps["best_game_score"] is None or batch_max > ps["best_game_score"]:
+                    ps["best_game_score"] = batch_max
+                    ps["best_game_idx"] = games_done + batch_max_idx
+                if ps["worst_game_score"] is None or batch_min < ps["worst_game_score"]:
+                    ps["worst_game_score"] = batch_min
+                    ps["worst_game_idx"] = games_done + batch_min_idx
+
+            # ---- Session tracking for score_history chart ----
+            batch_offset = 0
+            while batch_offset < n_batch:
+                remaining = session_size - games_in_session
+                chunk_end = min(batch_offset + remaining, n_batch)
+                chunk = scores[batch_offset:chunk_end]
+                for pid in range(4):
+                    session_scores[pid] += int(chunk[:, pid].sum())
+                games_in_session += chunk_end - batch_offset
+                batch_offset = chunk_end
+                if games_in_session >= session_size:
+                    for pid in range(4):
+                        player_stats[pid]["score_history"].append(session_scores[pid])
+                    session_scores = [0, 0, 0, 0]
+                    games_in_session = 0
+
+        # Batch size: smaller for NN (memory), larger for pure bots
+        batch_size = min(2_000 if has_nn else 10_000, total)
 
         try:
             while games_done < total:
                 n_batch = min(batch_size, total - games_done)
 
-                # Run entire batch in Rust (GIL released, Rayon parallel)
-                result = await asyncio.get_event_loop().run_in_executor(
-                    None,
-                    lambda n=n_batch: te.run_arena_games(
-                        n_games=n,
-                        seat_config=seat_config,
-                    ),
-                )
+                if has_nn:
+                    # ---- NN path: Rust self-play with batched inference ----
+                    result = await asyncio.get_event_loop().run_in_executor(
+                        None,
+                        lambda n=n_batch: te.run_self_play(
+                            n_games=n,
+                            concurrency=min(64, n),
+                            model_path=ts_model_path,
+                            explore_rate=0.0,
+                            seat_config=seat_config,
+                        ),
+                    )
+                    scores = np.asarray(result["scores"])  # (n_batch, 4) int32
+                    _accumulate_scores(scores, n_batch)
+                    # No contract/declarer/bid data from self-play
+                else:
+                    # ---- Pure bot path: Rust arena with full analytics ----
+                    result = await asyncio.get_event_loop().run_in_executor(
+                        None,
+                        lambda n=n_batch: te.run_arena_games(
+                            n_games=n,
+                            seat_config=seat_config,
+                        ),
+                    )
+                    scores = np.asarray(result["scores"])
+                    contracts = np.asarray(result["contracts"])
+                    declarers = np.asarray(result["declarers"])
+                    partners = np.asarray(result["partners"])
+                    bid_contracts = np.asarray(result["bid_contracts"]) if "bid_contracts" in result else None
+                    taroks_in_hand = np.asarray(result["taroks_in_hand"]) if "taroks_in_hand" in result else None
 
-                scores = np.asarray(result["scores"])      # (n_batch, 4) int32
-                contracts = np.asarray(result["contracts"]) # (n_batch,) uint8
-                declarers = np.asarray(result["declarers"]) # (n_batch,) int8
-                partners = np.asarray(result["partners"])   # (n_batch,) int8
+                    _accumulate_scores(scores, n_batch)
 
-                # Process: extract per-game stats
-                for g in range(n_batch):
-                    game_idx = games_done + g
-                    sc = scores[g]
-                    contract_u8 = int(contracts[g])
-                    decl = int(declarers[g])
-                    part = int(partners[g])
-                    contract_name = _ARENA_CONTRACT_NAMES[contract_u8] if contract_u8 < len(_ARENA_CONTRACT_NAMES) else "UNKNOWN"
+                    # Taroks in hand
+                    if taroks_in_hand is not None:
+                        for pid in range(4):
+                            player_stats[pid]["taroks_in_hand_total"] += int(taroks_in_hand[:, pid].sum())
+                            player_stats[pid]["taroks_in_hand_count"] += n_batch
 
-                    for pid in range(4):
-                        s = int(sc[pid])
-                        ps = player_stats[pid]
-                        ps["total_score"] += s
-                        ps["games_played"] += 1
-                        if s > 0:
-                            ps["positive_games"] += 1
-                        if ps["best_game_score"] is None or s > ps["best_game_score"]:
-                            ps["best_game_score"] = s
-                            ps["best_game_idx"] = game_idx
-                        if ps["worst_game_score"] is None or s < ps["worst_game_score"]:
-                            ps["worst_game_score"] = s
-                            ps["worst_game_idx"] = game_idx
+                    # Bid tracking
+                    if bid_contracts is not None:
+                        for pid in range(4):
+                            bids_col = bid_contracts[:, pid]
+                            valid_mask = bids_col >= 0
+                            if valid_mask.any():
+                                unique, counts = np.unique(bids_col[valid_mask], return_counts=True)
+                                bids = player_stats[pid]["bids_made"]
+                                for b, c in zip(unique, counts):
+                                    bname = _ARENA_CONTRACT_NAMES[int(b)] if int(b) < len(_ARENA_CONTRACT_NAMES) else f"CONTRACT_{b}"
+                                    bids[bname] = bids.get(bname, 0) + int(c)
 
-                    # Declarer/defender tracking
-                    if decl >= 0 and contract_name != "KLOP":
-                        decl_team = {decl}
-                        if part >= 0:
-                            decl_team.add(part)
-                        decl_won = int(sc[decl]) > 0
+                    # Contract play counts
+                    unique_contracts, contract_counts = np.unique(contracts, return_counts=True)
+                    for cu8, cnt in zip(unique_contracts, contract_counts):
+                        cname = _ARENA_CONTRACT_NAMES[int(cu8)] if int(cu8) < len(_ARENA_CONTRACT_NAMES) else "UNKNOWN"
+                        if cname not in contract_stats:
+                            contract_stats[cname] = {"played": 0, "decl_won": 0, "total_decl_score": 0, "total_def_score": 0}
+                        contract_stats[cname]["played"] += int(cnt)
+
+                    # Declarer/defender stats for non-Klop games
+                    non_klop_mask = declarers >= 0
+                    if non_klop_mask.any():
+                        nk_idx = np.where(non_klop_mask)[0]
+                        nk_decl = declarers[nk_idx]
+                        nk_part = partners[nk_idx]
+                        nk_scores = scores[nk_idx]
+                        nk_contracts = contracts[nk_idx]
+
+                        decl_scores_arr = nk_scores[np.arange(len(nk_idx)), nk_decl]
+                        decl_won_mask = decl_scores_arr > 0
+
+                        has_partner = nk_part >= 0
+                        partner_scores_arr = np.zeros(len(nk_idx), dtype=np.int32)
+                        if has_partner.any():
+                            hp_idx = np.where(has_partner)[0]
+                            partner_scores_arr[hp_idx] = nk_scores[hp_idx, nk_part[hp_idx]]
+
+                        def_total_arr = nk_scores.sum(axis=1) - decl_scores_arr - partner_scores_arr
 
                         for pid in range(4):
-                            if pid in decl_team:
-                                player_stats[pid]["declared_count"] += 1
-                                if decl_won:
-                                    player_stats[pid]["declared_won"] += 1
-                            else:
-                                player_stats[pid]["defended_count"] += 1
-                                if not decl_won:
-                                    player_stats[pid]["defended_won"] += 1
+                            ps = player_stats[pid]
+                            is_decl = nk_decl == pid
+                            ps["bid_won_count"] += int(is_decl.sum())
 
-                    # Contract stats
-                    if contract_name not in contract_stats:
-                        contract_stats[contract_name] = {
-                            "played": 0, "decl_won": 0,
-                            "total_decl_score": 0, "total_def_score": 0,
-                        }
-                    cs = contract_stats[contract_name]
-                    cs["played"] += 1
-                    if decl >= 0 and contract_name != "KLOP":
-                        if int(sc[decl]) > 0:
-                            cs["decl_won"] += 1
-                        cs["total_decl_score"] += int(sc[decl])
-                        decl_team = {decl}
-                        if part >= 0:
-                            decl_team.add(part)
-                        def_sc = sum(int(sc[p]) for p in range(4) if p not in decl_team)
-                        cs["total_def_score"] += def_sc
+                            d_won = is_decl & decl_won_mask
+                            d_lost = is_decl & ~decl_won_mask
+                            ps["declared_win_games"] += int(d_won.sum())
+                            ps["declared_win_score_total"] += int(decl_scores_arr[d_won].sum()) if d_won.any() else 0
+                            ps["declared_loss_games"] += int(d_lost.sum())
+                            ps["declared_loss_score_total"] += int(decl_scores_arr[d_lost].sum()) if d_lost.any() else 0
 
-                # Session-level placement from this batch
-                num_sessions_in_batch = max(1, n_batch // session_size)
-                for s_idx in range(num_sessions_in_batch):
-                    start = s_idx * session_size
-                    end = min(start + session_size, n_batch)
-                    if start >= n_batch:
-                        break
-                    cumulative = [0, 0, 0, 0]
-                    for g in range(start, end):
-                        for pid in range(4):
-                            cumulative[pid] += int(scores[g, pid])
+                            ps["times_called"] += int((nk_part == pid).sum())
 
-                    # Rank with proper tie handling
-                    ranked = sorted(range(4), key=lambda p: cumulative[p], reverse=True)
-                    places = [0.0] * 4
-                    i = 0
-                    while i < 4:
-                        j = i
-                        while j < 4 and cumulative[ranked[j]] == cumulative[ranked[i]]:
-                            j += 1
-                        avg_rank = (i + 1 + j) / 2
-                        for k in range(i, j):
-                            places[k] = avg_rank
-                        i = j
+                            in_team = is_decl | (nk_part == pid)
+                            ps["declared_count"] += int(in_team.sum())
+                            ps["declared_won"] += int((in_team & decl_won_mask).sum())
+                            is_def = ~in_team
+                            ps["defended_count"] += int(is_def.sum())
+                            ps["defended_won"] += int((is_def & ~decl_won_mask).sum())
 
-                    for rank_idx, pid in enumerate(ranked):
-                        ps = player_stats[pid]
-                        place_f = places[rank_idx]
-                        place_int = max(1, min(4, round(place_f)))
-                        ps["placements"][place_int] += 1
-                        ps["placement_sum"] += place_f
-                        ps["sessions_played"] += 1
-                        # Credit fractional wins for ties at 1st place
-                        if place_f <= 1.0:
-                            ps["wins"] += 1.0
-                        elif place_f <= 1.5:
-                            # Two-way tie for 1st: each gets 0.5
-                            num_tied = sum(1 for p2 in places if p2 == place_f)
-                            ps["wins"] += 1.0 / num_tied
-
-                    for pid in range(4):
-                        player_stats[pid]["score_history"].append(cumulative[pid])
+                        for cu8 in np.unique(nk_contracts):
+                            cname = _ARENA_CONTRACT_NAMES[int(cu8)] if int(cu8) < len(_ARENA_CONTRACT_NAMES) else "UNKNOWN"
+                            cs = contract_stats[cname]
+                            c_mask = nk_contracts == cu8
+                            c_decl = decl_scores_arr[c_mask]
+                            cs["decl_won"] += int((c_decl > 0).sum())
+                            cs["total_decl_score"] += int(c_decl.sum())
+                            cs["total_def_score"] += int(def_total_arr[c_mask].sum())
 
                 games_done += n_batch
+                # Flush last partial session
+                if games_done == total and games_in_session > 0:
+                    for pid in range(4):
+                        player_stats[pid]["score_history"].append(session_scores[pid])
 
                 analytics = _build_arena_analytics(player_stats, contract_stats, games_done, total)
                 _arena_progress = {
@@ -1730,12 +2039,21 @@ async def start_arena(req: ArenaRequest):
             log.info("Arena cancelled at game %d/%d", games_done, total)
             _arena_progress["status"] = "cancelled"
             _arena_progress["analytics"] = _build_arena_analytics(player_stats, contract_stats, games_done, total)
+            _persist_arena_run(req.agents[:4], total, session_size, _arena_progress)
             return
         except Exception:
             log.exception("Arena failed at game %d/%d", games_done, total)
             _arena_progress["status"] = "error"
             _arena_progress["analytics"] = _build_arena_analytics(player_stats, contract_stats, games_done, total)
+            _persist_arena_run(req.agents[:4], total, session_size, _arena_progress)
             return
+        finally:
+            if ts_model_path:
+                import os
+                try:
+                    os.unlink(ts_model_path)
+                except OSError:
+                    pass
 
         _arena_progress = {
             "status": "done",
@@ -1743,6 +2061,7 @@ async def start_arena(req: ArenaRequest):
             "total_games": total,
             "analytics": _build_arena_analytics(player_stats, contract_stats, games_done, total),
         }
+        _persist_arena_run(req.agents[:4], total, session_size, _arena_progress)
 
     _arena_task = asyncio.create_task(_run_arena())
     return {"status": "started", "total_games": total, "session_size": session_size}
@@ -1753,29 +2072,34 @@ def _build_arena_analytics(player_stats, contract_stats, games_done, total_games
     players = []
     for ps in player_stats:
         gp = max(ps["games_played"], 1)
-        sp = max(ps["sessions_played"], 1)
         players.append({
             "name": ps["name"],
             "type": ps["type"],
             "games_played": ps["games_played"],
-            "sessions_played": ps["sessions_played"],
             "total_score": ps["total_score"],
             "avg_score": round(ps["total_score"] / gp, 2),
             "placements": ps["placements"],
-            "avg_placement": round(ps["placement_sum"] / sp, 2),
-            "win_rate": round(ps["wins"] / sp * 100, 2),
+            "avg_placement": round(ps["placement_sum"] / gp, 2),
+            "win_rate": round(ps["wins"] / gp * 100, 2),
             "positive_rate": round(ps["positive_games"] / gp * 100, 2),
-            "bids_made": {},
+            "bids_made": ps["bids_made"],
             "declared_count": ps["declared_count"],
             "declared_won": ps["declared_won"],
+            "bid_won_count": ps["bid_won_count"],
             "declared_win_rate": round(ps["declared_won"] / max(ps["declared_count"], 1) * 100, 2),
+            "avg_declared_win_score": round(ps["declared_win_score_total"] / max(ps["declared_win_games"], 1), 2),
+            "avg_declared_loss_score": round(ps["declared_loss_score_total"] / max(ps["declared_loss_games"], 1), 2),
             "defended_count": ps["defended_count"],
             "defended_won": ps["defended_won"],
             "defended_win_rate": round(ps["defended_won"] / max(ps["defended_count"], 1) * 100, 2),
             "announcements_made": {},
             "kontra_count": 0,
+            "times_called": ps["times_called"],
+            "avg_taroks_in_hand": round(ps["taroks_in_hand_total"] / max(ps["taroks_in_hand_count"], 1), 2),
             "best_game": {"score": ps["best_game_score"], "game_idx": ps["best_game_idx"]},
             "worst_game": {"score": ps["worst_game_score"], "game_idx": ps["worst_game_idx"]},
+            "avg_win_score": round(ps["positive_score_total"] / max(ps["positive_games"], 1), 2),
+            "avg_loss_score": round(ps["negative_score_total"] / max(ps["negative_game_count"], 1), 2),
             "score_history": ps["score_history"],
         })
 
@@ -1801,6 +2125,16 @@ def _build_arena_analytics(player_stats, contract_stats, games_done, total_games
 async def arena_progress():
     if _arena_progress:
         return _arena_progress
+    history = _load_arena_history()
+    runs = history.get("runs", [])
+    if runs:
+        last = runs[-1]
+        return {
+            "status": last.get("status", "done"),
+            "games_done": last.get("games_done", 0),
+            "total_games": last.get("total_games", 0),
+            "analytics": last.get("analytics"),
+        }
     return {"status": "idle", "games_done": 0, "total_games": 0, "analytics": None}
 
 

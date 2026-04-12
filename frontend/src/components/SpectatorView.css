@@ -608,6 +608,10 @@
   .spectator-table {
     grid-template-columns: 100px 1fr 100px;
   }
+
+  .counting-exam-grid {
+    grid-template-columns: 1fr;
+  }
 }
 
 .spectator-playback {
@@ -783,6 +787,146 @@
 
 .trick-winner-cell {
   font-weight: 600;
+}
+
+/* Card counting examination */
+.counting-exam {
+  margin-top: 8px;
+}
+
+.counting-exam-header-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.counting-exam-header-row h4 {
+  margin: 0;
+  border-bottom: none;
+  padding-bottom: 0;
+}
+
+.counting-exam-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(250px, 1fr));
+  gap: 10px;
+}
+
+.counting-team-card {
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 10px;
+  padding: 10px;
+  background: rgba(0, 0, 0, 0.2);
+}
+
+.counting-team-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: 8px;
+  margin-bottom: 6px;
+}
+
+.counting-team-title {
+  color: var(--accent-gold);
+  font-weight: 600;
+  font-size: 13px;
+}
+
+.counting-team-players {
+  color: var(--text-secondary);
+  font-size: 12px;
+}
+
+.counting-team-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 12px;
+}
+
+.counting-team-table th {
+  text-align: left;
+  color: var(--text-secondary);
+  text-transform: uppercase;
+  font-size: 10px;
+  letter-spacing: 0.4px;
+  padding: 4px 6px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+}
+
+.counting-team-table td {
+  padding: 4px 6px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.05);
+}
+
+.counting-cards-cell {
+  color: var(--text-secondary);
+  font-size: 11px;
+}
+
+.counting-calc-cell {
+  color: var(--text-secondary);
+  font-size: 11px;
+  font-family: monospace;
+  white-space: nowrap;
+}
+
+.counting-value-cell {
+  font-weight: 600;
+  text-align: right;
+}
+
+.counting-team-table tfoot td {
+  border-bottom: none;
+  font-weight: 700;
+  color: var(--accent-gold);
+  padding-top: 8px;
+}
+
+.counting-all-cards {
+  margin-bottom: 8px;
+  padding: 6px 8px;
+  background: rgba(0, 0, 0, 0.15);
+  border-radius: 6px;
+}
+
+.counting-all-cards-label {
+  display: block;
+  font-size: 11px;
+  color: var(--text-secondary);
+  margin-bottom: 4px;
+}
+
+.counting-all-cards-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 3px;
+}
+
+.counting-card-chip {
+  display: inline-block;
+  padding: 1px 5px;
+  border-radius: 3px;
+  background: rgba(255, 255, 255, 0.08);
+  font-size: 11px;
+  color: var(--text-primary);
+  cursor: default;
+}
+
+.counting-card-chip:hover {
+  background: rgba(218, 165, 32, 0.2);
+}
+
+.counting-incomplete-group td {
+  background: rgba(255, 193, 7, 0.06);
+  border-left: 2px solid rgba(255, 193, 7, 0.3);
+}
+
+.counting-empty {
+  color: var(--text-secondary);
+  text-align: center;
+  font-style: italic;
 }
 
 /* ---- Game counter (tournament) ---- */
