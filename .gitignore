@@ -5,6 +5,7 @@
 .env
 .hypothesis/
 checkpoints/
+!backend/checkpoints/hall_of_fame/pinned/
 .venv/
 # Python
 __pycache__/
