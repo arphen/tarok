@@ -41,6 +41,7 @@ interface PlayerAnalytics {
   avg_win_score: number;
   avg_loss_score: number;
   score_history: number[];
+  taroks_per_contract?: Record<string, number>;
 }
 
 interface ContractAnalytics {
@@ -55,6 +56,7 @@ interface ArenaAnalytics {
   total_games: number;
   players: PlayerAnalytics[];
   contracts: Record<string, ContractAnalytics>;
+  taroks_per_contract?: Record<string, number>;
 }
 
 interface ArenaProgress {
@@ -138,6 +140,11 @@ export default function BotArena({ onBack, checkpoints }: BotArenaProps) {
   }, []);
 
   const startArena = async () => {
+    // Reset UI state
+    setTab('overview');
+    setRunning(false);
+    setProgress({ status: 'running', games_done: 0, total_games: totalGames, analytics: null });
+
     const resp = await fetch('/api/arena/start', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -310,7 +317,7 @@ export default function BotArena({ onBack, checkpoints }: BotArenaProps) {
               <p className="arena-empty">No analytics available yet. Run a new arena session to populate stats.</p>
             )}
             {tab === 'overview' && displayAnalytics && <OverviewTab players={displayAnalytics.players} />}
-            {tab === 'bidding' && displayAnalytics && <BiddingTab players={displayAnalytics.players} />}
+            {tab === 'bidding' && displayAnalytics && <BiddingTab players={displayAnalytics.players} taroksPerContract={displayAnalytics.taroks_per_contract} />}
             {tab === 'contracts' && displayAnalytics && <ContractsTab contracts={displayAnalytics.contracts} />}
             {tab === 'announcements' && displayAnalytics && <AnnouncementsTab players={displayAnalytics.players} />}
             {tab === 'best_worst' && displayAnalytics && <BestWorstTab players={displayAnalytics.players} />}
@@ -366,12 +373,41 @@ function OverviewTab({ players }: { players: PlayerAnalytics[] }) {
         </table>
       </div>
 
+      {/* Placement Distribution */}
+      <h3>Placement Distribution</h3>
+      <div className="arena-placement-grid">
+        {players.map((p, i) => {
+          const total = Object.values(p.placements).reduce((a, b) => a + b, 0);
+          const maxCount = Math.max(...Object.values(p.placements), 1);
+          return (
+            <div key={i} className="arena-placement-card" style={{ borderColor: PLAYER_COLORS[i] }}>
+              <h4 style={{ color: PLAYER_COLORS[i] }}>{p.name} <span className="arena-placement-total">({total.toLocaleString()} games)</span></h4>
+              <div className="arena-placement-bars">
+                {[1, 2, 3, 4].map(place => {
+                  const count = p.placements[place] || 0;
+                  const pct = total > 0 ? (count / total * 100) : 0;
+                  const barPct = (count / maxCount) * 100;
+                  return (
+                    <div key={place} className="arena-placement-row">
+                      <span className="arena-placement-label">{place === 1 ? '1st' : place === 2 ? '2nd' : place === 3 ? '3rd' : '4th'}</span>
+                      <div className="arena-bar-track">
+                        <div className="arena-bar-fill" style={{ width: `${barPct}%`, background: PLAYER_COLORS[i], opacity: 1 - (place - 1) * 0.2 }} />
+                      </div>
+                      <span className="arena-placement-value">{count.toLocaleString()} ({pct.toFixed(1)}%)</span>
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+          );
+        })}
+      </div>
     </div>
   );
 }
 
 /* ============ Bidding Tab ============ */
-function BiddingTab({ players }: { players: PlayerAnalytics[] }) {
+function BiddingTab({ players, taroksPerContract }: { players: PlayerAnalytics[]; taroksPerContract?: Record<string, number> }) {
   // Collect all bid types
   const allBids = new Set<string>();
   players.forEach(p => Object.keys(p.bids_made).forEach(b => allBids.add(b)));
@@ -431,6 +467,143 @@ function BiddingTab({ players }: { players: PlayerAnalytics[] }) {
           </div>
         ))}
       </div>
+
+      {/* Taroks per Contract chart — per player */}
+      {players.some(p => p.taroks_per_contract && Object.keys(p.taroks_per_contract).length > 0) && (
+        <>
+          <h3>Avg Taroks in Declarer&apos;s Hand by Contract</h3>
+          <div className="arena-taroks-xy">
+            {(() => {
+              const CONTRACT_ORDER = ['THREE', 'TWO', 'ONE', 'SOLO_THREE', 'SOLO_TWO', 'SOLO_ONE', 'SOLO', 'BERAC', 'BARVNI_VALAT'];
+              // Collect all contracts across all players
+              const allContracts = new Set<string>();
+              players.forEach(p => {
+                if (p.taroks_per_contract) Object.keys(p.taroks_per_contract).forEach(c => allContracts.add(c));
+              });
+              if (taroksPerContract) Object.keys(taroksPerContract).forEach(c => allContracts.add(c));
+              const contractNames = Array.from(allContracts)
+                .filter(c => c !== 'KLOP')
+                .sort((a, b) => {
+                  const ai = CONTRACT_ORDER.indexOf(a);
+                  const bi = CONTRACT_ORDER.indexOf(b);
+                  return (ai === -1 ? 99 : ai) - (bi === -1 ? 99 : bi);
+                });
+              if (contractNames.length === 0) return null;
+
+              // SVG chart dimensions
+              const W = 600, H = 300, PAD_L = 50, PAD_R = 20, PAD_T = 20, PAD_B = 60;
+              const plotW = W - PAD_L - PAD_R;
+              const plotH = H - PAD_T - PAD_B;
+
+              // Compute max Y
+              let maxY = 0;
+              players.forEach(p => {
+                if (p.taroks_per_contract) {
+                  Object.values(p.taroks_per_contract).forEach(v => { if (v > maxY) maxY = v; });
+                }
+              });
+              if (taroksPerContract) {
+                Object.values(taroksPerContract).forEach(v => { if (v > maxY) maxY = v; });
+              }
+              maxY = Math.ceil(maxY + 1);
+
+              const xScale = (i: number) => PAD_L + (i / (contractNames.length - 1 || 1)) * plotW;
+              const yScale = (v: number) => PAD_T + plotH - (v / maxY) * plotH;
+
+              return (
+                <svg viewBox={`0 0 ${W} ${H}`} className="arena-taroks-svg">
+                  {/* Y axis gridlines */}
+                  {Array.from({ length: Math.min(maxY + 1, 13) }, (_, i) => i).map(tick => (
+                    <g key={tick}>
+                      <line x1={PAD_L} y1={yScale(tick)} x2={W - PAD_R} y2={yScale(tick)} stroke="#333" strokeWidth={0.5} strokeDasharray={tick === 0 ? '' : '3,3'} />
+                      <text x={PAD_L - 8} y={yScale(tick) + 4} textAnchor="end" fontSize={10} fill="#aaa">{tick}</text>
+                    </g>
+                  ))}
+                  {/* X axis labels */}
+                  {contractNames.map((c, i) => (
+                    <text key={c} x={xScale(i)} y={H - PAD_B + 20} textAnchor="middle" fontSize={9} fill="#aaa" transform={`rotate(-30, ${xScale(i)}, ${H - PAD_B + 20})`}>
+                      {formatContractName(c)}
+                    </text>
+                  ))}
+                  {/* Pooled average (dashed) */}
+                  {taroksPerContract && (() => {
+                    const pts = contractNames
+                      .map((c, i) => taroksPerContract[c] != null ? `${xScale(i)},${yScale(taroksPerContract[c])}` : null)
+                      .filter(Boolean);
+                    return pts.length > 1 ? (
+                      <polyline points={pts.join(' ')} fill="none" stroke="#888" strokeWidth={1.5} strokeDasharray="5,4" />
+                    ) : null;
+                  })()}
+                  {/* Per-player lines */}
+                  {players.map((p, pi) => {
+                    if (!p.taroks_per_contract) return null;
+                    const pts = contractNames.map((c, i) => {
+                      const v = p.taroks_per_contract?.[c];
+                      return v != null ? { x: xScale(i), y: yScale(v), v } : null;
+                    });
+                    const validPts = pts.filter(Boolean) as { x: number; y: number; v: number }[];
+                    if (validPts.length === 0) return null;
+                    return (
+                      <g key={pi}>
+                        <polyline
+                          points={validPts.map(p => `${p.x},${p.y}`).join(' ')}
+                          fill="none"
+                          stroke={PLAYER_COLORS[pi]}
+                          strokeWidth={2}
+                        />
+                        {validPts.map((pt, j) => (
+                          <circle key={j} cx={pt.x} cy={pt.y} r={3.5} fill={PLAYER_COLORS[pi]}>
+                            <title>{p.name}: {pt.v.toFixed(2)}</title>
+                          </circle>
+                        ))}
+                      </g>
+                    );
+                  })}
+                </svg>
+              );
+            })()}
+            {/* Legend */}
+            <div className="arena-taroks-legend">
+              {players.map((p, i) => (
+                <span key={i} className="arena-taroks-legend-item">
+                  <span className="arena-dot" style={{ background: PLAYER_COLORS[i] }} />{p.name}
+                </span>
+              ))}
+              <span className="arena-taroks-legend-item">
+                <span className="arena-dot" style={{ background: '#888', borderStyle: 'dashed' }} />Pooled avg
+              </span>
+            </div>
+          </div>
+        </>
+      )}
+      {/* Fallback: pooled bar chart if no per-player data */}
+      {!players.some(p => p.taroks_per_contract && Object.keys(p.taroks_per_contract).length > 0) &&
+       taroksPerContract && Object.keys(taroksPerContract).length > 0 && (
+        <>
+          <h3>Avg Taroks in Declarer&apos;s Hand by Contract</h3>
+          <div className="arena-taroks-chart">
+            {(() => {
+              const CONTRACT_ORDER = ['KLOP', 'THREE', 'TWO', 'ONE', 'SOLO_THREE', 'SOLO_TWO', 'SOLO_ONE', 'SOLO', 'BERAC', 'BARVNI_VALAT'];
+              const entries = Object.entries(taroksPerContract)
+                .sort((a, b) => {
+                  const ai = CONTRACT_ORDER.indexOf(a[0]);
+                  const bi = CONTRACT_ORDER.indexOf(b[0]);
+                  return (ai === -1 ? 99 : ai) - (bi === -1 ? 99 : bi);
+                });
+              const maxTaroks = Math.max(...entries.map(([, v]) => v), 1);
+              return entries.map(([name, avg]) => (
+                <div key={name} className="arena-taroks-row">
+                  <span className="arena-taroks-label">{formatContractName(name)}</span>
+                  <div className="arena-bar-track">
+                    <div className="arena-bar-fill taroks-bar" style={{ width: `${(avg / maxTaroks) * 100}%` }} />
+                  </div>
+                  <span className="arena-taroks-value">{avg.toFixed(2)}</span>
+                </div>
+              ));
+            })()}
+          </div>
+        </>
+      )}
     </div>
   );
 }

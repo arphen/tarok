@@ -841,9 +841,19 @@ fn run_self_play(
     let mut all_players = Vec::with_capacity(total_exp);
     let mut all_masks: Vec<Vec<f32>> = Vec::with_capacity(total_exp);
     let mut all_scores: Vec<[i32; 4]> = Vec::with_capacity(total_games);
+    let mut all_contracts: Vec<u8> = Vec::with_capacity(total_games);
+    let mut all_declarers: Vec<i8> = Vec::with_capacity(total_games);
+    let mut all_partners: Vec<i8> = Vec::with_capacity(total_games);
+    let mut all_bid_contracts: Vec<[i8; 4]> = Vec::with_capacity(total_games);
+    let mut all_taroks_in_hand: Vec<[u8; 4]> = Vec::with_capacity(total_games);
 
     for result in &results {
         all_scores.push(result.scores);
+        all_contracts.push(result.contract);
+        all_declarers.push(result.declarer);
+        all_partners.push(result.partner);
+        all_bid_contracts.push(result.bid_contracts);
+        all_taroks_in_hand.push(result.taroks_in_hand);
 
         for exp in &result.experiences {
             all_states.extend_from_slice(&exp.state);
@@ -883,6 +893,21 @@ fn run_self_play(
         .reshape([total_games, 4])
         .map_err(|e| pyo3::exceptions::PyValueError::new_err(format!("scores: {e}")))?;
     dict.set_item("scores", scores_arr)?;
+
+    // Arena metadata arrays
+    dict.set_item("contracts", numpy::PyArray1::<u8>::from_vec(py, all_contracts))?;
+    dict.set_item("declarers", numpy::PyArray1::<i8>::from_vec(py, all_declarers))?;
+    dict.set_item("partners", numpy::PyArray1::<i8>::from_vec(py, all_partners))?;
+    let flat_bid_contracts: Vec<i8> = all_bid_contracts.iter().flat_map(|b| b.iter().copied()).collect();
+    let bid_contracts_arr = PyArray1::<i8>::from_vec(py, flat_bid_contracts)
+        .reshape([total_games, 4])
+        .map_err(|e| pyo3::exceptions::PyValueError::new_err(format!("bid_contracts: {e}")))?;
+    dict.set_item("bid_contracts", bid_contracts_arr)?;
+    let flat_taroks: Vec<u8> = all_taroks_in_hand.iter().flat_map(|t| t.iter().copied()).collect();
+    let taroks_arr = PyArray1::<u8>::from_vec(py, flat_taroks)
+        .reshape([total_games, 4])
+        .map_err(|e| pyo3::exceptions::PyValueError::new_err(format!("taroks_in_hand: {e}")))?;
+    dict.set_item("taroks_in_hand", taroks_arr)?;
 
     dict.set_item("n_games", total_games)?;
     dict.set_item("n_experiences", total_exp)?;

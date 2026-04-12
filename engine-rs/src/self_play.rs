@@ -51,6 +51,9 @@ struct InFlightGame {
     trick_offset: u8,
     lead_player: u8,
     step_counter: u16,
+    // Arena metadata
+    initial_taroks: [u8; 4],
+    bid_choices: [i8; 4],
 }
 
 /// Internal tracking for a pending decision.
@@ -82,6 +85,12 @@ pub struct GameResult {
     pub game_id: u32,
     pub scores: [i32; 4],
     pub experiences: Vec<RawExperience>,
+    // Arena metadata
+    pub contract: u8,
+    pub declarer: i8,
+    pub partner: i8,
+    pub bid_contracts: [i8; 4],
+    pub taroks_in_hand: [u8; 4],
 }
 
 // -----------------------------------------------------------------------
@@ -151,14 +160,9 @@ impl SelfPlayRunner {
                             break;
                         }
                         None if game.phase == GamePhase::Done => {
-                            let scores = Self::score_game(&game.gs);
                             let gid = game.game_id as usize;
                             let exps = std::mem::take(&mut game_exps[gid]);
-                            results.push(GameResult {
-                                game_id: game.game_id,
-                                scores,
-                                experiences: exps,
-                            });
+                            results.push(Self::build_result(game, exps));
                             if next_game < n_games {
                                 *game = Self::new_game(next_game, &mut rng);
                                 game_exps.push(Vec::new());
@@ -250,14 +254,9 @@ impl SelfPlayRunner {
                     Some(g) if g.phase == GamePhase::Done => g,
                     _ => continue,
                 };
-                let scores = Self::score_game(&game.gs);
                 let gid = game.game_id as usize;
                 let exps = std::mem::take(&mut game_exps[gid]);
-                results.push(GameResult {
-                    game_id: game.game_id,
-                    scores,
-                    experiences: exps,
-                });
+                results.push(Self::build_result(game, exps));
                 if next_game < n_games {
                     *game = Self::new_game(next_game, &mut rng);
                     game_exps.push(Vec::new());
@@ -281,6 +280,10 @@ impl SelfPlayRunner {
         let mut gs = GameState::new(dealer);
         gs.deal(rng);
         let first = (dealer + 1) % 4;
+        let mut initial_taroks = [0u8; 4];
+        for (pid, hand) in gs.hands.iter().enumerate() {
+            initial_taroks[pid] = hand.tarok_count();
+        }
         InFlightGame {
             gs,
             dealer,
@@ -295,11 +298,30 @@ impl SelfPlayRunner {
             trick_offset: 0,
             lead_player: first,
             step_counter: 0,
+            initial_taroks,
+            bid_choices: [-1i8; 4],
         }
     }
 
     fn score_game(gs: &GameState) -> [i32; 4] {
         scoring::score_game(gs)
+    }
+
+    fn build_result(game: &InFlightGame, exps: Vec<RawExperience>) -> GameResult {
+        let scores = Self::score_game(&game.gs);
+        let contract = game.gs.contract.map(|c| c as u8).unwrap_or(0);
+        let declarer = game.gs.declarer.map(|d| d as i8).unwrap_or(-1);
+        let partner = game.gs.partner.map(|p| p as i8).unwrap_or(-1);
+        GameResult {
+            game_id: game.game_id,
+            scores,
+            experiences: exps,
+            contract,
+            declarer,
+            partner,
+            bid_contracts: game.bid_choices,
+            taroks_in_hand: game.initial_taroks,
+        }
     }
 
     // ------------------------------------------------------------------
@@ -378,6 +400,7 @@ impl SelfPlayRunner {
                     game.gs.add_bid(bidder, Some(c));
                     game.highest_bid = Some(c);
                     game.winning_bidder = Some(bidder);
+                    game.bid_choices[bidder as usize] = c as i8;
                 } else {
                     game.passed[bidder as usize] = true;
                     game.gs.add_bid(bidder, None);

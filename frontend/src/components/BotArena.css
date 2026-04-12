@@ -421,3 +421,102 @@ td.negative {
   text-align: center;
   padding: 40px;
 }
+
+/* Placement Distribution */
+.arena-placement-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+  gap: 16px;
+  margin-bottom: 24px;
+}
+.arena-placement-card {
+  border: 2px solid #444;
+  border-radius: 8px;
+  padding: 12px 16px;
+  background: #1a1a2e;
+}
+.arena-placement-card h4 {
+  margin: 0 0 10px 0;
+  font-size: 14px;
+}
+.arena-placement-total {
+  font-weight: 400;
+  font-size: 12px;
+  opacity: 0.7;
+}
+.arena-placement-bars {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.arena-placement-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.arena-placement-label {
+  width: 28px;
+  font-size: 12px;
+  color: #aaa;
+  text-align: right;
+  flex-shrink: 0;
+}
+.arena-placement-value {
+  font-size: 11px;
+  color: #ccc;
+  min-width: 100px;
+  flex-shrink: 0;
+}
+
+/* Taroks per Contract chart */
+.arena-taroks-chart {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  max-width: 600px;
+}
+.arena-taroks-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+.arena-taroks-label {
+  width: 100px;
+  font-size: 12px;
+  color: #aaa;
+  text-align: right;
+  flex-shrink: 0;
+}
+.arena-taroks-value {
+  font-size: 12px;
+  color: #ccc;
+  min-width: 40px;
+  flex-shrink: 0;
+}
+.arena-bar-fill.taroks-bar {
+  background: #9b59b6;
+}
+
+/* Per-player taroks XY chart */
+.arena-taroks-xy {
+  max-width: 650px;
+}
+.arena-taroks-svg {
+  width: 100%;
+  height: auto;
+  background: #111;
+  border-radius: 8px;
+}
+.arena-taroks-legend {
+  display: flex;
+  gap: 16px;
+  flex-wrap: wrap;
+  margin-top: 8px;
+  font-size: 12px;
+  color: #bbb;
+}
+.arena-taroks-legend-item {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+}

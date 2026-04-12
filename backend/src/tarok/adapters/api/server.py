@@ -1839,8 +1839,10 @@ async def start_arena(req: ArenaRequest):
                 "best_game_idx": None,
                 "worst_game_idx": None,
                 "score_history": [],
+                "taroks_per_contract": {},  # contract_name -> {total_taroks, count}
             })
         contract_stats: dict = {}
+        taroks_per_contract: dict = {}  # contract_name -> {total_taroks, count}
         games_done = 0
         session_scores = [0, 0, 0, 0]
         games_in_session = 0
@@ -1907,6 +1909,118 @@ async def start_arena(req: ArenaRequest):
         # Batch size: smaller for NN (memory), larger for pure bots
         batch_size = min(2_000 if has_nn else 10_000, total)
 
+        def _process_batch_analytics(scores, contracts, declarers, partners, bid_contracts, taroks_in_hand, n_batch):
+            """Shared analytics processing for both NN and pure-bot paths."""
+            _accumulate_scores(scores, n_batch)
+
+            # Taroks in hand
+            if taroks_in_hand is not None:
+                for pid in range(4):
+                    player_stats[pid]["taroks_in_hand_total"] += int(taroks_in_hand[:, pid].sum())
+                    player_stats[pid]["taroks_in_hand_count"] += n_batch
+
+            # Taroks per contract (declarer's taroks for each contract type)
+            if taroks_in_hand is not None and declarers is not None and contracts is not None:
+                non_klop = declarers >= 0
+                if non_klop.any():
+                    nk_idx = np.where(non_klop)[0]
+                    nk_decl = declarers[nk_idx]
+                    nk_contracts = contracts[nk_idx]
+                    nk_taroks = taroks_in_hand[nk_idx, nk_decl]
+                    for cu8 in np.unique(nk_contracts):
+                        cname = _ARENA_CONTRACT_NAMES[int(cu8)] if int(cu8) < len(_ARENA_CONTRACT_NAMES) else "UNKNOWN"
+                        c_mask = nk_contracts == cu8
+                        if cname not in taroks_per_contract:
+                            taroks_per_contract[cname] = {"total_taroks": 0, "count": 0}
+                        taroks_per_contract[cname]["total_taroks"] += int(nk_taroks[c_mask].sum())
+                        taroks_per_contract[cname]["count"] += int(c_mask.sum())
+
+                    # Per-player taroks per contract
+                    for pid in range(4):
+                        pid_mask = nk_decl == pid
+                        if not pid_mask.any():
+                            continue
+                        pid_contracts = nk_contracts[pid_mask]
+                        pid_taroks = nk_taroks[pid_mask]
+                        ptpc = player_stats[pid]["taroks_per_contract"]
+                        for cu8 in np.unique(pid_contracts):
+                            cname = _ARENA_CONTRACT_NAMES[int(cu8)] if int(cu8) < len(_ARENA_CONTRACT_NAMES) else "UNKNOWN"
+                            c_mask = pid_contracts == cu8
+                            if cname not in ptpc:
+                                ptpc[cname] = {"total_taroks": 0, "count": 0}
+                            ptpc[cname]["total_taroks"] += int(pid_taroks[c_mask].sum())
+                            ptpc[cname]["count"] += int(c_mask.sum())
+
+            # Bid tracking
+            if bid_contracts is not None:
+                for pid in range(4):
+                    bids_col = bid_contracts[:, pid]
+                    valid_mask = bids_col >= 0
+                    if valid_mask.any():
+                        unique, counts = np.unique(bids_col[valid_mask], return_counts=True)
+                        bids = player_stats[pid]["bids_made"]
+                        for b, c in zip(unique, counts):
+                            bname = _ARENA_CONTRACT_NAMES[int(b)] if int(b) < len(_ARENA_CONTRACT_NAMES) else f"CONTRACT_{b}"
+                            bids[bname] = bids.get(bname, 0) + int(c)
+
+            # Contract play counts
+            unique_contracts, contract_counts = np.unique(contracts, return_counts=True)
+            for cu8, cnt in zip(unique_contracts, contract_counts):
+                cname = _ARENA_CONTRACT_NAMES[int(cu8)] if int(cu8) < len(_ARENA_CONTRACT_NAMES) else "UNKNOWN"
+                if cname not in contract_stats:
+                    contract_stats[cname] = {"played": 0, "decl_won": 0, "total_decl_score": 0, "total_def_score": 0}
+                contract_stats[cname]["played"] += int(cnt)
+
+            # Declarer/defender stats for non-Klop games
+            non_klop_mask = declarers >= 0
+            if non_klop_mask.any():
+                nk_idx = np.where(non_klop_mask)[0]
+                nk_decl = declarers[nk_idx]
+                nk_part = partners[nk_idx]
+                nk_scores = scores[nk_idx]
+                nk_contracts = contracts[nk_idx]
+
+                decl_scores_arr = nk_scores[np.arange(len(nk_idx)), nk_decl]
+                decl_won_mask = decl_scores_arr > 0
+
+                has_partner = nk_part >= 0
+                partner_scores_arr = np.zeros(len(nk_idx), dtype=np.int32)
+                if has_partner.any():
+                    hp_idx = np.where(has_partner)[0]
+                    partner_scores_arr[hp_idx] = nk_scores[hp_idx, nk_part[hp_idx]]
+
+                def_total_arr = nk_scores.sum(axis=1) - decl_scores_arr - partner_scores_arr
+
+                for pid in range(4):
+                    ps = player_stats[pid]
+                    is_decl = nk_decl == pid
+                    ps["bid_won_count"] += int(is_decl.sum())
+
+                    d_won = is_decl & decl_won_mask
+                    d_lost = is_decl & ~decl_won_mask
+                    ps["declared_win_games"] += int(d_won.sum())
+                    ps["declared_win_score_total"] += int(decl_scores_arr[d_won].sum()) if d_won.any() else 0
+                    ps["declared_loss_games"] += int(d_lost.sum())
+                    ps["declared_loss_score_total"] += int(decl_scores_arr[d_lost].sum()) if d_lost.any() else 0
+
+                    ps["times_called"] += int((nk_part == pid).sum())
+
+                    in_team = is_decl | (nk_part == pid)
+                    ps["declared_count"] += int(in_team.sum())
+                    ps["declared_won"] += int((in_team & decl_won_mask).sum())
+                    is_def = ~in_team
+                    ps["defended_count"] += int(is_def.sum())
+                    ps["defended_won"] += int((is_def & ~decl_won_mask).sum())
+
+                for cu8 in np.unique(nk_contracts):
+                    cname = _ARENA_CONTRACT_NAMES[int(cu8)] if int(cu8) < len(_ARENA_CONTRACT_NAMES) else "UNKNOWN"
+                    cs = contract_stats[cname]
+                    c_mask = nk_contracts == cu8
+                    c_decl = decl_scores_arr[c_mask]
+                    cs["decl_won"] += int((c_decl > 0).sum())
+                    cs["total_decl_score"] += int(c_decl.sum())
+                    cs["total_def_score"] += int(def_total_arr[c_mask].sum())
+
         try:
             while games_done < total:
                 n_batch = min(batch_size, total - games_done)
@@ -1923,9 +2037,6 @@ async def start_arena(req: ArenaRequest):
                             seat_config=seat_config,
                         ),
                     )
-                    scores = np.asarray(result["scores"])  # (n_batch, 4) int32
-                    _accumulate_scores(scores, n_batch)
-                    # No contract/declarer/bid data from self-play
                 else:
                     # ---- Pure bot path: Rust arena with full analytics ----
                     result = await asyncio.get_event_loop().run_in_executor(
@@ -1935,90 +2046,15 @@ async def start_arena(req: ArenaRequest):
                             seat_config=seat_config,
                         ),
                     )
-                    scores = np.asarray(result["scores"])
-                    contracts = np.asarray(result["contracts"])
-                    declarers = np.asarray(result["declarers"])
-                    partners = np.asarray(result["partners"])
-                    bid_contracts = np.asarray(result["bid_contracts"]) if "bid_contracts" in result else None
-                    taroks_in_hand = np.asarray(result["taroks_in_hand"]) if "taroks_in_hand" in result else None
 
-                    _accumulate_scores(scores, n_batch)
+                scores = np.asarray(result["scores"])
+                contracts = np.asarray(result["contracts"])
+                declarers = np.asarray(result["declarers"])
+                partners = np.asarray(result["partners"])
+                bid_contracts = np.asarray(result["bid_contracts"]) if "bid_contracts" in result else None
+                taroks_in_hand = np.asarray(result["taroks_in_hand"]) if "taroks_in_hand" in result else None
 
-                    # Taroks in hand
-                    if taroks_in_hand is not None:
-                        for pid in range(4):
-                            player_stats[pid]["taroks_in_hand_total"] += int(taroks_in_hand[:, pid].sum())
-                            player_stats[pid]["taroks_in_hand_count"] += n_batch
-
-                    # Bid tracking
-                    if bid_contracts is not None:
-                        for pid in range(4):
-                            bids_col = bid_contracts[:, pid]
-                            valid_mask = bids_col >= 0
-                            if valid_mask.any():
-                                unique, counts = np.unique(bids_col[valid_mask], return_counts=True)
-                                bids = player_stats[pid]["bids_made"]
-                                for b, c in zip(unique, counts):
-                                    bname = _ARENA_CONTRACT_NAMES[int(b)] if int(b) < len(_ARENA_CONTRACT_NAMES) else f"CONTRACT_{b}"
-                                    bids[bname] = bids.get(bname, 0) + int(c)
-
-                    # Contract play counts
-                    unique_contracts, contract_counts = np.unique(contracts, return_counts=True)
-                    for cu8, cnt in zip(unique_contracts, contract_counts):
-                        cname = _ARENA_CONTRACT_NAMES[int(cu8)] if int(cu8) < len(_ARENA_CONTRACT_NAMES) else "UNKNOWN"
-                        if cname not in contract_stats:
-                            contract_stats[cname] = {"played": 0, "decl_won": 0, "total_decl_score": 0, "total_def_score": 0}
-                        contract_stats[cname]["played"] += int(cnt)
-
-                    # Declarer/defender stats for non-Klop games
-                    non_klop_mask = declarers >= 0
-                    if non_klop_mask.any():
-                        nk_idx = np.where(non_klop_mask)[0]
-                        nk_decl = declarers[nk_idx]
-                        nk_part = partners[nk_idx]
-                        nk_scores = scores[nk_idx]
-                        nk_contracts = contracts[nk_idx]
-
-                        decl_scores_arr = nk_scores[np.arange(len(nk_idx)), nk_decl]
-                        decl_won_mask = decl_scores_arr > 0
-
-                        has_partner = nk_part >= 0
-                        partner_scores_arr = np.zeros(len(nk_idx), dtype=np.int32)
-                        if has_partner.any():
-                            hp_idx = np.where(has_partner)[0]
-                            partner_scores_arr[hp_idx] = nk_scores[hp_idx, nk_part[hp_idx]]
-
-                        def_total_arr = nk_scores.sum(axis=1) - decl_scores_arr - partner_scores_arr
-
-                        for pid in range(4):
-                            ps = player_stats[pid]
-                            is_decl = nk_decl == pid
-                            ps["bid_won_count"] += int(is_decl.sum())
-
-                            d_won = is_decl & decl_won_mask
-                            d_lost = is_decl & ~decl_won_mask
-                            ps["declared_win_games"] += int(d_won.sum())
-                            ps["declared_win_score_total"] += int(decl_scores_arr[d_won].sum()) if d_won.any() else 0
-                            ps["declared_loss_games"] += int(d_lost.sum())
-                            ps["declared_loss_score_total"] += int(decl_scores_arr[d_lost].sum()) if d_lost.any() else 0
-
-                            ps["times_called"] += int((nk_part == pid).sum())
-
-                            in_team = is_decl | (nk_part == pid)
-                            ps["declared_count"] += int(in_team.sum())
-                            ps["declared_won"] += int((in_team & decl_won_mask).sum())
-                            is_def = ~in_team
-                            ps["defended_count"] += int(is_def.sum())
-                            ps["defended_won"] += int((is_def & ~decl_won_mask).sum())
-
-                        for cu8 in np.unique(nk_contracts):
-                            cname = _ARENA_CONTRACT_NAMES[int(cu8)] if int(cu8) < len(_ARENA_CONTRACT_NAMES) else "UNKNOWN"
-                            cs = contract_stats[cname]
-                            c_mask = nk_contracts == cu8
-                            c_decl = decl_scores_arr[c_mask]
-                            cs["decl_won"] += int((c_decl > 0).sum())
-                            cs["total_decl_score"] += int(c_decl.sum())
-                            cs["total_def_score"] += int(def_total_arr[c_mask].sum())
+                _process_batch_analytics(scores, contracts, declarers, partners, bid_contracts, taroks_in_hand, n_batch)
 
                 games_done += n_batch
                 # Flush last partial session
@@ -2026,7 +2062,7 @@ async def start_arena(req: ArenaRequest):
                     for pid in range(4):
                         player_stats[pid]["score_history"].append(session_scores[pid])
 
-                analytics = _build_arena_analytics(player_stats, contract_stats, games_done, total)
+                analytics = _build_arena_analytics(player_stats, contract_stats, taroks_per_contract, games_done, total)
                 _arena_progress = {
                     "status": "running",
                     "games_done": games_done,
@@ -2038,13 +2074,13 @@ async def start_arena(req: ArenaRequest):
         except asyncio.CancelledError:
             log.info("Arena cancelled at game %d/%d", games_done, total)
             _arena_progress["status"] = "cancelled"
-            _arena_progress["analytics"] = _build_arena_analytics(player_stats, contract_stats, games_done, total)
+            _arena_progress["analytics"] = _build_arena_analytics(player_stats, contract_stats, taroks_per_contract, games_done, total)
             _persist_arena_run(req.agents[:4], total, session_size, _arena_progress)
             return
         except Exception:
             log.exception("Arena failed at game %d/%d", games_done, total)
             _arena_progress["status"] = "error"
-            _arena_progress["analytics"] = _build_arena_analytics(player_stats, contract_stats, games_done, total)
+            _arena_progress["analytics"] = _build_arena_analytics(player_stats, contract_stats, taroks_per_contract, games_done, total)
             _persist_arena_run(req.agents[:4], total, session_size, _arena_progress)
             return
         finally:
@@ -2059,7 +2095,7 @@ async def start_arena(req: ArenaRequest):
             "status": "done",
             "games_done": games_done,
             "total_games": total,
-            "analytics": _build_arena_analytics(player_stats, contract_stats, games_done, total),
+            "analytics": _build_arena_analytics(player_stats, contract_stats, taroks_per_contract, games_done, total),
         }
         _persist_arena_run(req.agents[:4], total, session_size, _arena_progress)
 
@@ -2067,7 +2103,7 @@ async def start_arena(req: ArenaRequest):
     return {"status": "started", "total_games": total, "session_size": session_size}
 
 
-def _build_arena_analytics(player_stats, contract_stats, games_done, total_games):
+def _build_arena_analytics(player_stats, contract_stats, taroks_per_contract, games_done, total_games):
     """Build the analytics payload from accumulated stats."""
     players = []
     for ps in player_stats:
@@ -2101,6 +2137,10 @@ def _build_arena_analytics(player_stats, contract_stats, games_done, total_games
             "avg_win_score": round(ps["positive_score_total"] / max(ps["positive_games"], 1), 2),
             "avg_loss_score": round(ps["negative_score_total"] / max(ps["negative_game_count"], 1), 2),
             "score_history": ps["score_history"],
+            "taroks_per_contract": {
+                name: round(tc["total_taroks"] / max(tc["count"], 1), 2)
+                for name, tc in ps["taroks_per_contract"].items()
+            },
         })
 
     contracts = {}
@@ -2113,11 +2153,17 @@ def _build_arena_analytics(player_stats, contract_stats, games_done, total_games
             "avg_def_score": round(cs["total_def_score"] / played, 2),
         }
 
+    tpc = {}
+    for name, tc in taroks_per_contract.items():
+        cnt = max(tc["count"], 1)
+        tpc[name] = round(tc["total_taroks"] / cnt, 2)
+
     return {
         "games_done": games_done,
         "total_games": total_games,
         "players": players,
         "contracts": contracts,
+        "taroks_per_contract": tpc,
     }
 
 
