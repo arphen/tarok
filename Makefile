@@ -140,11 +140,11 @@ train-bred:
 
 # Build the Rust engine (required before training)
 build-engine:
-	cd backend && uv run --default-index https://pypi.org/simple maturin develop --release --manifest-path ../engine-rs/Cargo.toml
+	cd backend && LIBTORCH_USE_PYTORCH=1 uv run --default-index https://pypi.org/simple maturin develop --release --manifest-path ../engine-rs/Cargo.toml
 
 # Auto-install Rust + build engine if the .so is missing
 ensure-engine:
-	@if cd backend && uv run --default-index https://pypi.org/simple python -c 'import tarok_engine' 2>/dev/null; then \
+	@if (cd backend && uv run --default-index https://pypi.org/simple python -c 'import tarok_engine') 2>/dev/null; then \
 		echo "✅  Rust engine already installed."; \
 	else \
 		echo "==> Rust engine not found, building…"; \

@@ -78,6 +78,30 @@ def _random_slovenian_name() -> str:
     return f"{random.choice(_SL_FIRST)}_{random.choice(_SL_LAST)}"
 
 
+def _name_from_checkpoint(path: str) -> str | None:
+    """Extract a human-readable model name from a checkpoint path.
+
+    Examples:
+        checkpoints/Brigita_Kranjc/best.pt          → Brigita_Kranjc
+        checkpoints/Brigita_Kranjc/iter_008.pt      → Brigita_Kranjc
+        hof_Katja_Vidmar_age59_014692c0.pt          → Katja_Vidmar
+        backend/checkpoints/tarok_agent_latest.pt   → None (generic)
+        checkpoints/training_run/best.pt            → None (generic)
+    """
+    p = Path(path)
+    # Try parent directory name first (checkpoints/<Name>/best.pt)
+    parent = p.parent.name
+    if parent and parent not in ("checkpoints", "training_run", "pinned", "hall_of_fame", "."):
+        return parent
+    # Try HoF naming: hof_FirstName_LastName_age123_hash.pt
+    stem = p.stem
+    import re
+    m = re.match(r"hof_([A-Z]\w+_[A-Z][a-z]+)", stem)
+    if m:
+        return m.group(1)
+    return None
+
+
 # ── Helpers ─────────────────────────────────────────────────────────
 
 def _format_time(seconds: float) -> str:
@@ -306,6 +330,9 @@ Examples:
         args.bench_seats = args.seats
 
     # ── Load or create model ─────────────────────────────────────────
+    # Track whether user explicitly set --save-dir
+    _user_set_save_dir = args.save_dir != "checkpoints/training_run"
+
     if args.new:
         name = _random_slovenian_name()
         hidden_size = 256
@@ -313,15 +340,25 @@ Examples:
         print(f"Creating new model: {name}  (hidden={hidden_size}, oracle={oracle})")
         sd = None
         # Override save_dir to include the model name
-        args.save_dir = f"checkpoints/{name}"
+        if not _user_set_save_dir:
+            args.save_dir = f"checkpoints/{name}"
     else:
-        name = None
+        name = _name_from_checkpoint(args.checkpoint)
         print(f"Loading checkpoint: {args.checkpoint}")
         cp = torch.load(args.checkpoint, map_location="cpu", weights_only=False)
         sd = cp.get("model_state_dict", cp)
         hidden_size = sd["shared.0.weight"].shape[0]
         oracle = any(k.startswith("critic_backbone") for k in sd)
         print(f"  hidden_size={hidden_size}, oracle={oracle}")
+        # Use a named directory instead of generic "training_run"
+        if not _user_set_save_dir:
+            if name:
+                args.save_dir = f"checkpoints/{name}"
+            else:
+                # Generic checkpoint — give it a fresh random name
+                name = _random_slovenian_name()
+                args.save_dir = f"checkpoints/{name}"
+                print(f"  Training as: {name}")
 
     save_dir = Path(args.save_dir)
     save_dir.mkdir(parents=True, exist_ok=True)
@@ -336,7 +373,7 @@ Examples:
     model.eval()
     _export_torchscript(model, ts_path)
 
-    if name:
+    if name and args.new:
         print(f"  Model '{name}' initialized with random weights")
         print(f"  Checkpoints → {save_dir}/")
 
