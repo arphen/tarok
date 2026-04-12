@@ -525,6 +525,69 @@ Examples:
     print(f"  Avg iteration time:  {_format_time(sum(iter_times) / len(iter_times))}")
     print(f"  Checkpoints saved in {save_dir}/")
 
+    # ── Continuation prompts ────────────────────────────────────────
+    best_pt = save_dir / "best.pt"
+    last_pt = save_dir / f"iter_{args.iterations:03d}.pt"
+    model_pt = str(best_pt if best_pt.exists() else last_pt)
+
+    # Detect current config name from args
+    config_name = ""
+    if args.config:
+        config_name = Path(args.config).stem  # e.g. "vs-3-bots"
+
+    print()
+    print(f"{'=' * 70}")
+    print(f" WHAT NEXT?")
+    print(f"{'=' * 70}")
+    print()
+
+    # Option 1: Keep training with same config
+    more_iters = args.iterations * 2
+    cmd1 = f"make train-iterate MODEL={model_pt}"
+    if config_name and config_name != "vs-3-bots":
+        cmd1 += f" CONFIG={config_name}"
+    cmd1 += f' EXTRA="--iterations {more_iters}"'
+    print(f"  [1] Keep training ({more_iters} more iterations, same config):")
+    print(f"      {cmd1}")
+    print()
+
+    # Option 2: Train against harder opponents
+    if config_name in ("vs-3-bots", ""):
+        next_config = "vs-3-v6"
+        next_desc = "harder v6 bots"
+    elif config_name == "vs-3-v6":
+        next_config = "self-play"
+        next_desc = "pure self-play (no bots)"
+    elif config_name in ("vs-2-bots", "vs-1-bot"):
+        next_config = "self-play"
+        next_desc = "pure self-play (no bots)"
+    else:
+        next_config = "vs-3-v6"
+        next_desc = "harder v6 bots"
+    print(f"  [2] Escalate to {next_desc}:")
+    print(f"      make train-iterate MODEL={model_pt} CONFIG={next_config}")
+    print()
+
+    # Option 3: Lower LR for fine-tuning
+    fine_lr = args.lr / 3
+    cmd3 = f"make train-iterate MODEL={model_pt}"
+    if config_name and config_name != "vs-3-bots":
+        cmd3 += f" CONFIG={config_name}"
+    cmd3 += f' EXTRA="--iterations {args.iterations} --lr {fine_lr:.1e}"'
+    print(f"  [3] Fine-tune with lower learning rate ({fine_lr:.1e}):")
+    print(f"      {cmd3}")
+    print()
+
+    # Option 4: Play against it
+    print(f"  [4] Play against this model in the browser:")
+    print(f"      cp {model_pt} backend/checkpoints/tarok_agent_latest.pt && make run")
+    print()
+
+    # Option 5: Train a new model from scratch
+    print(f"  [5] Train a brand-new model from scratch:")
+    print(f"      make train-new")
+    print()
+
 
 if __name__ == "__main__":
     main()
