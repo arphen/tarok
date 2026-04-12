@@ -1,6 +1,6 @@
 .PHONY: run backend frontend test train clean install test-e2e setup setup-hooks \
 	test-backend test-frontend test-frontend-unit test-coverage check-coverage test-lookahead \
-	pipeline imitation-pretrain generate-expert-data build-engine kill stop
+	pipeline imitation-pretrain generate-expert-data build-engine ensure-engine kill stop
 
 UV_RUN = cd backend && PYTHONPATH=src uv run --default-index https://pypi.org/simple
 
@@ -52,7 +52,7 @@ setup-hooks:
 # ──────────────────────────────────────────────
 # Run full stack (backend + frontend)
 # ──────────────────────────────────────────────
-run: backend frontend
+run: ensure-engine backend frontend
 
 backend:
 	cd backend && PYTHONPATH=src uv run --default-index https://pypi.org/simple uvicorn tarok.adapters.api.server:app --reload --host 0.0.0.0 --port 8000 &
@@ -142,6 +142,20 @@ train-bred:
 build-engine:
 	cd backend && uv run --default-index https://pypi.org/simple maturin develop --release --manifest-path ../engine-rs/Cargo.toml
 
+# Auto-install Rust + build engine if the .so is missing
+ensure-engine:
+	@if cd backend && uv run --default-index https://pypi.org/simple python -c 'import tarok_engine' 2>/dev/null; then \
+		echo "✅  Rust engine already installed."; \
+	else \
+		echo "==> Rust engine not found, building…"; \
+		if ! command -v rustc >/dev/null 2>&1; then \
+			echo "==> Installing Rust toolchain…"; \
+			curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y; \
+			. "$$HOME/.cargo/env"; \
+		fi; \
+		$(MAKE) build-engine; \
+	fi
+
 # Generate expert data from StockŠkis bots (standalone benchmark)
 generate-expert-data:
 	$(UV_RUN) python -m tarok generate-expert-data --games 1000000
@@ -163,6 +177,33 @@ pipeline-large:
 		--p1-games 5000000 \
 		--p2-sessions 500 --p2-games 100 \
 		--p3-sessions 1000 --p3-games 100
+
+# Train iteratively with progress bar + benchmark placement tracking
+#
+# Usage:
+#   make train-iterate                                          # default: vs-3-bots config
+#   make train-iterate CONFIG=self-play                         # full self-play, no bots
+#   make train-iterate CONFIG=vs-3-v6                           # vs stronger v6 bots
+#   make train-iterate CONFIG=vs-3-bots MODEL=path/to/model.pt  # custom checkpoint
+#
+# Available configs (training-lab/configs/):
+#   vs-3-bots   — NN vs 3 rule-based bots (easiest, default)
+#   vs-2-bots   — 2 NNs vs 2 bots
+#   vs-1-bot    — 3 NNs vs 1 bot
+#   self-play   — 4 NNs, no bots
+#   vs-3-v6     — NN vs 3 stronger v6 bots
+#
+# All settings live in the YAML file. CLI overrides still work:
+#   make train-iterate CONFIG=vs-3-bots EXTRA="--iterations 20 --games 5000"
+MODEL  ?= backend/checkpoints/tarok_agent_latest.pt
+CONFIG ?= vs-3-bots
+EXTRA  ?=
+train-iterate:
+	source backend/.venv/bin/activate && \
+		PYTHONPATH=training-lab/src:backend/src python training-lab/train_and_evaluate.py \
+		--config training-lab/configs/$(CONFIG).yaml \
+		--checkpoint $(MODEL) \
+		$(EXTRA)
 
 # ──────────────────────────────────────────────
 # Build
