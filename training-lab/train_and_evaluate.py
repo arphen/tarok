@@ -27,6 +27,8 @@ import yaml
 import hashlib
 import random
 
+import math
+
 import numpy as np
 import torch
 import torch.nn as nn
@@ -103,6 +105,21 @@ def _name_from_checkpoint(path: str) -> str | None:
 
 
 # ── Helpers ─────────────────────────────────────────────────────────
+
+def _scheduled_lr(
+    iteration: int, total_iterations: int,
+    lr_max: float, lr_min: float, schedule: str,
+) -> float:
+    """Compute learning rate for a given iteration."""
+    if schedule == "constant" or total_iterations <= 1:
+        return lr_max
+    frac = iteration / (total_iterations - 1)  # 0.0 → 1.0
+    if schedule == "linear":
+        return lr_max + (lr_min - lr_max) * frac
+    if schedule == "cosine":
+        return lr_min + 0.5 * (lr_max - lr_min) * (1 + math.cos(math.pi * frac))
+    return lr_max
+
 
 def _format_time(seconds: float) -> str:
     """Human-friendly elapsed / ETA string."""
@@ -302,6 +319,13 @@ Examples:
                         help="Directory to save iteration checkpoints")
     parser.add_argument("--concurrency", type=int, default=None,
                         help="Rust self-play concurrency (default: 128)")
+    parser.add_argument("--hidden-size", type=int, default=None,
+                        help="Hidden layer size for new models (default: 256)")
+    parser.add_argument("--lr-schedule", type=str, default="constant",
+                        choices=["constant", "cosine", "linear"],
+                        help="LR schedule across iterations: constant (default), cosine, or linear decay")
+    parser.add_argument("--lr-min", type=float, default=None,
+                        help="Minimum LR for cosine/linear schedules (default: lr / 10)")
     args = parser.parse_args()
 
     # Load YAML config if provided, then apply CLI overrides
@@ -335,7 +359,7 @@ Examples:
 
     if args.new:
         name = _random_slovenian_name()
-        hidden_size = 256
+        hidden_size = args.hidden_size or 256
         oracle = True
         print(f"Creating new model: {name}  (hidden={hidden_size}, oracle={oracle})")
         sd = None
@@ -377,6 +401,10 @@ Examples:
         print(f"  Model '{name}' initialized with random weights")
         print(f"  Checkpoints → {save_dir}/")
 
+    # Resolve lr_min default
+    if args.lr_min is None:
+        args.lr_min = args.lr / 10
+
     compute = create_compute(args.device)
     print(f"Training device: {compute.device}")
     print()
@@ -402,7 +430,10 @@ Examples:
     print(f"   {args.iterations} iterations × {args.games} games/iter")
     print(f"   train seats  = {args.seats}")
     print(f"   bench seats  = {args.bench_seats}")
-    print(f"   PPO: {args.ppo_epochs} epochs, batch_size={args.batch_size}, lr={args.lr}")
+    lr_info = f"lr={args.lr}"
+    if args.lr_schedule != "constant":
+        lr_info += f" → {args.lr_min} ({args.lr_schedule})"
+    print(f"   PPO: {args.ppo_epochs} epochs, batch_size={args.batch_size}, {lr_info}")
     print(f"   Benchmark: {args.bench_games} games per iteration (greedy)")
     print(f"{'=' * 70}")
     print()
@@ -440,7 +471,12 @@ Examples:
 
         # ── Step 2: PPO update ──────────────────────────────────────
         t0 = time.time()
-        print(f"  [2/3] PPO update ({args.ppo_epochs} epochs, batch={args.batch_size})...", end="", flush=True)
+        iter_lr = _scheduled_lr(
+            iteration - 1, args.iterations,
+            args.lr, args.lr_min, args.lr_schedule,
+        )
+        lr_tag = f", lr={iter_lr:.1e}" if args.lr_schedule != "constant" else ""
+        print(f"  [2/3] PPO update ({args.ppo_epochs} epochs, batch={args.batch_size}{lr_tag})...", end="", flush=True)
 
         exps_by_game = _raw_to_experiences(raw)
 
@@ -452,7 +488,7 @@ Examples:
             mini_batch_size=args.batch_size,
             hidden_size=hidden_size,
             oracle_critic=oracle,
-            learning_rate=args.lr,
+            learning_rate=iter_lr,
             device=str(compute.device),
         )
 

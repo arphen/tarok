@@ -209,7 +209,7 @@ async def test_checkpoints_includes_latest(tmp_path):
     _save_fake_checkpoint(d / "tarok_agent_latest.pt", episode=100, session=10, win_rate=0.55)
     _checkpoint_cache.clear()
 
-    entry = _load_checkpoint_meta(d / "tarok_agent_latest.pt", d, d / "breeding_results")
+    entry = _load_checkpoint_meta(d / "tarok_agent_latest.pt", d)
     assert entry["filename"] == "tarok_agent_latest.pt"
     assert entry["episode"] == 100
     assert entry["session"] == 10
@@ -236,14 +236,13 @@ async def test_checkpoint_metadata_fields(tmp_path):
     )
     _checkpoint_cache.clear()
 
-    entry = _load_checkpoint_meta(d / "tarok_agent_ep50.pt", d, d / "breeding_results")
+    entry = _load_checkpoint_meta(d / "tarok_agent_ep50.pt", d)
     assert entry["filename"] == "tarok_agent_ep50.pt"
     assert entry["episode"] == 50
     assert entry["session"] == 5
     assert entry["win_rate"] == 0.6
     assert entry["avg_reward"] == 12.5
     assert entry["model_name"] == "test_model"
-    assert entry["is_bred"] is False
 
 
 async def test_checkpoint_cache_avoids_reload(tmp_path):
@@ -255,10 +254,10 @@ async def test_checkpoint_cache_avoids_reload(tmp_path):
     _save_fake_checkpoint(fpath, episode=10, session=1)
     _checkpoint_cache.clear()
 
-    entry1 = _load_checkpoint_meta(fpath, d, d / "breeding_results")
+    entry1 = _load_checkpoint_meta(fpath, d)
     assert str(fpath) in _checkpoint_cache
 
-    entry2 = _load_checkpoint_meta(fpath, d, d / "breeding_results")
+    entry2 = _load_checkpoint_meta(fpath, d)
     assert entry1 is entry2  # exact same dict object from cache
 
 
@@ -272,7 +271,7 @@ async def test_checkpoint_cache_invalidates_on_mtime_change(tmp_path):
     _save_fake_checkpoint(fpath, episode=20, session=2, win_rate=0.4)
     _checkpoint_cache.clear()
 
-    entry1 = _load_checkpoint_meta(fpath, d, d / "breeding_results")
+    entry1 = _load_checkpoint_meta(fpath, d)
     assert entry1["win_rate"] == 0.4
 
     # Re-save with different data and bump mtime
@@ -280,7 +279,7 @@ async def test_checkpoint_cache_invalidates_on_mtime_change(tmp_path):
     _save_fake_checkpoint(fpath, episode=20, session=2, win_rate=0.7)
     os.utime(fpath, (time.time() + 1, time.time() + 1))
 
-    entry2 = _load_checkpoint_meta(fpath, d, d / "breeding_results")
+    entry2 = _load_checkpoint_meta(fpath, d)
     assert entry2["win_rate"] == 0.7
     assert entry1 is not entry2
 
@@ -295,10 +294,8 @@ async def test_bred_checkpoint_detected(tmp_path):
     _save_fake_checkpoint(fpath, episode=0, model_name="bred_v1")
     _checkpoint_cache.clear()
 
-    entry = _load_checkpoint_meta(fpath, d, breed_dir)
-    assert entry["is_bred"] is True
+    entry = _load_checkpoint_meta(fpath, d)
     assert entry["model_name"] == "bred_v1"
-    assert entry["filename"] == "breeding_results/bred_model_final.pt"
 
 
 async def test_corrupt_checkpoint_handled(tmp_path):
@@ -310,10 +307,9 @@ async def test_corrupt_checkpoint_handled(tmp_path):
     fpath.write_bytes(b"not a valid torch file")
     _checkpoint_cache.clear()
 
-    entry = _load_checkpoint_meta(fpath, d, d / "breeding_results")
+    entry = _load_checkpoint_meta(fpath, d)
     assert entry["filename"] == "tarok_agent_ep99.pt"
     assert entry["episode"] == 0
-    assert entry["is_bred"] is False
 
 
 # ── Responsiveness tests ────────────────────────────────────────────
