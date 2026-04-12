@@ -141,8 +141,13 @@ def _raw_to_experiences(raw: dict) -> dict[int, list[Experience]]:
     return exps_by_game
 
 
-def _benchmark_placement(model_path: str, n_games: int, seat_config: str, concurrency: int = 128) -> float:
-    """Play n_games greedy (NN vs opponents), return avg placement."""
+def _benchmark_placement(model_path: str, n_games: int, seat_config: str, concurrency: int = 128, session_size: int = 50) -> float:
+    """Play n_games greedy (NN vs opponents), return avg placement.
+
+    Placement is computed at the SESSION level (cumulative score across
+    session_size games), not per-game.  In Tarok the losing team scores 0,
+    so per-game placement is meaningless — it just reflects team assignment.
+    """
     raw = te.run_self_play(
         n_games=n_games,
         concurrency=concurrency,
@@ -151,11 +156,21 @@ def _benchmark_placement(model_path: str, n_games: int, seat_config: str, concur
         seat_config=seat_config,
     )
     scores = np.array(raw["scores"])  # (n_games, 4)
-    # Placement: rank player-0 among the 4 scores (1=best, 4=worst)
-    # For each game, count how many opponents scored strictly higher + 1
-    player_scores = scores[:, 0]
-    placements = np.sum(scores > player_scores[:, None], axis=1) + 1
-    return float(np.mean(placements))
+    n_total = scores.shape[0]
+    n_sessions = max(1, n_total // session_size)
+
+    session_placements = []
+    for s in range(n_sessions):
+        start = s * session_size
+        end = min(start + session_size, n_total)
+        if start >= n_total:
+            break
+        cumulative = scores[start:end].sum(axis=0)  # shape (4,)
+        # Rank: count how many players scored strictly higher than player 0
+        placement = int(np.sum(cumulative > cumulative[0])) + 1
+        session_placements.append(placement)
+
+    return float(np.mean(session_placements)) if session_placements else 2.5
 
 
 # ── Main ────────────────────────────────────────────────────────────

@@ -649,7 +649,6 @@ class PPOTrainer:
         print(f"[Trainer] Run #{self.metrics.run_id} — {num_sessions} sessions × {self.games_per_session} games")
 
         recent_rewards: list[float] = []
-        recent_places: list[float] = []
         recent_bids: list[float] = []
         recent_klops: list[float] = []
         recent_solos: list[float] = []
@@ -658,7 +657,7 @@ class PPOTrainer:
         start_time = time.time()
         game_count = 0
         # Running sums for O(1) rolling-window metrics
-        _rsum = 0.0; _psum = 0.0; _bsum = 0.0; _ksum = 0.0; _ssum = 0.0
+        _rsum = 0.0; _bsum = 0.0; _ksum = 0.0; _ssum = 0.0
 
         for agent in self.agents:
             agent.set_training(True)
@@ -683,10 +682,11 @@ class PPOTrainer:
             session_v5_contracts: dict[str, TrainerOpponentStats] = {
                 c: TrainerOpponentStats() for c in _TRACKED_CONTRACTS
             }
-            # Per-opponent placement accumulators for this session
-            session_places_selfplay: list[float] = []
-            session_places_hof: list[float] = []
-            session_places_v5: list[float] = []
+            # Cumulative per-player scores for session-level placement.
+            # In Tarok, the losing team scores 0, so per-game placement
+            # is meaningless — it just reflects team assignment.
+            # Placement is computed from cumulative session scores.
+            session_cumulative_scores: list[int] = [0, 0, 0, 0]
 
             # --- Batched self-play (Rust engine only) ---
             # Split games into batched NN games and sequential StockŠkis games
@@ -731,12 +731,11 @@ class PPOTrainer:
                     else:
                         w = 1.0 if result.get("declarer_lost", False) else 0.0
                     
-                    if "stockskis_place" in result:
-                        p = float(result["stockskis_place"])
-                    elif "agent_place" in result:
-                        p = float(result["agent_place"])
-                    else:
-                        p = 4.0 # Fallback
+                    # Accumulate all 4 players' scores for session-level placement
+                    all_sc = result.get("all_scores", {})
+                    for pid in range(4):
+                        session_cumulative_scores[pid] += all_sc.get(pid, 0)
+
                     b = 1.0 if agent0_bids else 0.0
                     k = 1.0 if is_klop else 0.0
                     s = 1.0 if is_solo else 0.0
@@ -747,22 +746,15 @@ class PPOTrainer:
                         raw_score=raw_score,
                         won=(w > 0),
                         contract_name=contract_name,
-                        place=p,
+                        place=0.0,  # placeholder; real placement computed at session end
                         declarer_p0=declarer_p0,
                         bid=bool(agent0_bids),
                     ))
-                    # Accumulate placement per opponent type
-                    if game_mode == "batch":
-                        session_places_selfplay.append(p)
-                    elif game_mode == "hof":
-                        session_places_hof.append(p)
-                    elif game_mode == "stockskis":
-                        session_places_v5.append(p)
 
-                    recent_rewards.append(r); recent_places.append(p)
+                    recent_rewards.append(r)
                     recent_bids.append(b); recent_klops.append(k); recent_solos.append(s)
                     recent_games.append((contract_name, declarer_p0, raw_score, w > 0))
-                    _rsum += r; _psum += p; _bsum += b; _ksum += k; _ssum += s
+                    _rsum += r; _bsum += b; _ksum += k; _ssum += s
 
                     if contract_name in self.metrics.contract_stats:
                         cs = self.metrics.contract_stats[contract_name]
@@ -780,7 +772,6 @@ class PPOTrainer:
                     window = self.games_per_session * 10
                     if len(recent_rewards) > window:
                         _rsum -= recent_rewards[-window - 1]
-                        _psum -= recent_places[-window - 1]
                         _bsum -= recent_bids[-window - 1]
                         _ksum -= recent_klops[-window - 1]
                         _ssum -= recent_solos[-window - 1]
@@ -801,7 +792,6 @@ class PPOTrainer:
                     self.metrics.episode = game_count
                     n = min(len(recent_rewards), window)
                     self.metrics.avg_reward = _rsum / n
-                    self.metrics.avg_placement = _psum / n
                     self.metrics.bid_rate = _bsum / n
                     self.metrics.klop_rate = _ksum / n
                     self.metrics.solo_rate = _ssum / n
@@ -841,37 +831,27 @@ class PPOTrainer:
                     else:
                         w = 1.0 if result.get("declarer_lost", False) else 0.0
                     
-                    if "stockskis_place" in result:
-                        p = float(result["stockskis_place"])
-                    elif "agent_place" in result:
-                        p = float(result["agent_place"])
-                    else:
-                        p = 4.0 # Fallback
+                    # Accumulate all 4 players' scores for session-level placement
+                    all_sc = result.get("all_scores", {})
+                    for pid in range(4):
+                        session_cumulative_scores[pid] += all_sc.get(pid, 0)
+
                     b = 1.0 if agent0_bids else 0.0
                     k = 1.0 if is_klop else 0.0
                     s = 1.0 if is_solo else 0.0
 
                     # Record to opponent pool for per-instance tracking
                     game_mode = result.get("game_mode", "stockskis")
-                    agent_place = float(result.get("agent_place", 4.0))
                     self._record_opponent_result(game_mode, OpponentGameResult(
                         raw_score=raw_score,
                         won=(w > 0),
                         contract_name=contract_name,
-                        place=agent_place,
+                        place=0.0,  # placeholder; real placement computed at session end
                         declarer_p0=declarer_p0,
                         bid=bool(agent0_bids),
                     ))
-                    # Accumulate placement per opponent type
-                    if game_mode == "batch":
-                        session_places_selfplay.append(p)
-                    elif game_mode == "hof":
-                        session_places_hof.append(p)
-                    elif game_mode == "stockskis":
-                        session_places_v5.append(p)
 
                     if self.stockskis_version == 5:
-                        agent_place = float(result.get("agent_place", 4.0))
                         self._update_opponent_stats(
                             session_v5,
                             session_v5_contracts,
@@ -879,14 +859,14 @@ class PPOTrainer:
                             raw_score=raw_score,
                             won=(w > 0),
                             bid=bool(agent0_bids),
-                            place=agent_place,
+                            place=0.0,
                             declarer_p0=declarer_p0,
                         )
 
-                    recent_rewards.append(r); recent_places.append(p)
+                    recent_rewards.append(r)
                     recent_bids.append(b); recent_klops.append(k); recent_solos.append(s)
                     recent_games.append((contract_name, declarer_p0, raw_score, w > 0))
-                    _rsum += r; _psum += p; _bsum += b; _ksum += k; _ssum += s
+                    _rsum += r; _bsum += b; _ksum += k; _ssum += s
 
                     if contract_name in self.metrics.contract_stats:
                         cs = self.metrics.contract_stats[contract_name]
@@ -904,7 +884,6 @@ class PPOTrainer:
                     window = self.games_per_session * 10
                     if len(recent_rewards) > window:
                         _rsum -= recent_rewards[-window - 1]
-                        _psum -= recent_places[-window - 1]
                         _bsum -= recent_bids[-window - 1]
                         _ksum -= recent_klops[-window - 1]
                         _ssum -= recent_solos[-window - 1]
@@ -925,7 +904,6 @@ class PPOTrainer:
                     self.metrics.episode = game_count
                     n = min(len(recent_rewards), window)
                     self.metrics.avg_reward = _rsum / n
-                    self.metrics.avg_placement = _psum / n
                     self.metrics.bid_rate = _bsum / n
                     self.metrics.klop_rate = _ksum / n
                     self.metrics.solo_rate = _ssum / n
@@ -1060,9 +1038,10 @@ class PPOTrainer:
                         declarer_score = scores.get(state.declarer, 0) if state.declarer is not None else 0
                         w = 1.0 if declarer_score < 0 else 0.0
                         
-                    sorted_players = sorted(scores, key=lambda x: scores[x], reverse=True)
-                    places_map = {x: rank + 1 for rank, x in enumerate(sorted_players)}
-                    p = float(places_map.get(0, 4))
+                    # Accumulate all 4 players' scores for session-level placement
+                    for pid in range(4):
+                        session_cumulative_scores[pid] += scores.get(pid, 0)
+
                     b = 1.0 if agent0_bids else 0.0
                     k = 1.0 if is_klop else 0.0
                     s = 1.0 if is_solo else 0.0
@@ -1075,23 +1054,14 @@ class PPOTrainer:
                         "lookahead" if use_lookahead else
                         "batch"
                     )
-                    sorted_players_seq = sorted(scores, key=lambda p: scores[p], reverse=True)
-                    places_seq = {p: rank + 1 for rank, p in enumerate(sorted_players_seq)}
                     self._record_opponent_result(seq_mode, OpponentGameResult(
                         raw_score=raw_score,
                         won=(w > 0),
                         contract_name=contract_name,
-                        place=float(places_seq.get(0, 4)),
+                        place=0.0,  # placeholder; real placement computed at session end
                         declarer_p0=declarer_p0,
                         bid=bool(agent0_bids),
                     ))
-                    # Accumulate placement per opponent type
-                    if seq_mode == "batch":
-                        session_places_selfplay.append(p)
-                    elif seq_mode == "hof":
-                        session_places_hof.append(p)
-                    elif seq_mode == "stockskis":
-                        session_places_v5.append(p)
 
                     # StockŠkis v5 per-contract stats (after w is computed)
                     if use_stockskis and self.stockskis_version == 5:
@@ -1102,7 +1072,7 @@ class PPOTrainer:
                             raw_score=raw_score,
                             won=(w > 0),
                             bid=bool(agent0_bids),
-                            place=float(places.get(0, 4)),
+                            place=0.0,
                             declarer_p0=declarer_p0,
                         )
 
@@ -1110,10 +1080,10 @@ class PPOTrainer:
                     if use_lookahead:
                         session_lookahead_scores.append(raw_score)
                         session_lookahead_bids.append(b)
-                    recent_rewards.append(r); recent_places.append(p)
+                    recent_rewards.append(r)
                     recent_bids.append(b); recent_klops.append(k); recent_solos.append(s)
                     recent_games.append((contract_name, declarer_p0, raw_score, w > 0))
-                    _rsum += r; _psum += p; _bsum += b; _ksum += k; _ssum += s
+                    _rsum += r; _bsum += b; _ksum += k; _ssum += s
 
                     # Per-contract tracking (split by role) — add current game
                     if contract_name in self.metrics.contract_stats:
@@ -1133,7 +1103,6 @@ class PPOTrainer:
                     window = self.games_per_session * 10
                     if len(recent_rewards) > window:
                         _rsum -= recent_rewards[-window - 1]
-                        _psum -= recent_places[-window - 1]
                         _bsum -= recent_bids[-window - 1]
                         _ksum -= recent_klops[-window - 1]
                         _ssum -= recent_solos[-window - 1]
@@ -1156,7 +1125,6 @@ class PPOTrainer:
                     self.metrics.episode = game_count
                     n = min(len(recent_rewards), window)
                     self.metrics.avg_reward = _rsum / n
-                    self.metrics.avg_placement = _psum / n
                     self.metrics.bid_rate = _bsum / n
                     self.metrics.klop_rate = _ksum / n
                     self.metrics.solo_rate = _ssum / n
@@ -1221,27 +1189,26 @@ class PPOTrainer:
                 round(self._eval_signal(session_v5), 4)
             )
 
+            # --- Session-level placement from cumulative scores ---
+            # In Tarok, per-game placement is meaningless (opponents always score 0).
+            # Placement must be computed from cumulative scores across the whole session.
+            sorted_session = sorted(range(4), key=lambda pid: session_cumulative_scores[pid], reverse=True)
+            session_placement = float(sorted_session.index(0) + 1)  # 1=best, 4=worst
+            self.metrics.avg_placement = session_placement
+
             # --- Append per-session history for charts ---
             self.metrics.reward_history.append(self.metrics.avg_reward)
-            self.metrics.avg_placement_history.append(self.metrics.avg_placement)
+            self.metrics.avg_placement_history.append(session_placement)
             self.metrics.loss_history.append(self.metrics.avg_loss)
             self.metrics.bid_rate_history.append(self.metrics.bid_rate)
             self.metrics.klop_rate_history.append(self.metrics.klop_rate)
             self.metrics.solo_rate_history.append(self.metrics.solo_rate)
 
-            # Per-opponent avg placement history (NaN-safe: only append when games exist)
-            if session_places_selfplay:
-                self.metrics.placement_selfplay_history.append(
-                    round(sum(session_places_selfplay) / len(session_places_selfplay), 2)
-                )
-            if session_places_hof:
-                self.metrics.placement_hof_history.append(
-                    round(sum(session_places_hof) / len(session_places_hof), 2)
-                )
-            if session_places_v5:
-                self.metrics.placement_v5_history.append(
-                    round(sum(session_places_v5) / len(session_places_v5), 2)
-                )
+            # Per-opponent placement history — now uses the session-level placement
+            # (all game types within a session contribute to a single placement)
+            self.metrics.placement_selfplay_history.append(session_placement)
+            self.metrics.placement_hof_history.append(session_placement)
+            self.metrics.placement_v5_history.append(session_placement)
 
             # Per-contract declarer win rate history
             for cname in _TRACKED_CONTRACTS:
@@ -1367,7 +1334,7 @@ class PPOTrainer:
                     "partner_p0": partner_p0,
                     "agent0_bids": agent0_bids,
                     "declarer_lost": declarer_lost,
-                    "agent_place": float({x: rank + 1 for rank, x in enumerate(sorted(result.scores, key=lambda p: result.scores[p], reverse=True))}.get(0, 4)),
+                    "all_scores": {p: scores.get(p, 0) for p in range(4)},
                     "initial_tarok_counts": result.initial_tarok_counts,
                     "game_mode": "batch",
                 })
@@ -1416,7 +1383,7 @@ class PPOTrainer:
                     "partner_p0": partner_p0,
                     "agent0_bids": bool(agent0_bids_list),
                     "declarer_lost": declarer_lost,
-                    "agent_place": places.get(0, 4),
+                    "all_scores": {p: scores.get(p, 0) for p in range(4)},
                     "stockskis_place": avg_sk_place,
                     "initial_tarok_counts": state.initial_tarok_counts if hasattr(state, 'initial_tarok_counts') else {},
                     "game_mode": "stockskis",
@@ -3846,7 +3813,7 @@ async def _run_self_play_session(
             # Process stats for lab metrics
             session_scores: list[int] = []
             session_wins = 0
-            session_places: list[float] = []
+            session_cumulative_scores: list[int] = [0, 0, 0, 0]
             session_bids = 0
             session_klops = 0
             session_solos = 0
@@ -3880,17 +3847,18 @@ async def _run_self_play_session(
                 if is_solo and declarer_p0:
                     session_solos += 1
 
-                # Record to opponent pool for per-type tracking
-                agent_place = float(result.get("agent_place", 4.0))
+                # Accumulate all 4 players' scores for session-level placement
+                all_sc = result.get("all_scores", {})
+                for pid in range(4):
+                    session_cumulative_scores[pid] += all_sc.get(pid, 0)
                 trainer._record_opponent_result(game_mode, OpponentGameResult(
                     raw_score=raw_score,
                     won=won,
                     contract_name=result.get("contract_name", "klop"),
-                    place=agent_place,
+                    place=0.0,  # placeholder; real placement computed at session end
                     declarer_p0=declarer_p0,
                     bid=bool(agent0_bids),
                 ))
-                session_places.append(agent_place)
 
                 # Track contract stats (declarer vs defender)
                 contract_name = result.get("contract_name", "klop")
@@ -3926,7 +3894,10 @@ async def _run_self_play_session(
             # Update per-session metrics
             n = max(len(session_scores), 1)
             elapsed = max(time.time() - session_start, 0.001)
-            _lab.sp_avg_placement = (sum(session_places) / max(len(session_places), 1))
+            # Session-level placement from cumulative scores
+            sorted_session = sorted(range(4), key=lambda pid: session_cumulative_scores[pid], reverse=True)
+            session_placement = float(sorted_session.index(0) + 1)
+            _lab.sp_avg_placement = session_placement
             _lab.sp_avg_reward = sum(s / 100.0 for s in session_scores) / n
             _lab.sp_avg_score = sum(session_scores) / n
             _lab.sp_bid_rate = session_bids / n

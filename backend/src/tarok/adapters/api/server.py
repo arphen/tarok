@@ -1724,10 +1724,11 @@ async def start_arena(req: ArenaRequest):
                 "type": agent_configs[i].get("type", "rl"),
                 "total_score": 0,
                 "games_played": 0,
-                "placements": {1: 0, 2: 0, 3: 0, 4: 0},
-                "placement_sum": 0,
-                "wins": 0,  # 1st place
-                "positive_games": 0,  # score > 0
+                "placements": {1: 0, 2: 0, 3: 0, 4: 0},  # session-level placements
+                "placement_sum": 0.0,  # sum of session-level placements
+                "sessions_played": 0,
+                "wins": 0,  # 1st place finishes (session-level)
+                "positive_games": 0,  # individual games where score > 0
                 "bids_made": {},  # contract_name -> count
                 "declared_count": 0,
                 "declared_won": 0,
@@ -1769,23 +1770,19 @@ async def start_arena(req: ArenaRequest):
                     contract = state.contract
                     contract_name = contract.name if contract else "UNKNOWN"
 
-                    # Scores & placements
-                    score_list = [(pid, scores.get(pid, 0)) for pid in range(4)]
-                    sorted_scores = sorted(score_list, key=lambda x: x[1], reverse=True)
-                    for rank_idx, (pid, sc) in enumerate(sorted_scores):
-                        place = rank_idx + 1
+                    # Per-game: just accumulate scores. Placement is computed
+                    # at the session level because in Tarok, opponents always
+                    # score 0 — per-game placement is meaningless.
+                    for pid in range(4):
+                        sc = scores.get(pid, 0)
                         ps = player_stats[pid]
                         ps["total_score"] += sc
                         ps["games_played"] += 1
-                        ps["placements"][place] += 1
-                        ps["placement_sum"] += place
-                        if place == 1:
-                            ps["wins"] += 1
                         if sc > 0:
                             ps["positive_games"] += 1
                         session_cumulative[pid] += sc
 
-                        # Best/worst
+                        # Best/worst single-game score
                         if ps["best_game_score"] is None or sc > ps["best_game_score"]:
                             ps["best_game_score"] = sc
                             ps["best_game_idx"] = game_idx
@@ -1866,8 +1863,33 @@ async def start_arena(req: ArenaRequest):
 
                     await asyncio.sleep(0)  # yield to event loop
 
-                # End of session: update progress
+                # End of session: compute placement from cumulative session scores
                 games_done += games_this_session
+
+                # Rank players by their cumulative score this session
+                ranked = sorted(range(4), key=lambda p: session_cumulative[p], reverse=True)
+                # Shared ranks for ties
+                places = [0.0] * 4
+                i = 0
+                while i < 4:
+                    j = i
+                    while j < 4 and session_cumulative[ranked[j]] == session_cumulative[ranked[i]]:
+                        j += 1
+                    avg_rank = (i + 1 + j) / 2
+                    for k in range(i, j):
+                        places[k] = avg_rank
+                    i = j
+
+                for rank_idx, pid in enumerate(ranked):
+                    ps = player_stats[pid]
+                    place_f = places[rank_idx]
+                    place_int = max(1, min(4, round(place_f)))
+                    ps["placements"][place_int] += 1
+                    ps["placement_sum"] += place_f
+                    ps["sessions_played"] += 1
+                    if place_f <= 1.0:
+                        ps["wins"] += 1
+
                 for pid in range(4):
                     player_stats[pid]["score_history"].append(session_cumulative[pid])
 
@@ -1909,15 +1931,17 @@ def _build_arena_analytics(player_stats, contract_stats, games_done, total_games
     players = []
     for ps in player_stats:
         gp = max(ps["games_played"], 1)
+        sp = max(ps["sessions_played"], 1)
         players.append({
             "name": ps["name"],
             "type": ps["type"],
             "games_played": ps["games_played"],
+            "sessions_played": ps["sessions_played"],
             "total_score": ps["total_score"],
             "avg_score": round(ps["total_score"] / gp, 2),
             "placements": ps["placements"],
-            "avg_placement": round(ps["placement_sum"] / gp, 2),
-            "win_rate": round(ps["wins"] / gp * 100, 2),
+            "avg_placement": round(ps["placement_sum"] / sp, 2),
+            "win_rate": round(ps["wins"] / sp * 100, 2),
             "positive_rate": round(ps["positive_games"] / gp * 100, 2),
             "bids_made": ps["bids_made"],
             "declared_count": ps["declared_count"],
