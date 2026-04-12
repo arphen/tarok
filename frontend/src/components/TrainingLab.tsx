@@ -16,7 +16,6 @@ interface EvalPoint {
   experiences?: number;
   games?: number;
   // Dynamic keys: vs_<opponent_type>, avg_score_<opponent_type>
-  // Also legacy: vs_v1, vs_v5, etc. from PBT/imitation flows
   [key: string]: unknown;
 }
 
@@ -31,7 +30,6 @@ interface TournamentEntry {
   persona: { first_name?: string; last_name?: string };
   filename: string;
   model_hash: string;
-  island_id?: number;
   generation: number;
   wins: number;
   games: number;
@@ -42,71 +40,13 @@ interface TournamentEntry {
   vs_bot_scores?: Record<string, number>;
 }
 
-interface IslandSummary {
-  island_id: number;
-  name: string;
-  persona: { first_name?: string; last_name?: string };
-  generations: number;
-  games: number;
-  fitness: number;
-  games_per_sec: number;
-  [key: string]: unknown;
-}
-
 interface TrainingSummary {
-  num_islands: number;
   total_games: number;
   total_time_seconds: number;
   total_time_display: string;
-  cross_island_sessions: number;
   tournament_results: TournamentEntry[];
   champion: TournamentEntry | null;
-  island_summaries: IslandSummary[];
   eval_bots: string[];
-}
-
-interface PopulationMember {
-  index: number;
-  label: string;
-  name?: string;
-  persona?: { first_name?: string; last_name?: string };
-  fitness: number;
-  batch_avg_reward: number;
-  batch_win_rate: number;
-  vs_v1?: number;
-  vs_v2?: number;
-  vs_v3?: number;
-  vs_v4?: number;
-  vs_v5?: number;
-  avg_score_v1?: number;
-  avg_score_v2?: number;
-  avg_score_v3?: number;
-  avg_score_v4?: number;
-  avg_score_v5?: number;
-  loss: number;
-  games: number;
-  status: string;
-  copied_from: number | null;
-  mutations: number;
-  survival_count: number;
-  model_hash: string;
-  hparams: Record<string, number>;
-}
-
-interface GenerationPoint {
-  generation: number;
-  avg_fitness: number;
-  min_fitness: number;
-  max_fitness: number;
-  avg_v3: number;
-  best_index: number;
-  best_label: string;
-  best_vs_v1?: number;
-  best_vs_v2?: number;
-  best_vs_v3?: number;
-  best_vs_v4?: number;
-  best_vs_v5?: number;
-  best_batch_reward: number;
 }
 
 interface CheckpointOption {
@@ -154,16 +94,6 @@ interface LabState {
   sp_solo_rate_history: number[];
   sp_min_score_history: number[];
   sp_max_score_history: number[];
-  // PBT
-  pbt_enabled: boolean;
-  pbt_generation: number;
-  pbt_total_generations: number;
-  pbt_population_size: number;
-  pbt_member_index: number;
-  pbt_member_total: number;
-  population: PopulationMember[];
-  generation_history: GenerationPoint[];
-  population_events: Array<{ generation: number; target: number; source: number; hparams: Record<string, number> }>;
   training_summary?: TrainingSummary | null;
   opponent_stats?: Record<string, {
     games: number; wins: number; win_rate: number; avg_score: number; avg_place: number;
@@ -184,7 +114,6 @@ const PHASE_LABELS: Record<string, { text: string; color: string; icon: string }
   evaluating: { text: 'Playing Evaluation Games...', color: '#4a9eff', icon: '🔍' },
   training: { text: 'Imitation Learning...', color: '#4caf50', icon: '📚' },
   self_play: { text: 'Self-Play Training...', color: '#e040fb', icon: '🎮' },
-  exploiting: { text: 'PBT Exploit / Explore...', color: '#ff9800', icon: '🧬' },
   done: { text: 'Training Complete!', color: '#d4a843', icon: '✅' },
 };
 
@@ -256,15 +185,10 @@ export default function TrainingLab({ onBack }: Props) {
   const [spFspRatio, setSpFspRatio] = useState(30);
   const [spStockSkisRatio, setSpStockSkisRatio] = useState(20);
   const [spHofRatio, setSpHofRatio] = useState(0);
-  const [pbtPopulationSize, setPbtPopulationSize] = useState(4);
-  const [pbtTopRatio, setPbtTopRatio] = useState(0.25);
-  const [pbtBottomRatio, setPbtBottomRatio] = useState(0.25);
-  const [pbtMutationScale, setPbtMutationScale] = useState(1.0);
-  const [timeLimitMinutes, setTimeLimitMinutes] = useState(5);
   const [smoothing, setSmoothing] = useState(0.6);
-  const [selectedProgram, setSelectedProgram] = useState<'imitation' | 'self_play' | 'island'>('imitation');
+  const [selectedProgram, setSelectedProgram] = useState<'imitation' | 'self_play'>('imitation');
 
-  const [tab, setTab] = useState<'progress' | 'population' | 'live' | 'winrate' | 'scores' | 'contracts' | 'hof'>('progress');
+  const [tab, setTab] = useState<'progress' | 'live' | 'winrate' | 'scores' | 'contracts' | 'hof'>('progress');
 
   // Poll state
   const poll = useCallback(async () => {
@@ -333,7 +257,6 @@ export default function TrainingLab({ onBack }: Props) {
   };
 
   const startSelfPlay = async () => {
-    const isPbt = selectedProgram === 'island';
     const params: Record<string, unknown> = {
       num_sessions: spSessions,
       games_per_session: spGamesPerSession,
@@ -344,15 +267,7 @@ export default function TrainingLab({ onBack }: Props) {
       fsp_ratio: fromPercent(spFspRatio),
       stockskis_ratio: fromPercent(spStockSkisRatio),
       hof_ratio: fromPercent(spHofRatio),
-      pbt_enabled: isPbt,
     };
-    if (isPbt) {
-      params.population_size = pbtPopulationSize;
-      params.exploit_top_ratio = pbtTopRatio;
-      params.exploit_bottom_ratio = pbtBottomRatio;
-      params.mutation_scale = pbtMutationScale;
-      params.time_limit_minutes = timeLimitMinutes;
-    }
     await fetch(`${API}/api/lab/self-play`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -473,15 +388,6 @@ export default function TrainingLab({ onBack }: Props) {
     ? (state.training_sessions_done / state.total_training_sessions) * 100
     : 0;
 
-  const generationData = useMemo(() => state?.generation_history ?? [], [state?.generation_history]);
-  const populationData = useMemo(() => {
-    return [...(state?.population ?? [])].sort((a, b) => b.fitness - a.fitness);
-  }, [state?.population]);
-
-  const latestGeneration = generationData.length
-    ? generationData[generationData.length - 1]
-    : null;
-
   // Per-session self-play history for the Live Metrics tab
   const applySmoothing = useCallback((data: any[], keys: string[]) => {
     if (data.length === 0 || smoothing === 0) return data;
@@ -523,15 +429,7 @@ export default function TrainingLab({ onBack }: Props) {
 
   const formatPercent = (value: number) => `${(value * 100).toFixed(1)}%`;
   const formatMaybe = (value?: number | null, digits = 3) => value === undefined || value === null ? '—' : value.toFixed(digits);
-  const formatDuration = (seconds: number) => {
-    if (seconds < 60) return `${Math.round(seconds)}s`;
-    if (seconds < 3600) return `${Math.floor(seconds / 60)}m ${Math.round(seconds % 60)}s`;
-    return `${Math.floor(seconds / 3600)}h ${Math.floor((seconds % 3600) / 60)}m`;
-  };
-  const formatHparams = (member: PopulationMember) => {
-    const hp = member.hparams;
-    return `lr ${hp.lr?.toExponential?.(1) ?? hp.lr} · batch ${hp.batch_size ?? '—'} · ent ${formatMaybe(hp.entropy_coef, 3)} · eps ${formatMaybe(hp.clip_epsilon, 2)}`;
-  };
+
 
   const latest = state?.eval_history?.length
     ? state.eval_history[state.eval_history.length - 1]
@@ -568,7 +466,6 @@ export default function TrainingLab({ onBack }: Props) {
               Age {persona.age ?? 0} · #{state?.model_hash}
               {state?.active_program === 'imitation' && <span className="lab-persona-badge lab-badge-il">📚 Imitation</span>}
               {state?.active_program === 'self_play' && <span className="lab-persona-badge lab-badge-sp">🎮 Self-Play</span>}
-              {state?.active_program === 'self_play_pbt' && <span className="lab-persona-badge lab-badge-sp">🧬 PBT</span>}
             </div>
           </div>
           <div className="lab-persona-snapshots">
@@ -655,10 +552,9 @@ export default function TrainingLab({ onBack }: Props) {
           <div className="lab-controls-row">
             <label className="lab-field">
               <span>Training Program</span>
-              <select value={selectedProgram} onChange={e => setSelectedProgram(e.target.value as 'imitation' | 'self_play' | 'island')}>
+              <select value={selectedProgram} onChange={e => setSelectedProgram(e.target.value as 'imitation' | 'self_play')}>
                 <option value="imitation">📚 Imitation Learning</option>
                 <option value="self_play">🎮 Self-Play (PPO)</option>
-                <option value="island">🏝️ Island Model (PBT)</option>
               </select>
             </label>
             <label className="lab-field">
@@ -781,56 +677,6 @@ export default function TrainingLab({ onBack }: Props) {
             </>
           )}
 
-          {/* Island Model (PBT) fields */}
-          {selectedProgram === 'island' && (
-            <>
-              <div className="lab-program-fields">
-                <label className="lab-field">
-                  <span>Islands</span>
-                  <input type="number" value={pbtPopulationSize} onChange={e => setPbtPopulationSize(Number(e.target.value))}
-                    min={2} max={8} />
-                </label>
-                <label className="lab-field">
-                  <span>Time (min)</span>
-                  <input type="number" value={timeLimitMinutes} onChange={e => setTimeLimitMinutes(Number(e.target.value))}
-                    min={1} max={480} />
-                </label>
-                <label className="lab-field">
-                  <span>Games/Session</span>
-                  <input type="number" value={spGamesPerSession} onChange={e => setSpGamesPerSession(Number(e.target.value))}
-                    min={5} max={100} />
-                </label>
-                <label className="lab-field">
-                  <span>Eval Interval</span>
-                  <input type="number" value={spEvalInterval} onChange={e => setSpEvalInterval(Number(e.target.value))}
-                    min={1} max={50} />
-                </label>
-                <label className="lab-field">
-                  <span>Learning Rate</span>
-                  <input type="number" value={spLearningRate} onChange={e => setSpLearningRate(Number(e.target.value))}
-                    min={0.00001} max={0.01} step={0.00001} />
-                </label>
-                <label className="lab-field">
-                  <span>FSP %</span>
-                  <input type="number" value={spFspRatio} onChange={e => setSpFspRatio(Math.max(0, Math.min(100, Number(e.target.value))))}
-                    min={0} max={100} step={5} />
-                </label>
-                <label className="lab-field">
-                  <span>Mutation</span>
-                  <input type="number" value={pbtMutationScale} onChange={e => setPbtMutationScale(Number(e.target.value))}
-                    min={0.1} max={2} step={0.1} />
-                </label>
-              </div>
-              <div className="lab-controls-actions">
-                <button className="btn-gold btn-lab" onClick={startSelfPlay}>
-                  <span className="btn-icon">🏝️</span> Start Island Training
-                </button>
-                <button className="btn-gold btn-lab" onClick={startOvernight} style={{ background: 'linear-gradient(135deg, #1a237e, #4a148c)' }}>
-                  <span className="btn-icon">🌙</span> Run Overnight
-                </button>
-              </div>
-            </>
-          )}
         </div>
       )}
 
@@ -876,8 +722,7 @@ export default function TrainingLab({ onBack }: Props) {
               <div>
                 <h3 style={{ margin: 0, color: '#d4a843' }}>Training Complete</h3>
                 <span style={{ color: '#888', fontSize: 13 }}>
-                  {summary.num_islands} islands · {summary.total_games.toLocaleString()} games · {summary.total_time_display}
-                  {summary.cross_island_sessions > 0 && ` · ${summary.cross_island_sessions} cross-island sessions`}
+                  {summary.total_games.toLocaleString()} games · {summary.total_time_display}
                 </span>
               </div>
             </div>
@@ -889,7 +734,6 @@ export default function TrainingLab({ onBack }: Props) {
                 </div>
                 <div style={{ color: '#ccc', fontSize: 13 }}>
                   Avg Score: {champion.avg_score.toFixed(1)} · {champion.games} tournament games
-                  {champion.island_id != null && ` · Island ${champion.island_id}`}
                   {champion.generation > 0 && ` · Gen ${champion.generation}`}
                 </div>
               </div>
@@ -907,7 +751,6 @@ export default function TrainingLab({ onBack }: Props) {
                         <th>Wins</th>
                         <th>Avg Score</th>
                         <th>Games</th>
-                        <th>Island</th>
                         <th>Gen</th>
                       </tr>
                     </thead>
@@ -919,7 +762,6 @@ export default function TrainingLab({ onBack }: Props) {
                           <td>{(entry.win_rate * 100).toFixed(1)}%</td>
                           <td>{entry.avg_score.toFixed(1)}</td>
                           <td>{entry.games}</td>
-                          <td>{entry.island_id ?? '—'}</td>
                           <td>{entry.generation}</td>
                         </tr>
                       ))}
@@ -929,37 +771,7 @@ export default function TrainingLab({ onBack }: Props) {
               </div>
             )}
 
-            {summary.island_summaries.length > 0 && (
-              <div>
-                <h4 style={{ margin: '0 0 8px', color: '#fff', fontSize: 14 }}>🏝️ Island Summary</h4>
-                <div style={{ overflowX: 'auto' }}>
-                  <table className="lab-table" style={{ width: '100%' }}>
-                    <thead>
-                      <tr>
-                        <th>Island</th>
-                        <th>Name</th>
-                        <th>Generations</th>
-                        <th>Games</th>
-                        <th>Games/sec</th>
-                        <th>Fitness</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {summary.island_summaries.map((island) => (
-                        <tr key={island.island_id}>
-                          <td style={{ fontWeight: 700 }}>{island.island_id}</td>
-                          <td>{island.name}</td>
-                          <td>{island.generations}</td>
-                          <td>{island.games.toLocaleString()}</td>
-                          <td>{island.games_per_sec.toFixed(1)}</td>
-                          <td style={{ color: '#d4a843' }}>{island.fitness.toFixed(4)}</td>
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
-                </div>
-              </div>
-            )}
+
           </div>
         );
       })()}
@@ -973,19 +785,11 @@ export default function TrainingLab({ onBack }: Props) {
             </div>
           </div>
           <span className="lab-progress-text">
-            {state?.active_program === 'self_play_pbt' || state?.active_program === 'island_tournament' || state?.active_program === 'cross_island_learning'
-              ? `${formatDuration(state?.training_sessions_done ?? 0)} / ${formatDuration(state?.total_training_sessions ?? 0)}`
-              : state?.active_program === 'self_play' ? `Session ${state?.training_sessions_done ?? 0}/${state?.total_training_sessions ?? 0}` : `Round ${state?.training_sessions_done ?? 0}/${state?.total_training_sessions ?? 0}`}
+            {state?.active_program === 'self_play' ? `Session ${state?.training_sessions_done ?? 0}/${state?.total_training_sessions ?? 0}` : `Round ${state?.training_sessions_done ?? 0}/${state?.total_training_sessions ?? 0}`}
             {state?.active_program === 'imitation' && state?.expert_games_generated
               ? ` · ${(state.expert_games_generated / 1000).toFixed(0)}K expert games` : ''}
             {state?.active_program === 'self_play' && state?.self_play_games
               ? ` · ${state.self_play_games} self-play games` : ''}
-            {state?.active_program === 'self_play_pbt' && state?.self_play_games
-              ? ` · ${state.pbt_population_size} islands · ${state.self_play_games.toLocaleString()} games · ${(state.sp_games_per_second ?? 0).toFixed(0)} gps` : ''}
-            {state?.active_program === 'island_tournament'
-              ? ` · Matchup ${state?.pbt_member_index ?? 0}/${state?.pbt_member_total ?? 0}` : ''}
-            {state?.active_program === 'cross_island_learning'
-              ? ` · 4 agents learning together` : ''}
           </span>
         </div>
       )}
@@ -1006,15 +810,15 @@ export default function TrainingLab({ onBack }: Props) {
             );
           })}
           <StatCard
-            label={state?.pbt_enabled ? 'Best Fitness' : 'Loss'}
-            value={state?.pbt_enabled ? (latestGeneration ? latestGeneration.max_fitness.toFixed(4) : '—') : (state?.current_loss ? state.current_loss.toFixed(4) : '—')}
-            sublabel={state?.pbt_enabled ? 'Generation Leader' : 'Policy Loss'}
+            label="Loss"
+            value={state?.current_loss ? state.current_loss.toFixed(4) : '—'}
+            sublabel="Policy Loss"
             color="#ff9800"
           />
           <StatCard
-            label={state?.pbt_enabled ? 'Islands' : 'Age'}
-            value={state?.pbt_enabled ? `${state?.pbt_population_size ?? 0}` : `${persona?.age ?? 0}`}
-            sublabel={state?.pbt_enabled ? 'Parallel Trainers' : 'Training Rounds'}
+            label="Age"
+            value={`${persona?.age ?? 0}`}
+            sublabel="Training Rounds"
             color="#d4a843"
           />
           <StatCard
@@ -1072,9 +876,9 @@ export default function TrainingLab({ onBack }: Props) {
       {(evalData.length > 0 || hasSelfPlayData) && (
         <>
           <div className="lab-tabs">
-            {(['progress', ...(state?.pbt_enabled ? ['population'] as const : []), ...(hasSelfPlayData ? ['live'] as const : []), 'winrate', 'scores', ...(hasSelfPlayData ? ['contracts'] as const : []), 'hof'] as const).map(t => (
+            {(['progress', ...(hasSelfPlayData ? ['live'] as const : []), 'winrate', 'scores', ...(hasSelfPlayData ? ['contracts'] as const : []), 'hof'] as const).map(t => (
               <button key={t} className={`lab-tab ${tab === t ? 'active' : ''}`} onClick={() => setTab(t)}>
-                {t === 'progress' ? '📈 Progress' : t === 'population' ? '🏝️ Islands' : t === 'live' ? '🎮 Live Metrics' : t === 'winrate' ? '🎯 Placements' : t === 'scores' ? '📊 Scores' : t === 'contracts' ? '🃏 Contracts' : '🏆 Hall of Fame'}
+                {t === 'progress' ? '📈 Progress' : t === 'live' ? '🎮 Live Metrics' : t === 'winrate' ? '🎯 Placements' : t === 'scores' ? '📊 Scores' : t === 'contracts' ? '🃏 Contracts' : '🏆 Hall of Fame'}
               </button>
             ))}
           </div>
@@ -1129,84 +933,7 @@ export default function TrainingLab({ onBack }: Props) {
                   </ChartCard>
                 )}
 
-                {state?.pbt_enabled && generationData.length > 0 && (
-                  <ChartCard title="Population Fitness by Generation" wide>
-                    <ResponsiveContainer width="100%" height={280}>
-                      <LineChart data={generationData}>
-                        <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.08)" />
-                        <XAxis dataKey="generation" stroke="#666" fontSize={11} />
-                        <YAxis stroke="#666" fontSize={11} domain={[0, 1]} />
-                        <Tooltip {...tooltipStyle} />
-                        <Legend />
-                        <Line type="monotone" dataKey="max_fitness" stroke="#d4a843" strokeWidth={3} dot={{ r: 3 }} name="Best Fitness" />
-                        <Line type="monotone" dataKey="avg_fitness" stroke="#4a9eff" strokeWidth={2} dot={false} name="Average Fitness" />
-                        <Line type="monotone" dataKey="min_fitness" stroke="#ff6b6b" strokeWidth={2} dot={false} name="Worst Fitness" />
-                        <Line type="monotone" dataKey="avg_v3" stroke="#7fd17f" strokeWidth={2} dot={false} name="Avg V3 Signal" />
-                      </LineChart>
-                    </ResponsiveContainer>
-                  </ChartCard>
-                )}
-              </div>
-            )}
 
-            {tab === 'population' && state?.pbt_enabled && (
-              <div className="lab-charts">
-                <ChartCard title="Island Training Loops" wide>
-                  {populationData.length === 0 ? (
-                    <p style={{ color: '#666', textAlign: 'center', padding: 20 }}>
-                      Island status will appear once training processes start.
-                    </p>
-                  ) : (
-                    <div style={{ overflowX: 'auto' }}>
-                      <table className="lab-table">
-                        <thead>
-                          <tr>
-                            <th>Island</th>
-                            <th>Status</th>
-                            <th>Progress</th>
-                            <th>Gen</th>
-                            <th>Games</th>
-                            <th>Games/sec</th>
-                            <th>Fitness</th>
-                            <th>vs V1</th>
-                            <th>vs V3</th>
-                            <th>Loss</th>
-                            <th>Hyperparameters</th>
-                          </tr>
-                        </thead>
-                        <tbody>
-                          {populationData.map((member, idx) => {
-                            const elapsed = (member as any).elapsed ?? 0;
-                            const timeLimit = (member as any).time_limit ?? 0;
-                            const pct = timeLimit > 0 ? Math.min(100, (elapsed / timeLimit) * 100) : 0;
-                            return (
-                            <tr key={member.index} className={idx === 0 ? 'lab-row-baseline' : ''}>
-                              <td style={{ fontWeight: 'bold' }}>🏝️ {member.name || member.label || member.index}</td>
-                              <td>{member.status}</td>
-                              <td style={{ minWidth: 120 }}>
-                                <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-                                  <div style={{ flex: 1, height: 6, background: 'rgba(255,255,255,0.08)', borderRadius: 3, overflow: 'hidden' }}>
-                                    <div style={{ width: `${pct}%`, height: '100%', background: member.status === 'stopped' ? '#666' : '#4a9eff', borderRadius: 3, transition: 'width 0.3s' }} />
-                                  </div>
-                                  <span style={{ fontSize: 11, color: '#888', whiteSpace: 'nowrap' }}>{formatDuration(elapsed)}</span>
-                                </div>
-                              </td>
-                              <td>{(member as any).generation ?? 0}</td>
-                              <td>{(member.games ?? 0).toLocaleString()}</td>
-                              <td>{((member as any).games_per_sec ?? 0).toFixed(1)}</td>
-                              <td style={{ color: '#d4a843' }}>{member.fitness.toFixed(4)}</td>
-                              <td>{formatPercent(member.vs_v1 ?? 0)}</td>
-                              <td>{formatPercent(member.vs_v3 ?? 0)}</td>
-                              <td>{member.loss.toFixed(4)}</td>
-                              <td style={{ maxWidth: 320 }}>{formatHparams(member)}</td>
-                            </tr>
-                            );
-                          })}
-                        </tbody>
-                      </table>
-                    </div>
-                  )}
-                </ChartCard>
               </div>
             )}
 

@@ -121,18 +121,6 @@ update-coverage-baseline:
 train:
 	$(UV_RUN) python -m tarok train 100 100
 
-evolve:
-	$(UV_RUN) python -m tarok evolve --pop 12 --gens 10 --eval-sessions 20 --eval-games 10
-
-train-evolved:
-	$(UV_RUN) python -m tarok train-evolved
-
-breed:
-	$(UV_RUN) python -m tarok breed --warmup 50 --pop 12 --gens 5 --cycles 3 --eval-games 100 --refine 30
-
-train-bred:
-	$(UV_RUN) python -m tarok train-bred
-
 # ──────────────────────────────────────────────
 # ──────────────────────────────────────────────
 # 3-Phase Training Pipeline

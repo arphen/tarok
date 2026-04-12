@@ -9,14 +9,12 @@ import './App.css';
 
 // Lazy-load heavy dashboard components — they pull in Recharts and other large deps
 const TrainingLab = lazy(() => import('./components/TrainingLab'));
-const EvoDashboard = lazy(() => import('./components/EvoDashboard'));
-const BreedingDashboard = lazy(() => import('./components/BreedingDashboard'));
 const CameraAgent = lazy(() => import('./components/CameraAgent'));
 const SpectatorView = lazy(() => import('./components/SpectatorView'));
 const TournamentBracket = lazy(() => import('./components/TournamentBracket'));
 const BotArena = lazy(() => import('./components/BotArena'));
 
-type Page = 'home' | 'training' | 'lab' | 'play' | 'lobby' | 'camera' | 'spectate' | 'tournament' | 'arena' | 'evolve' | 'breed';
+type Page = 'home' | 'training' | 'lab' | 'play' | 'lobby' | 'camera' | 'spectate' | 'tournament' | 'arena';
 
 export default function App() {
   const [page, setPage] = useState<Page>('home');
@@ -50,14 +48,6 @@ export default function App() {
 
   if (page === 'lab') {
     return <Suspense fallback={<div className="app"><p>Loading…</p></div>}><TrainingLab onBack={() => setPage('home')} /></Suspense>;
-  }
-
-  if (page === 'evolve') {
-    return <Suspense fallback={<div className="app"><p>Loading…</p></div>}><EvoDashboard onBack={() => setPage('home')} /></Suspense>;
-  }
-
-  if (page === 'breed') {
-    return <Suspense fallback={<div className="app"><p>Loading…</p></div>}><BreedingDashboard onBack={() => setPage('home')} /></Suspense>;
   }
 
   if (page === 'camera') {
@@ -323,22 +313,6 @@ export default function App() {
             <span>
               <strong>Bot Arena</strong>
               <small>Mass-simulate 100K+ games with detailed analytics</small>
-            </span>
-          </button>
-
-          <button className="btn-secondary btn-large" onClick={() => setPage('evolve')}>
-            <span className="btn-icon">🧬</span>
-            <span>
-              <strong>Evolve Hyperparams</strong>
-              <small>Evolutionary optimization of training parameters</small>
-            </span>
-          </button>
-
-          <button className="btn-secondary btn-large" onClick={() => setPage('breed')}>
-            <span className="btn-icon">🧫</span>
-            <span>
-              <strong>Breed Behaviors</strong>
-              <small>Evolve agent personality traits via behavioral breeding</small>
             </span>
           </button>
         </div>

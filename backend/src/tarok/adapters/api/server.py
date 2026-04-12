@@ -23,8 +23,6 @@ from tarok.adapters.api.schemas import (
     NewGameRequest,
     TrainingRequest,
     TrainingMetricsSchema,
-    EvoRequest,
-    BreedRequest,
     LabTrainingRequest,
 )
 from tarok.entities.card import Card, CardType, Suit, SuitRank, DECK
@@ -226,7 +224,7 @@ async def start_lab_training(req: LabTrainingRequest):
 _checkpoint_cache: dict[str, tuple[float, dict]] = {}
 
 
-def _load_checkpoint_meta(fpath: Path, ckpt_dir: Path, breed_dir: Path) -> dict:
+def _load_checkpoint_meta(fpath: Path, ckpt_dir: Path) -> dict:
     """Load checkpoint metadata, using cache when file hasn't changed."""
     import torch as _torch
     fstr = str(fpath)
@@ -235,11 +233,8 @@ def _load_checkpoint_meta(fpath: Path, ckpt_dir: Path, breed_dir: Path) -> dict:
     if cached and cached[0] == mtime:
         return cached[1]
 
-    is_bred = "bred_model" in fpath.name
     if fpath.name == "tarok_agent_latest.pt":
         fname = "tarok_agent_latest.pt"
-    elif breed_dir in fpath.parents:
-        fname = str(fpath.relative_to(ckpt_dir))
     else:
         fname = fpath.name
 
@@ -252,10 +247,9 @@ def _load_checkpoint_meta(fpath: Path, ckpt_dir: Path, breed_dir: Path) -> dict:
             "win_rate": meta.get("metrics", {}).get("win_rate", 0),
             "avg_reward": meta.get("metrics", {}).get("avg_reward", 0),
             "model_name": meta.get("model_name", None),
-            "is_bred": is_bred,
         }
     except Exception:
-        entry = {"filename": fname, "episode": 0, "is_bred": is_bred}
+        entry = {"filename": fname, "episode": 0}
 
     _checkpoint_cache[fstr] = (mtime, entry)
     return entry
@@ -263,9 +257,8 @@ def _load_checkpoint_meta(fpath: Path, ckpt_dir: Path, breed_dir: Path) -> dict:
 
 @app.get("/api/checkpoints")
 async def list_checkpoints():
-    """List all saved checkpoint files (training, breeding, and HOF)."""
+    """List all saved checkpoint files (training and HOF)."""
     ckpt_dir = Path("checkpoints")
-    breed_dir = Path("checkpoints/breeding_results")
     hof_dir = Path("checkpoints/hall_of_fame")
     root_ckpt_dir = Path("../checkpoints")
     
@@ -283,17 +276,14 @@ async def list_checkpoints():
                 "win_rate": meta.get("metrics", {}).get("win_rate", 0),
                 "avg_reward": meta.get("metrics", {}).get("avg_reward", 0),
                 "model_name": meta.get("model_name", None),
-                "is_bred": False,
                 "is_hof": False,
             })
         except Exception:
-            result.append({"filename": "tarok_agent_latest.pt", "episode": 0, "is_bred": False, "is_hof": False})
+            result.append({"filename": "tarok_agent_latest.pt", "episode": 0, "is_hof": False})
 
     if not ckpt_dir.exists():
         return {"checkpoints": result}
     files = [f for f in ckpt_dir.glob("tarok_agent_*.pt") if f.name != "tarok_agent_latest.pt"]
-    if breed_dir.exists():
-        files.extend([f for f in breed_dir.glob("bred_model_*.pt")])
     if hof_dir.exists():
         files.extend([f for f in hof_dir.glob("hof_*.pt")])
 
@@ -324,7 +314,6 @@ async def list_checkpoints():
                 "win_rate": meta.get("metrics", {}).get("win_rate", 0),
                 "avg_reward": meta.get("metrics", {}).get("avg_reward", 0),
                 "model_name": model_name,
-                "is_bred": "bred_model" in f.name,
                 "is_hof": is_hof,
                 "persona": meta.get("persona") if is_hof else None,
             })
@@ -332,7 +321,6 @@ async def list_checkpoints():
             result.append({
                 "filename": str(f.relative_to(ckpt_dir)) if ckpt_dir in f.parents or f.parent == ckpt_dir else f.name,
                 "episode": 0,
-                "is_bred": "bred_model" in f.name,
                 "is_hof": "hof_" in f.name,
             })
     return {"checkpoints": result}
@@ -1300,175 +1288,6 @@ async def analyze_king(req: AnalyzeKingRequest):
     }
 
 
-# ---- Evolution endpoints ----
-
-_evo_task: asyncio.Task | None = None
-_evo_progress: dict | None = None
-
-
-@app.post("/api/evo/start")
-async def start_evolution(req: EvoRequest):
-    global _evo_task, _evo_progress
-
-    if _evo_task and not _evo_task.done():
-        return {"status": "already_running"}
-
-    from tarok.adapters.ai.evo_optimizer import EvoConfig, EvoProgress, run_evolution as _run_evo
-
-    import torch
-    device = "cuda" if torch.cuda.is_available() else "cpu"
-
-    _evo_progress = EvoProgress(
-        total_generations=req.num_generations,
-        phase="starting",
-    ).to_dict()
-
-    config = EvoConfig(
-        population_size=req.population_size,
-        num_generations=req.num_generations,
-        eval_sessions=req.eval_sessions,
-        games_per_session=req.games_per_session,
-        oracle=req.oracle,
-        device=device,
-    )
-
-    async def on_progress(progress: EvoProgress):
-        global _evo_progress
-        _evo_progress = progress.to_dict()
-
-    config.progress_callback = on_progress
-
-    async def run_evo():
-        global _evo_progress
-        await _run_evo(config)
-
-    _evo_task = asyncio.create_task(run_evo())
-    return {"status": "started", "config": {
-        "population_size": req.population_size,
-        "num_generations": req.num_generations,
-        "eval_sessions": req.eval_sessions,
-        "games_per_session": req.games_per_session,
-    }}
-
-
-@app.post("/api/evo/stop")
-async def stop_evolution():
-    global _evo_task
-    if _evo_task and not _evo_task.done():
-        _evo_task.cancel()
-    return {"status": "stopped"}
-
-
-@app.get("/api/evo/progress")
-async def get_evo_progress() -> dict:
-    if _evo_progress:
-        return _evo_progress
-    from tarok.adapters.ai.evo_optimizer import EvoProgress
-    return EvoProgress().to_dict()
-
-
-@app.get("/api/evo/status")
-async def evo_status():
-    running = _evo_task is not None and not _evo_task.done()
-    return {"running": running}
-
-
-# ---- Breeding endpoints ----
-
-_breed_task: asyncio.Task | None = None
-_breed_progress: dict | None = None
-_breed_config = None  # Keep reference for clean stop
-
-
-@app.post("/api/breed/start")
-async def start_breeding(req: BreedRequest):
-    global _breed_task, _breed_progress, _breed_config
-
-    if _breed_task and not _breed_task.done():
-        return {"status": "already_running"}
-
-    from tarok.adapters.ai.breeding import BreedingConfig, BreedingProgress, run_breeding as _run_breed
-    import torch
-    device = "cuda" if torch.cuda.is_available() else "cpu"
-
-    _breed_progress = BreedingProgress(
-        total_cycles=req.num_cycles,
-        total_generations=req.num_generations,
-        warmup_total_sessions=req.warmup_sessions,
-        refine_total_sessions=req.refine_sessions,
-        phase="starting",
-    ).to_dict()
-
-    config = BreedingConfig(
-        warmup_sessions=req.warmup_sessions,
-        warmup_games_per_session=req.warmup_games_per_session,
-        population_size=req.population_size,
-        num_generations=req.num_generations,
-        num_cycles=req.num_cycles,
-        eval_games=req.eval_games,
-        refine_sessions=req.refine_sessions,
-        refine_games_per_session=req.refine_games_per_session,
-        oracle=req.oracle,
-        device=device,
-        resume=req.resume,
-        resume_from=req.resume_from,
-        model_name=req.model_name,
-        stockskis_eval=req.stockskis_eval,
-        stockskis_strength=req.stockskis_strength,
-    )
-    _breed_config = config
-
-    async def on_progress(progress: BreedingProgress):
-        global _breed_progress
-        _breed_progress = progress.to_dict()
-
-    config.progress_callback = on_progress
-
-    async def run_breed():
-        try:
-            await _run_breed(config)
-        except asyncio.CancelledError:
-            import logging
-            logging.getLogger(__name__).info("Breeding task cancelled")
-        except Exception:
-            import logging
-            logging.getLogger(__name__).exception("Breeding task failed")
-
-    _breed_task = asyncio.create_task(run_breed())
-    return {"status": "started", "config": {
-        "warmup_sessions": req.warmup_sessions,
-        "population_size": req.population_size,
-        "num_generations": req.num_generations,
-        "num_cycles": req.num_cycles,
-        "eval_games": req.eval_games,
-        "refine_sessions": req.refine_sessions,
-    }}
-
-
-@app.post("/api/breed/stop")
-async def stop_breeding():
-    global _breed_task, _breed_config
-    if _breed_config:
-        _breed_config._running = False
-    if _breed_task and not _breed_task.done():
-        _breed_task.cancel()
-    return {"status": "stopped"}
-
-
-@app.get("/api/breed/progress")
-async def get_breed_progress() -> dict:
-    if _breed_progress:
-        return _breed_progress
-    from tarok.adapters.ai.breeding import BreedingProgress
-    return BreedingProgress().to_dict()
-
-
-@app.get("/api/breed/status")
-async def breed_status():
-    running = _breed_task is not None and not _breed_task.done()
-    return {"running": running}
-
-
 # ---- Training Lab endpoints ----
 
 @app.post("/api/lab/create")
@@ -1550,12 +1369,6 @@ async def lab_self_play(req: dict = {}):
         stockskis_ratio=req.get("stockskis_ratio", 0.0),
         fsp_ratio=req.get("fsp_ratio", 0.3),
         hof_ratio=req.get("hof_ratio", 0.0),
-        pbt_enabled=req.get("pbt_enabled", False),
-        population_size=req.get("population_size", 4),
-        exploit_top_ratio=req.get("exploit_top_ratio", 0.25),
-        exploit_bottom_ratio=req.get("exploit_bottom_ratio", 0.25),
-        mutation_scale=req.get("mutation_scale", 1.0),
-        time_limit_minutes=req.get("time_limit_minutes", 5.0),
     )
     return {"status": "started"}
 
@@ -1572,8 +1385,8 @@ async def lab_stop():
 async def lab_overnight(req: dict = {}):
     """Start a long-running overnight training session.
 
-    Auto-configures PBT self-play for ~8-12 hours of continuous training.
-    Evaluates every 10 generations against V1/V2/V3 and saves snapshots.
+    Auto-configures self-play for continuous training.
+    Evaluates periodically against V1/V2/V3 and saves snapshots.
     Just hit Stop when you wake up.
     """
     from tarok.adapters.ai.training_lab import start_self_play, _lab
@@ -1585,7 +1398,6 @@ async def lab_overnight(req: dict = {}):
         from tarok.adapters.ai.training_lab import create_lab_network
         create_lab_network(req.get("hidden_size", 256))
 
-    # Sensible overnight defaults — large generation count, periodic eval
     await start_self_play(
         num_sessions=req.get("num_sessions", 10000),
         games_per_session=req.get("games_per_session", 20),
@@ -1594,12 +1406,6 @@ async def lab_overnight(req: dict = {}):
         learning_rate=req.get("learning_rate", 3e-4),
         stockskis_ratio=req.get("stockskis_ratio", 0.0),
         fsp_ratio=req.get("fsp_ratio", 0.3),
-        pbt_enabled=req.get("pbt_enabled", True),
-        population_size=req.get("population_size", 4),
-        exploit_top_ratio=req.get("exploit_top_ratio", 0.2),
-        exploit_bottom_ratio=req.get("exploit_bottom_ratio", 0.3),
-        mutation_scale=req.get("mutation_scale", 0.8),
-        time_limit_minutes=req.get("time_limit_minutes", 480),
     )
     return {"status": "started", "mode": "overnight", "num_sessions": req.get("num_sessions", 10000)}
 
@@ -1684,9 +1490,30 @@ _arena_task: asyncio.Task | None = None
 _arena_progress: dict | None = None
 
 
+# Contract name lookup (must match engine-rs Contract enum order)
+_ARENA_CONTRACT_NAMES = [
+    "KLOP", "THREE", "TWO", "ONE",
+    "SOLO_THREE", "SOLO_TWO", "SOLO_ONE", "SOLO",
+    "BERAC", "BARVNI_VALAT",
+]
+
+
+def _agent_type_to_seat_label(agent_type: str) -> str | None:
+    """Map frontend agent type string to Rust seat_config label.
+
+    Returns None if the type is not supported by the Rust arena engine.
+    """
+    t = agent_type.strip().lower()
+    if t in ("stockskis", "stockskis_v5"):
+        return "bot_v5"
+    if t == "stockskis_v6":
+        return "bot_v6"
+    return None
+
+
 @app.post("/api/arena/start")
 async def start_arena(req: ArenaRequest):
-    """Run a large-scale bot arena and collect detailed analytics."""
+    """Run a large-scale bot arena via the Rust engine."""
     global _arena_task, _arena_progress
 
     if _arena_task and not _arena_task.done():
@@ -1696,7 +1523,26 @@ async def start_arena(req: ArenaRequest):
     session_size = max(1, min(req.session_size, 1000))
     agent_configs = req.agents[:4]
     while len(agent_configs) < 4:
-        agent_configs.append({"name": f"Random-{len(agent_configs)}", "type": "random"})
+        agent_configs.append({"name": f"StockŠkis-{len(agent_configs)}", "type": "stockskis"})
+
+    # Validate all agents are bot types supported by Rust arena
+    seat_labels = []
+    agent_names = []
+    agent_types_raw = []
+    for i, cfg in enumerate(agent_configs):
+        atype = str(cfg.get("type", "stockskis")).strip().lower()
+        aname = cfg.get("name", f"Agent-{i}")
+        label = _agent_type_to_seat_label(atype)
+        if label is None:
+            return {
+                "status": "error",
+                "detail": f"Seat {i} type '{atype}' not supported. Use stockskis, stockskis_v5, or stockskis_v6.",
+            }
+        seat_labels.append(label)
+        agent_names.append(aname)
+        agent_types_raw.append(atype)
+
+    seat_config = ",".join(seat_labels)
 
     _arena_progress = {
         "status": "running",
@@ -1710,102 +1556,91 @@ async def start_arena(req: ArenaRequest):
         import logging
         log = logging.getLogger(__name__)
 
-        from tarok.entities.game_state import Contract, Announcement, KontraLevel
+        try:
+            import tarok_engine as te
+        except ImportError:
+            log.error("tarok_engine not available — cannot run arena")
+            _arena_progress["status"] = "error"
+            return
 
-        # Build agents once
-        agents = [_build_agent(cfg, i) for i, cfg in enumerate(agent_configs)]
-        agent_names = [a.name for a in agents]
+        import numpy as np
 
-        # Per-player stats
+        # Per-player accumulators
         player_stats = []
         for i in range(4):
             player_stats.append({
                 "name": agent_names[i],
-                "type": agent_configs[i].get("type", "rl"),
+                "type": agent_types_raw[i],
                 "total_score": 0,
                 "games_played": 0,
-                "placements": {1: 0, 2: 0, 3: 0, 4: 0},  # session-level placements
-                "placement_sum": 0.0,  # sum of session-level placements
+                "placements": {1: 0, 2: 0, 3: 0, 4: 0},
+                "placement_sum": 0.0,
                 "sessions_played": 0,
-                "wins": 0,  # 1st place finishes (session-level)
-                "positive_games": 0,  # individual games where score > 0
-                "bids_made": {},  # contract_name -> count
+                "wins": 0.0,
+                "positive_games": 0,
                 "declared_count": 0,
                 "declared_won": 0,
                 "defended_count": 0,
                 "defended_won": 0,
-                "announcements_made": {},  # ann_name -> count
-                "kontra_count": 0,
                 "best_game_score": None,
                 "worst_game_score": None,
                 "best_game_idx": None,
                 "worst_game_idx": None,
-                "score_history": [],  # cumulative score per session
+                "score_history": [],
             })
-
-        # Contract-level stats
-        contract_stats = {}
-
-        # Session-level tracking
-        session_scores = [{} for _ in range(4)]  # per-player cumulative per session
+        contract_stats: dict = {}
         games_done = 0
 
+        # Run in batches for progress updates
+        batch_size = min(10_000, total)
+
         try:
-            num_sessions = (total + session_size - 1) // session_size
-            for session_idx in range(num_sessions):
-                games_this_session = min(session_size, total - games_done)
-                session_cumulative = [0, 0, 0, 0]
+            while games_done < total:
+                n_batch = min(batch_size, total - games_done)
 
-                for g in range(games_this_session):
+                # Run entire batch in Rust (GIL released, Rayon parallel)
+                result = await asyncio.get_event_loop().run_in_executor(
+                    None,
+                    lambda n=n_batch: te.run_arena_games(
+                        n_games=n,
+                        seat_config=seat_config,
+                    ),
+                )
+
+                scores = np.asarray(result["scores"])      # (n_batch, 4) int32
+                contracts = np.asarray(result["contracts"]) # (n_batch,) uint8
+                declarers = np.asarray(result["declarers"]) # (n_batch,) int8
+                partners = np.asarray(result["partners"])   # (n_batch,) int8
+
+                # Process: extract per-game stats
+                for g in range(n_batch):
                     game_idx = games_done + g
-                    dealer = game_idx % 4
-                    try:
-                        loop = GameLoop(agents)
-                        state, scores = await loop.run(dealer=dealer)
-                    except Exception:
-                        log.exception("Arena game %d failed, skipping", game_idx)
-                        continue
+                    sc = scores[g]
+                    contract_u8 = int(contracts[g])
+                    decl = int(declarers[g])
+                    part = int(partners[g])
+                    contract_name = _ARENA_CONTRACT_NAMES[contract_u8] if contract_u8 < len(_ARENA_CONTRACT_NAMES) else "UNKNOWN"
 
-                    # --- Extract per-game data ---
-                    contract = state.contract
-                    contract_name = contract.name if contract else "UNKNOWN"
-
-                    # Per-game: just accumulate scores. Placement is computed
-                    # at the session level because in Tarok, opponents always
-                    # score 0 — per-game placement is meaningless.
                     for pid in range(4):
-                        sc = scores.get(pid, 0)
+                        s = int(sc[pid])
                         ps = player_stats[pid]
-                        ps["total_score"] += sc
+                        ps["total_score"] += s
                         ps["games_played"] += 1
-                        if sc > 0:
+                        if s > 0:
                             ps["positive_games"] += 1
-                        session_cumulative[pid] += sc
-
-                        # Best/worst single-game score
-                        if ps["best_game_score"] is None or sc > ps["best_game_score"]:
-                            ps["best_game_score"] = sc
+                        if ps["best_game_score"] is None or s > ps["best_game_score"]:
+                            ps["best_game_score"] = s
                             ps["best_game_idx"] = game_idx
-                        if ps["worst_game_score"] is None or sc < ps["worst_game_score"]:
-                            ps["worst_game_score"] = sc
+                        if ps["worst_game_score"] is None or s < ps["worst_game_score"]:
+                            ps["worst_game_score"] = s
                             ps["worst_game_idx"] = game_idx
 
-                    # Bids tracking
-                    for bid in (state.bids or []):
-                        if bid.contract is not None:
-                            bid_name = bid.contract.name
-                            ps = player_stats[bid.player]
-                            ps["bids_made"][bid_name] = ps["bids_made"].get(bid_name, 0) + 1
-
-                    # Declarer/defender stats
-                    if contract and not contract.is_klop:
-                        declarer = state.declarer
-                        partner = state.partner
-                        decl_team = {declarer}
-                        if partner is not None:
-                            decl_team.add(partner)
-
-                        decl_won = scores.get(declarer, 0) > 0 if declarer is not None else False
+                    # Declarer/defender tracking
+                    if decl >= 0 and contract_name != "KLOP":
+                        decl_team = {decl}
+                        if part >= 0:
+                            decl_team.add(part)
+                        decl_won = int(sc[decl]) > 0
 
                         for pid in range(4):
                             if pid in decl_team:
@@ -1817,83 +1652,69 @@ async def start_arena(req: ArenaRequest):
                                 if not decl_won:
                                     player_stats[pid]["defended_won"] += 1
 
-                        # Contract stats
-                        if contract_name not in contract_stats:
-                            contract_stats[contract_name] = {
-                                "played": 0, "decl_won": 0,
-                                "total_decl_score": 0, "total_def_score": 0,
-                            }
-                        cs = contract_stats[contract_name]
-                        cs["played"] += 1
-                        if decl_won:
+                    # Contract stats
+                    if contract_name not in contract_stats:
+                        contract_stats[contract_name] = {
+                            "played": 0, "decl_won": 0,
+                            "total_decl_score": 0, "total_def_score": 0,
+                        }
+                    cs = contract_stats[contract_name]
+                    cs["played"] += 1
+                    if decl >= 0 and contract_name != "KLOP":
+                        if int(sc[decl]) > 0:
                             cs["decl_won"] += 1
-                        if declarer is not None:
-                            cs["total_decl_score"] += scores.get(declarer, 0)
-                        # Average defender score
-                        def_scores = [scores.get(p, 0) for p in range(4) if p not in decl_team]
-                        cs["total_def_score"] += sum(def_scores)
-                    else:
-                        # Klop
-                        if "KLOP" not in contract_stats:
-                            contract_stats["KLOP"] = {
-                                "played": 0, "decl_won": 0,
-                                "total_decl_score": 0, "total_def_score": 0,
-                            }
-                        contract_stats["KLOP"]["played"] += 1
+                        cs["total_decl_score"] += int(sc[decl])
+                        decl_team = {decl}
+                        if part >= 0:
+                            decl_team.add(part)
+                        def_sc = sum(int(sc[p]) for p in range(4) if p not in decl_team)
+                        cs["total_def_score"] += def_sc
 
-                    # Announcements
-                    for pid, anns in (state.announcements or {}).items():
-                        for ann in anns:
-                            ann_name = ann.name if hasattr(ann, 'name') else str(ann)
-                            ps = player_stats[pid]
-                            ps["announcements_made"][ann_name] = ps["announcements_made"].get(ann_name, 0) + 1
+                # Session-level placement from this batch
+                num_sessions_in_batch = max(1, n_batch // session_size)
+                for s_idx in range(num_sessions_in_batch):
+                    start = s_idx * session_size
+                    end = min(start + session_size, n_batch)
+                    if start >= n_batch:
+                        break
+                    cumulative = [0, 0, 0, 0]
+                    for g in range(start, end):
+                        for pid in range(4):
+                            cumulative[pid] += int(scores[g, pid])
 
-                    # Kontra tracking
-                    for key, level in (state.kontra_levels or {}).items():
-                        if hasattr(level, 'value'):
-                            lv = level.value if isinstance(level.value, int) else 0
-                        else:
-                            lv = int(level) if level else 0
-                        if lv > 0:
-                            # Attribute kontra to opponents of declarer
-                            if state.declarer is not None:
-                                for pid in range(4):
-                                    if pid != state.declarer and (state.partner is None or pid != state.partner):
-                                        player_stats[pid]["kontra_count"] += 1
+                    # Rank with proper tie handling
+                    ranked = sorted(range(4), key=lambda p: cumulative[p], reverse=True)
+                    places = [0.0] * 4
+                    i = 0
+                    while i < 4:
+                        j = i
+                        while j < 4 and cumulative[ranked[j]] == cumulative[ranked[i]]:
+                            j += 1
+                        avg_rank = (i + 1 + j) / 2
+                        for k in range(i, j):
+                            places[k] = avg_rank
+                        i = j
 
-                    await asyncio.sleep(0)  # yield to event loop
+                    for rank_idx, pid in enumerate(ranked):
+                        ps = player_stats[pid]
+                        place_f = places[rank_idx]
+                        place_int = max(1, min(4, round(place_f)))
+                        ps["placements"][place_int] += 1
+                        ps["placement_sum"] += place_f
+                        ps["sessions_played"] += 1
+                        # Credit fractional wins for ties at 1st place
+                        if place_f <= 1.0:
+                            ps["wins"] += 1.0
+                        elif place_f <= 1.5:
+                            # Two-way tie for 1st: each gets 0.5
+                            num_tied = sum(1 for p2 in places if p2 == place_f)
+                            ps["wins"] += 1.0 / num_tied
 
-                # End of session: compute placement from cumulative session scores
-                games_done += games_this_session
+                    for pid in range(4):
+                        player_stats[pid]["score_history"].append(cumulative[pid])
 
-                # Rank players by their cumulative score this session
-                ranked = sorted(range(4), key=lambda p: session_cumulative[p], reverse=True)
-                # Shared ranks for ties
-                places = [0.0] * 4
-                i = 0
-                while i < 4:
-                    j = i
-                    while j < 4 and session_cumulative[ranked[j]] == session_cumulative[ranked[i]]:
-                        j += 1
-                    avg_rank = (i + 1 + j) / 2
-                    for k in range(i, j):
-                        places[k] = avg_rank
-                    i = j
+                games_done += n_batch
 
-                for rank_idx, pid in enumerate(ranked):
-                    ps = player_stats[pid]
-                    place_f = places[rank_idx]
-                    place_int = max(1, min(4, round(place_f)))
-                    ps["placements"][place_int] += 1
-                    ps["placement_sum"] += place_f
-                    ps["sessions_played"] += 1
-                    if place_f <= 1.0:
-                        ps["wins"] += 1
-
-                for pid in range(4):
-                    player_stats[pid]["score_history"].append(session_cumulative[pid])
-
-                # Build analytics snapshot
                 analytics = _build_arena_analytics(player_stats, contract_stats, games_done, total)
                 _arena_progress = {
                     "status": "running",
@@ -1914,7 +1735,6 @@ async def start_arena(req: ArenaRequest):
             _arena_progress["analytics"] = _build_arena_analytics(player_stats, contract_stats, games_done, total)
             return
 
-        # Done
         _arena_progress = {
             "status": "done",
             "games_done": games_done,
@@ -1943,15 +1763,15 @@ def _build_arena_analytics(player_stats, contract_stats, games_done, total_games
             "avg_placement": round(ps["placement_sum"] / sp, 2),
             "win_rate": round(ps["wins"] / sp * 100, 2),
             "positive_rate": round(ps["positive_games"] / gp * 100, 2),
-            "bids_made": ps["bids_made"],
+            "bids_made": {},
             "declared_count": ps["declared_count"],
             "declared_won": ps["declared_won"],
             "declared_win_rate": round(ps["declared_won"] / max(ps["declared_count"], 1) * 100, 2),
             "defended_count": ps["defended_count"],
             "defended_won": ps["defended_won"],
             "defended_win_rate": round(ps["defended_won"] / max(ps["defended_count"], 1) * 100, 2),
-            "announcements_made": ps["announcements_made"],
-            "kontra_count": ps["kontra_count"],
+            "announcements_made": {},
+            "kontra_count": 0,
             "best_game": {"score": ps["best_game_score"], "game_idx": ps["best_game_idx"]},
             "worst_game": {"score": ps["worst_game_score"], "game_idx": ps["worst_game_idx"]},
             "score_history": ps["score_history"],

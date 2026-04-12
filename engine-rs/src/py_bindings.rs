@@ -847,6 +847,77 @@ fn run_self_play(
     Ok(dict.into())
 }
 
+/// Run a large-scale bot-vs-bot arena.  Returns per-game scores +
+/// contract & declarer metadata with zero training-data overhead.
+///
+/// `seat_config`: comma-separated, e.g. `"bot_v5,bot_v6,bot_v5,bot_v5"`.
+/// Only `bot_v5` and `bot_v6` are supported (no NN seats — use
+/// [`run_self_play`] for that).
+///
+/// Returns a dict with:
+///   - `scores`: numpy (n_games, 4) int32
+///   - `contracts`: numpy (n_games,) uint8
+///   - `declarers`: numpy (n_games,) int8
+///   - `partners`: numpy (n_games,) int8
+///   - `n_games`: int
+#[pyfunction]
+#[pyo3(signature = (n_games, seat_config="bot_v5,bot_v5,bot_v5,bot_v5"))]
+fn run_arena_games(
+    py: Python<'_>,
+    n_games: u32,
+    seat_config: &str,
+) -> PyResult<PyObject> {
+    use crate::arena::{self, BotVersion};
+
+    let seat_labels: Vec<&str> = seat_config.split(',').map(|s| s.trim()).collect();
+    if seat_labels.len() != 4 {
+        return Err(pyo3::exceptions::PyValueError::new_err(
+            "seat_config must have exactly 4 comma-separated entries",
+        ));
+    }
+
+    let mut versions = [BotVersion::V5; 4];
+    for (i, &label) in seat_labels.iter().enumerate() {
+        versions[i] = match label {
+            "bot_v5" => BotVersion::V5,
+            "bot_v6" => BotVersion::V6,
+            other => {
+                return Err(pyo3::exceptions::PyValueError::new_err(format!(
+                    "run_arena_games only supports bot_v5/bot_v6, got '{other}'"
+                )));
+            }
+        };
+    }
+
+    // Release GIL — entire computation runs in pure Rust with Rayon
+    let results = py.allow_threads(|| arena::run_arena_batch(n_games, versions));
+
+    let total = results.len();
+    let mut flat_scores: Vec<i32> = Vec::with_capacity(total * 4);
+    let mut contracts: Vec<u8> = Vec::with_capacity(total);
+    let mut declarers: Vec<i8> = Vec::with_capacity(total);
+    let mut partners: Vec<i8> = Vec::with_capacity(total);
+
+    for r in &results {
+        flat_scores.extend_from_slice(&r.scores);
+        contracts.push(r.contract);
+        declarers.push(r.declarer);
+        partners.push(r.partner);
+    }
+
+    let dict = pyo3::types::PyDict::new(py);
+    let scores_arr = PyArray1::<i32>::from_vec(py, flat_scores)
+        .reshape([total, 4])
+        .map_err(|e| pyo3::exceptions::PyValueError::new_err(format!("scores: {e}")))?;
+    dict.set_item("scores", scores_arr)?;
+    dict.set_item("contracts", numpy::PyArray1::<u8>::from_vec(py, contracts))?;
+    dict.set_item("declarers", numpy::PyArray1::<i8>::from_vec(py, declarers))?;
+    dict.set_item("partners", numpy::PyArray1::<i8>::from_vec(py, partners))?;
+    dict.set_item("n_games", total)?;
+
+    Ok(dict.into())
+}
+
 pub fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<PyGameState>()?;
     m.add_function(wrap_pyfunction!(generate_warmup_data, m)?)?;
@@ -854,6 +925,7 @@ pub fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(evaluate_trick_winner, m)?)?;
     m.add_function(wrap_pyfunction!(compute_legal_plays, m)?)?;
     m.add_function(wrap_pyfunction!(run_self_play, m)?)?;
+    m.add_function(wrap_pyfunction!(run_arena_games, m)?)?;
 
     // Expose constants
     m.add("STATE_SIZE", encoding::STATE_SIZE)?;

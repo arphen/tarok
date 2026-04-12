@@ -1,3 +1,4 @@
+pub mod arena;
 pub mod card;
 pub mod encoding;
 pub mod expert_games_v5;

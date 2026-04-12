@@ -60,31 +60,6 @@ class DiscardRequest(BaseModel):
     cards: list[PlayCardRequest]
 
 
-class EvoRequest(BaseModel):
-    population_size: int = 12
-    num_generations: int = 10
-    eval_sessions: int = 20
-    games_per_session: int = 10
-    oracle: bool = False
-
-
-class BreedRequest(BaseModel):
-    warmup_sessions: int = 50
-    warmup_games_per_session: int = 20
-    population_size: int = 12
-    num_generations: int = 5
-    num_cycles: int = 3
-    eval_games: int = 100
-    refine_sessions: int = 30
-    refine_games_per_session: int = 20
-    oracle: bool = False
-    resume: bool = False
-    resume_from: str | None = None
-    model_name: str | None = None
-    stockskis_eval: bool = False
-    stockskis_strength: float = 1.0
-
-
 class NewGameRequest(BaseModel):
     """Request to create a new human-vs-AI game with per-opponent model selection."""
     opponents: list[str] = ["latest", "latest", "latest"]  # 3 entries: filename, "latest", or "random"

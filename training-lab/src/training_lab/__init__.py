@@ -7,7 +7,6 @@ from training_lab.entities.experience_buffer import ExperienceBuffer
 from training_lab.entities.config import TrainingConfig
 from training_lab.entities.checkpoint import Checkpoint
 from training_lab.entities.metrics import SessionMetrics, TrainingProgress
-from training_lab.entities.behavioral_profile import BehavioralProfile
 
 __all__ = [
     "DecisionType",
@@ -20,5 +19,4 @@ __all__ = [
     "Checkpoint",
     "SessionMetrics",
     "TrainingProgress",
-    "BehavioralProfile",
 ]

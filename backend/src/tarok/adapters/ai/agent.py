@@ -13,9 +13,6 @@ import torch
 
 from tarok.entities.card import Card, CardType, Suit
 from tarok.entities.game_state import Announcement, Contract, GameState, KontraLevel
-from tarok.adapters.ai.behavioral_profile import (
-    BehavioralProfile, apply_behavioral_bias, apply_temperature,
-)
 from tarok.adapters.ai.network import TarokNet
 from tarok.adapters.ai.encoding import (
     DecisionType,
@@ -70,13 +67,11 @@ class RLAgent:
         device: str = "cpu",
         explore_rate: float = 0.1,
         oracle_critic: bool = False,
-        profile: BehavioralProfile | None = None,
     ):
         self._name = name
         self.device = torch.device(device)
         self.network = TarokNet(hidden_size, oracle_critic=oracle_critic).to(self.device)
         self.explore_rate = explore_rate
-        self.profile = profile
         self._rng = random.Random()
 
         # Experience buffer for current game
@@ -100,7 +95,6 @@ class RLAgent:
         device: str = "cpu",
         explore_rate: float = 0.1,
         oracle_critic: bool = False,
-        profile: BehavioralProfile | None = None,
     ) -> "RLAgent":
         """Create an RLAgent with hidden_size inferred from checkpoint weights."""
         ckpt = torch.load(path, map_location=device, weights_only=True)
@@ -115,7 +109,6 @@ class RLAgent:
             device=device,
             explore_rate=explore_rate,
             oracle_critic=has_oracle or oracle_critic,
-            profile=profile,
         )
         agent.network.load_state_dict(state_dict)
         return agent
@@ -195,34 +188,12 @@ class RLAgent:
             self._step_counter += 1
             return action_idx
 
-        if self.profile is not None:
-            # Behavioral profile path: get raw logits, apply bias + temperature
-            ctx = torch.no_grad() if not self._training else torch.enable_grad()
-            with ctx:
-                logits, value = self.network(
-                    state_tensor.unsqueeze(0), decision_type,
-                    oracle_state=oracle_tensor.unsqueeze(0) if oracle_tensor is not None else None,
-                )
-                biased = apply_behavioral_bias(
-                    logits, self.profile, decision_type, mask.unsqueeze(0),
-                    is_defender=is_defender,
-                )
-                tempered = apply_temperature(biased, self.profile.temperature)
-                masked = tempered.clone()
-                masked[mask.unsqueeze(0) == 0] = float("-inf")
-                probs = torch.softmax(masked, dim=-1)
-                dist = torch.distributions.Categorical(probs)
-                action = dist.sample()
-                action_idx = action.item()
-                log_prob = dist.log_prob(action).squeeze()
-                value = value.squeeze(-1).squeeze()
-        else:
-            ctx = torch.no_grad() if not self._training else torch.enable_grad()
-            with ctx:
-                action_idx, log_prob, value = self.network.get_action(
-                    state_tensor.unsqueeze(0), mask.unsqueeze(0), decision_type,
-                    oracle_state=oracle_tensor.unsqueeze(0) if oracle_tensor is not None else None,
-                )
+        ctx = torch.no_grad() if not self._training else torch.enable_grad()
+        with ctx:
+            action_idx, log_prob, value = self.network.get_action(
+                state_tensor.unsqueeze(0), mask.unsqueeze(0), decision_type,
+                oracle_state=oracle_tensor.unsqueeze(0) if oracle_tensor is not None else None,
+            )
 
         if self._training:
             self.experiences.append(Experience(
