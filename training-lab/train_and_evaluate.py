@@ -24,6 +24,9 @@ from pathlib import Path
 
 import yaml
 
+import hashlib
+import random
+
 import numpy as np
 import torch
 import torch.nn as nn
@@ -50,6 +53,29 @@ DT_MAP = {
     2: DecisionType.TALON_PICK,
     3: DecisionType.CARD_PLAY,
 }
+
+# Slovenian female first and last names for random model naming
+_SL_FIRST = [
+    "Ana", "Maja", "Eva", "Nina", "Sara", "Lara", "Anja", "Ema",
+    "Katja", "Tina", "Živa", "Pia", "Lina", "Zala", "Neža",
+    "Teja", "Rok", "Urša", "Janja", "Alja", "Špela", "Manca",
+    "Petra", "Metka", "Monika", "Irena", "Andreja", "Brigita",
+    "Vera", "Marta", "Klara", "Nataša", "Polona", "Mateja",
+    "Lea", "Nika", "Hana", "Julija", "Lucija", "Tamara",
+]
+_SL_LAST = [
+    "Novak", "Horvat", "Kovačič", "Krajnc", "Zupančič",
+    "Potočnik", "Kos", "Golob", "Vidmar", "Kolar",
+    "Mlakar", "Bizjak", "Žagar", "Turk", "Hribar",
+    "Kavčič", "Hočevar", "Rupnik", "Debeljak", "Černe",
+    "Gregorčič", "Vesel", "Kern", "Starič", "Oblak",
+    "Pečnik", "Gorenc", "Šuštar", "Bogataj", "Kranjc",
+]
+
+
+def _random_slovenian_name() -> str:
+    """Return a random Slovenian female name like 'Ana_Novak'."""
+    return f"{random.choice(_SL_FIRST)}_{random.choice(_SL_LAST)}"
 
 
 # ── Helpers ─────────────────────────────────────────────────────────
@@ -218,12 +244,16 @@ Examples:
   python train_and_evaluate.py --config configs/vs-3-bots.yaml -c model.pt
   python train_and_evaluate.py --config configs/self-play.yaml -c model.pt --iterations 20
   python train_and_evaluate.py -c model.pt --seats nn,bot_v6,bot_v6,bot_v6
+  python train_and_evaluate.py --new --config configs/vs-3-bots.yaml
         """,
     )
     parser.add_argument("--config", type=str, default=None,
                         help="Path to a YAML training config (e.g. configs/vs-3-bots.yaml)")
-    parser.add_argument("--checkpoint", "-c", required=True,
-                        help="Path to pre-trained .pt checkpoint")
+    group = parser.add_mutually_exclusive_group(required=True)
+    group.add_argument("--checkpoint", "-c", type=str, default=None,
+                       help="Path to pre-trained .pt checkpoint")
+    group.add_argument("--new", action="store_true", default=False,
+                       help="Train a brand-new randomly-initialized model with a random Slovenian name")
     parser.add_argument("--seats", type=str, default=None,
                         help="Seat layout: e.g. nn,bot_v5,bot_v5,bot_v5 (default from config)")
     parser.add_argument("--bench-seats", type=str, default=None,
@@ -275,13 +305,23 @@ Examples:
     if args.bench_seats is None:
         args.bench_seats = args.seats
 
-    # ── Load checkpoint ─────────────────────────────────────────────
-    print(f"Loading checkpoint: {args.checkpoint}")
-    cp = torch.load(args.checkpoint, map_location="cpu", weights_only=False)
-    sd = cp.get("model_state_dict", cp)
-    hidden_size = sd["shared.0.weight"].shape[0]
-    oracle = any(k.startswith("critic_backbone") for k in sd)
-    print(f"  hidden_size={hidden_size}, oracle={oracle}")
+    # ── Load or create model ─────────────────────────────────────────
+    if args.new:
+        name = _random_slovenian_name()
+        hidden_size = 256
+        oracle = True
+        print(f"Creating new model: {name}  (hidden={hidden_size}, oracle={oracle})")
+        sd = None
+        # Override save_dir to include the model name
+        args.save_dir = f"checkpoints/{name}"
+    else:
+        name = None
+        print(f"Loading checkpoint: {args.checkpoint}")
+        cp = torch.load(args.checkpoint, map_location="cpu", weights_only=False)
+        sd = cp.get("model_state_dict", cp)
+        hidden_size = sd["shared.0.weight"].shape[0]
+        oracle = any(k.startswith("critic_backbone") for k in sd)
+        print(f"  hidden_size={hidden_size}, oracle={oracle}")
 
     save_dir = Path(args.save_dir)
     save_dir.mkdir(parents=True, exist_ok=True)
@@ -289,9 +329,16 @@ Examples:
 
     # ── Build model and export TorchScript ──────────────────────────
     model = TarokNet(hidden_size=hidden_size, oracle_critic=oracle)
-    model.load_state_dict(sd)
+    if sd is not None:
+        model.load_state_dict(sd)
+    else:
+        sd = model.state_dict()
     model.eval()
     _export_torchscript(model, ts_path)
+
+    if name:
+        print(f"  Model '{name}' initialized with random weights")
+        print(f"  Checkpoints → {save_dir}/")
 
     compute = create_compute(args.device)
     print(f"Training device: {compute.device}")

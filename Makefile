@@ -205,6 +205,16 @@ train-iterate:
 		--checkpoint $(MODEL) \
 		$(EXTRA)
 
+# Train a brand-new randomly-named model from scratch
+#   make train-new
+#   make train-new CONFIG=self-play EXTRA="--iterations 20"
+train-new:
+	source backend/.venv/bin/activate && \
+		PYTHONPATH=training-lab/src:backend/src python training-lab/train_and_evaluate.py \
+		--config training-lab/configs/$(CONFIG).yaml \
+		--new \
+		$(EXTRA)
+
 # ──────────────────────────────────────────────
 # Build
 # ──────────────────────────────────────────────

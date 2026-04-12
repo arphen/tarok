@@ -108,15 +108,145 @@ make test-quick        # Backend, fail-fast
 
 ## Training
 
+The training system lives in `training-lab/` and uses a high-performance Rust
+engine for fast game simulation. Models are trained with PPO (Proximal Policy
+Optimization) using self-play and/or rule-based bot opponents.
+
+### Prerequisites
+
 ```bash
-make train             # 100 sessions × 100 games (PPO self-play)
-make evolve            # DEAP hyperparameter search
-make train-evolved     # Continue training with best evolved hparams
-make breed             # Behavioral specialisation breeding
-make train-bred        # Continue with best bred model
+make setup     # one-time: installs Python, Node, Rust, all deps, builds engine
 ```
 
-Or use the in-browser Training Dashboard (click "Train AI" on the home page).
+If you already ran `make setup`, make sure the Rust engine is built:
+
+```bash
+make ensure-engine
+```
+
+### Train a New Model from Scratch
+
+```bash
+make train-new
+```
+
+This creates a brand-new randomly-initialized model with a random Slovenian
+name (e.g. `Klara_Oblak`, `Maja_Horvat`) and trains it for 10 iterations of
+10,000 games each. Checkpoints are saved to `checkpoints/<Name>/`.
+
+```bash
+# Use a different training config
+make train-new CONFIG=self-play
+
+# More iterations, custom hyperparameters
+make train-new CONFIG=vs-3-bots EXTRA="--iterations 50 --games 20000 --lr 0.0001"
+```
+
+### Continue Training an Existing Model
+
+```bash
+make train-iterate MODEL=path/to/model.pt
+```
+
+The default config is `vs-3-bots` (1 neural network vs 3 rule-based StockŠkis
+v5 bots). Override with `CONFIG=`:
+
+```bash
+# Continue training Katja (the current strongest model)
+make train-iterate MODEL=backend/checkpoints/hall_of_fame/pinned/hof_Katja_Vidmar_age59_014692c0.pt
+
+# Train against stronger v6 bots
+make train-iterate CONFIG=vs-3-v6 MODEL=path/to/model.pt
+
+# Full self-play (4 neural networks, no bots)
+make train-iterate CONFIG=self-play MODEL=path/to/model.pt
+
+# 50 iterations of 20k games with a lower learning rate
+make train-iterate MODEL=path/to/model.pt EXTRA="--iterations 50 --games 20000 --lr 0.0001"
+```
+
+### Training Configs
+
+Configs live in `training-lab/configs/`. Each YAML file sets the seat layout,
+hyperparameters, and benchmark settings:
+
+| Config | Seats | Description |
+|--------|-------|-------------|
+| `vs-3-bots` | NN vs 3× bot_v5 | **Default.** Easiest. Good starting point for new models. |
+| `vs-2-bots` | 2× NN vs 2× bot_v5 | NN gets a partner that plays like itself. |
+| `vs-1-bot` | 3× NN vs 1× bot_v5 | Late-stage training when NN already beats bots. |
+| `vs-3-v6` | NN vs 3× bot_v6 | Harder opponents. Use when v5 is too easy. |
+| `self-play` | 4× NN | Pure self-play. Use once NN has surpassed all bots. |
+
+You can override any YAML setting via the `EXTRA` variable:
+
+```bash
+make train-iterate EXTRA="--seats nn,bot_v6,bot_v5,bot_v5 --explore-rate 0.15"
+```
+
+### Training Output
+
+Each iteration prints a progress bar with:
+1. **Self-play** — N games, collects training experiences
+2. **PPO update** — gradient steps on the collected data
+3. **Benchmark** — N games greedy (no exploration), measures avg session placement
+
+```
+─── Iteration 3/10  ████████░░░░░░░░  20%  ETA 4m12s ───
+  [1/3] Self-play: 10000 games (nn,bot_v5,bot_v5,bot_v5, explore=0.1)... 38291 exps in 28s
+  [2/3] PPO update (6 epochs, batch=8192)... loss=0.6234 (p=0.0312 v=0.5922 ent=0.0421) in 3s
+  [3/3] Benchmark: 10000 games (greedy)... placement=1.850 in 24s
+  → placement 2.100 → 1.850  (-0.250 ▲ better!)
+```
+
+At the end, a summary shows placement trend across iterations and saves the
+best model:
+
+```
+  Best model saved to checkpoints/training_run/best.pt
+```
+
+### Recommended Training Path
+
+1. **Start with bots**: `make train-new` — this trains against v5 bots until
+   the model is competitive
+2. **Harder bots**: `make train-iterate CONFIG=vs-3-v6 MODEL=checkpoints/<Name>/best.pt`
+3. **Self-play**: `make train-iterate CONFIG=self-play MODEL=checkpoints/<Name>/best.pt`
+   — once the model beats all bots, pure self-play refines strategy further
+
+### Advanced: In-Browser Training Dashboard
+
+The web UI includes a real-time training dashboard with live charts for win
+rate, loss, bid rate, per-contract stats, and more:
+
+```bash
+make run    # start backend + frontend
+```
+
+Open http://localhost:3000 and click **Train AI**.
+
+### Advanced: Legacy Training Commands
+
+These are older training entrypoints that go through the backend directly:
+
+```bash
+make train             # 100 sessions × 100 games (basic PPO)
+make evolve            # DEAP hyperparameter search
+make train-evolved     # Continue with best evolved hparams
+make breed             # Behavioral specialisation breeding
+make train-bred        # Continue with best bred model
+make pipeline          # Full 3-phase: imitation → PPO vs bots → self-play
+```
+
+### Hall of Fame
+
+The `backend/checkpoints/hall_of_fame/pinned/` directory contains the strongest
+models trained so far. These are tracked in git and should not be deleted.
+
+| Model | Description |
+|-------|-------------|
+| `hof_Ema_Mlakar_age316` | Imitation + ~500k self-play games. >90% WR vs v1, ~65% vs v3. |
+| `hof_Katja_Vidmar_age59` | Current strongest model. |
 
 ## Game Rules (Slovenian Tarok, 4-player)
 
@@ -144,17 +274,23 @@ Or use the in-browser Training Dashboard (click "Train AI" on the home page).
 | `make install` | Install dependencies only |
 | `make run` | Start backend + frontend |
 | `make stop` | Kill running servers |
+| **Testing** | |
 | `make test` | Run all tests |
 | `make test-backend` | Backend pytest |
 | `make test-frontend` | Frontend typecheck |
 | `make test-frontend-unit` | Frontend Vitest unit tests |
 | `make test-e2e` | Playwright E2E |
 | `make test-coverage` | Backend coverage report |
+| **Training** | |
+| `make train-new` | Train a brand-new model from scratch (random Slovenian name) |
+| `make train-iterate` | Continue training an existing model (`MODEL=path/to/model.pt`) |
+| `make pipeline` | Full 3-phase pipeline: imitation → PPO vs bots → self-play |
+| `make train` | Legacy: basic 100×100 PPO training |
+| `make evolve` | Legacy: DEAP hyperparameter search |
+| `make breed` | Legacy: behavioral breeding |
+| **Build** | |
 | `make build-engine` | Compile Rust engine (PyO3) into the Python venv |
 | `make build` | Production frontend build |
-| `make train` | Train RL agents |
-| `make evolve` | Hyperparameter evolution |
-| `make breed` | Behavioral breeding |
 | `make clean` | Remove caches, venvs, node_modules |
 
 ## Rust Engine (optional but recommended)
@@ -184,11 +320,3 @@ cd backend && PYTHONPATH=src uv run python -c "import tarok_engine; print('OK')"
 ## License
 
 This project is licensed under the [MIT License](LICENSE).
-
-
-## Checkpoints
-
-### Ema
-The `hof_Ema_Mlakar_age316_d3f9ae44.pt` checkpoint is included in the repository.
-- **Instruct + ~500k self-play games**: This model was initially trained using imitation learning on a dataset of expert games, then fine-tuned through approximately 500,000 games of self-play.
-- **Winrates**: Capable of achieving over 90% winrate vs V1 and ~65% vs V3 of the StockŠkis heuristic bot.
