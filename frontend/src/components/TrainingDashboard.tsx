@@ -36,6 +36,9 @@ export default function TrainingDashboard({ onBack }: Props) {
   const [smoothing, setSmoothing] = useState(0.8);
   const [useRustEngine, setUseRustEngine] = useState(true);
   const [warmupGames, setWarmupGames] = useState(0);
+  const [labMode, setLabMode] = useState(false);
+  const [concurrency, setConcurrency] = useState(128);
+  const [trainingMode, setTrainingMode] = useState<'idle' | 'legacy' | 'lab'>('idle');
 
   const poll = useCallback(async () => {
     try {
@@ -49,6 +52,7 @@ export default function TrainingDashboard({ onBack }: Props) {
       const cData = await cRes.json();
       setMetrics(mData);
       setIsTraining(sData.running);
+      setTrainingMode(sData.mode ?? 'idle');
       setAvailableSnapshots(cData.checkpoints || []);
     } catch { /* server not up */ }
   }, []);
@@ -61,23 +65,38 @@ export default function TrainingDashboard({ onBack }: Props) {
 
   const startTraining = async () => {
     const isLatest = resumeFrom === '' || resumeFrom === 'tarok_agent_latest.pt';
-    await fetch(`${API}/api/training/start`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ 
-        num_sessions: sessions, 
-        games_per_session: gamesPerSession, 
-        resume,
-        resume_from: resume && !isLatest ? resumeFrom : undefined,
-        stockskis_ratio: stockskisRatio,
-        stockskis_strength: stockskisStrength,
-        lookahead_ratio: lookaheadRatio,
-        lookahead_sims: lookaheadSims,
-        lookahead_perfect_info: lookaheadPerfectInfo,
-        use_rust_engine: useRustEngine,
-        warmup_games: warmupGames,
-      }),
-    });
+
+    if (labMode) {
+      await fetch(`${API}/api/training/lab/start`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          num_sessions: sessions,
+          games_per_session: gamesPerSession,
+          resume_from: resume ? resumeFrom : undefined,
+          concurrency,
+          device: 'auto',
+        }),
+      });
+    } else {
+      await fetch(`${API}/api/training/start`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ 
+          num_sessions: sessions, 
+          games_per_session: gamesPerSession, 
+          resume,
+          resume_from: resume && !isLatest ? resumeFrom : undefined,
+          stockskis_ratio: stockskisRatio,
+          stockskis_strength: stockskisStrength,
+          lookahead_ratio: lookaheadRatio,
+          lookahead_sims: lookaheadSims,
+          lookahead_perfect_info: lookaheadPerfectInfo,
+          use_rust_engine: useRustEngine,
+          warmup_games: warmupGames,
+        }),
+      });
+    }
     setIsTraining(true);
   };
 
@@ -197,31 +216,35 @@ export default function TrainingDashboard({ onBack }: Props) {
           <input type="number" value={gamesPerSession} onChange={e => setGamesPerSession(Number(e.target.value))}
             disabled={isTraining} min={10} step={10} />
         </label>
-        <label className="td-field min-width-80">
-          <span>StockŠkis Ratio {Math.round(stockskisRatio * 100)}%</span>
-          <input type="range" value={stockskisRatio} onChange={e => setStockskisRatio(Number(e.target.value))}
-            disabled={isTraining} min={0} max={1.0} step={0.1} />
-        </label>
-        {stockskisRatio > 0 && (
+        {!labMode && (
+          <label className="td-field min-width-80">
+            <span>StockŠkis Ratio {Math.round(stockskisRatio * 100)}%</span>
+            <input type="range" value={stockskisRatio} onChange={e => setStockskisRatio(Number(e.target.value))}
+              disabled={isTraining} min={0} max={1.0} step={0.1} />
+          </label>
+        )}
+        {!labMode && stockskisRatio > 0 && (
           <label className="td-field min-width-80">
             <span>StockŠkis STR {Math.round(stockskisStrength * 100)}%</span>
             <input type="range" value={stockskisStrength} onChange={e => setStockskisStrength(Number(e.target.value))}
               disabled={isTraining} min={0.1} max={1.0} step={0.1} />
           </label>
         )}
-        <label className="td-field min-width-80">
-          <span>Lookahead Ratio {Math.round(lookaheadRatio * 100)}%</span>
-          <input type="range" value={lookaheadRatio} onChange={e => setLookaheadRatio(Number(e.target.value))}
-            disabled={isTraining} min={0} max={1.0} step={0.1} />
-        </label>
-        {lookaheadRatio > 0 && (
+        {!labMode && (
+          <label className="td-field min-width-80">
+            <span>Lookahead Ratio {Math.round(lookaheadRatio * 100)}%</span>
+            <input type="range" value={lookaheadRatio} onChange={e => setLookaheadRatio(Number(e.target.value))}
+              disabled={isTraining} min={0} max={1.0} step={0.1} />
+          </label>
+        )}
+        {!labMode && lookaheadRatio > 0 && (
           <label className="td-field min-width-80">
             <span>Lookahead Sims</span>
             <input type="number" value={lookaheadSims} onChange={e => setLookaheadSims(Number(e.target.value))}
               disabled={isTraining} min={1} max={200} step={5} />
           </label>
         )}
-        {lookaheadRatio > 0 && (
+        {!labMode && lookaheadRatio > 0 && (
           <label className="td-check" style={{ margin: 0 }}>
             <input type="checkbox" checked={lookaheadPerfectInfo} onChange={e => setLookaheadPerfectInfo(e.target.checked)} disabled={isTraining} />
             <span>Perfect Info</span>
@@ -233,14 +256,29 @@ export default function TrainingDashboard({ onBack }: Props) {
             min={0} max={0.99} step={0.01} />
         </label>
         <label className="td-check" style={{ margin: 0 }}>
-          <input type="checkbox" checked={useRustEngine} onChange={e => setUseRustEngine(e.target.checked)} disabled={isTraining} />
-          <span>Rust Engine</span>
+          <input type="checkbox" checked={labMode} onChange={e => setLabMode(e.target.checked)} disabled={isTraining} />
+          <span style={{ color: labMode ? '#d4a843' : undefined, fontWeight: labMode ? 600 : undefined }}>GPU Lab</span>
         </label>
-        <label className="td-field min-width-80">
-          <span>Warmup Games</span>
-          <input type="number" value={warmupGames} onChange={e => setWarmupGames(Number(e.target.value))}
-            disabled={isTraining} min={0} step={100000} placeholder="0" />
-        </label>
+        {labMode && (
+          <label className="td-field min-width-80">
+            <span>Concurrency</span>
+            <input type="number" value={concurrency} onChange={e => setConcurrency(Number(e.target.value))}
+              disabled={isTraining} min={1} max={512} step={16} />
+          </label>
+        )}
+        {!labMode && (
+          <>
+            <label className="td-check" style={{ margin: 0 }}>
+              <input type="checkbox" checked={useRustEngine} onChange={e => setUseRustEngine(e.target.checked)} disabled={isTraining} />
+              <span>Rust Engine</span>
+            </label>
+            <label className="td-field min-width-80">
+              <span>Warmup Games</span>
+              <input type="number" value={warmupGames} onChange={e => setWarmupGames(Number(e.target.value))}
+                disabled={isTraining} min={0} step={100000} placeholder="0" />
+            </label>
+          </>
+        )}
         <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
           <label className="td-check" style={{ margin: 0 }}>
             <input type="checkbox" checked={resume} onChange={e => setResume(e.target.checked)} disabled={isTraining} />
@@ -281,8 +319,11 @@ export default function TrainingDashboard({ onBack }: Props) {
             <div className="td-progress-fill" style={{ width: `${sessionPct}%` }} />
           </div>
           <span className="td-progress-text">
+            {trainingMode === 'lab' && <span style={{ color: '#d4a843', fontWeight: 600, marginRight: 6 }}>GPU Lab</span>}
             {metrics.run_id && <span className="td-run-id" title="Training run ID">#{metrics.run_id} · </span>}
             Session {metrics.session}/{metrics.total_sessions} · {metrics.episode.toLocaleString()} games · {metrics.games_per_second.toFixed(1)} g/s
+            {(metrics as any).buffer_size > 0 && <> · buf {(metrics as any).buffer_size.toLocaleString()}</>}
+            {(metrics as any).policy_version > 0 && <> · v{(metrics as any).policy_version}</>}
           </span>
         </div>
       )}

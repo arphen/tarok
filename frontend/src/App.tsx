@@ -14,8 +14,9 @@ const BreedingDashboard = lazy(() => import('./components/BreedingDashboard'));
 const CameraAgent = lazy(() => import('./components/CameraAgent'));
 const SpectatorView = lazy(() => import('./components/SpectatorView'));
 const TournamentBracket = lazy(() => import('./components/TournamentBracket'));
+const BotArena = lazy(() => import('./components/BotArena'));
 
-type Page = 'home' | 'training' | 'lab' | 'play' | 'lobby' | 'camera' | 'spectate' | 'tournament' | 'evolve' | 'breed';
+type Page = 'home' | 'training' | 'lab' | 'play' | 'lobby' | 'camera' | 'spectate' | 'tournament' | 'arena' | 'evolve' | 'breed';
 
 export default function App() {
   const [page, setPage] = useState<Page>('home');
@@ -69,6 +70,10 @@ export default function App() {
 
   if (page === 'tournament') {
     return <Suspense fallback={<div className="app"><p>Loading…</p></div>}><TournamentBracket onBack={() => setPage('home')} checkpoints={checkpoints} /></Suspense>;
+  }
+
+  if (page === 'arena') {
+    return <Suspense fallback={<div className="app"><p>Loading…</p></div>}><BotArena onBack={() => setPage('home')} checkpoints={checkpoints} /></Suspense>;
   }
 
   if (page === 'lobby') {
@@ -310,6 +315,14 @@ export default function App() {
             <span>
               <strong>Tournament</strong>
               <small>Double-elimination bracket between AI models</small>
+            </span>
+          </button>
+
+          <button className="btn-secondary btn-large" onClick={() => setPage('arena')}>
+            <span className="btn-icon">📊</span>
+            <span>
+              <strong>Bot Arena</strong>
+              <small>Mass-simulate 100K+ games with detailed analytics</small>
             </span>
           </button>
 
