@@ -108,6 +108,23 @@ class TrainingRequest(BaseModel):
     batch_concurrency: int = 32
 
 
+class LabTrainingRequest(BaseModel):
+    """Request to start training via the training-lab (GPU lab) package."""
+    num_sessions: int = 1000
+    games_per_session: int = 20
+    learning_rate: float = 3e-4
+    hidden_size: int = 256
+    resume_from: str | None = None
+    concurrency: int = 128
+    buffer_capacity: int = 50_000
+    min_experiences: int = 5_000
+    ppo_epochs: int = 6
+    batch_size: int = 256
+    explore_rate: float = 0.1
+    checkpoint_interval: int = 50
+    device: str = "auto"
+
+
 class TrainingMetricsSchema(BaseModel):
     episode: int = 0
     total_episodes: int = 0

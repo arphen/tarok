@@ -25,6 +25,7 @@ from tarok.adapters.api.schemas import (
     TrainingMetricsSchema,
     EvoRequest,
     BreedRequest,
+    LabTrainingRequest,
 )
 from tarok.entities.card import Card, CardType, Suit, SuitRank, DECK
 from tarok.entities.game_state import Bid, Contract, GameState, Phase, PlayerRole, Trick
@@ -35,6 +36,11 @@ _trainer: PPOTrainer | None = None
 _training_task: asyncio.Task | None = None
 _latest_metrics: TrainingMetrics | None = None
 _active_games: dict[str, dict] = {}
+
+# --- Training-lab (GPU lab) mode ---
+_lab_runner = None      # RunPPOTraining instance
+_lab_thread = None      # background thread running the training loop
+_lab_sink = None        # DashboardMetricsSink for metrics polling
 
 
 @asynccontextmanager
@@ -123,14 +129,19 @@ async def start_training(req: TrainingRequest):
 
 @app.post("/api/training/stop")
 async def stop_training():
-    global _trainer, _training_task
+    global _trainer, _training_task, _lab_runner, _lab_thread
     if _trainer:
         _trainer.stop()
+    if _lab_runner:
+        _lab_runner.stop()
     return {"status": "stopped"}
 
 
 @app.get("/api/training/metrics")
 async def get_metrics() -> dict:
+    # Prefer lab metrics if lab mode is active
+    if _lab_sink is not None:
+        return _lab_sink.snapshot()
     if _latest_metrics:
         return _latest_metrics.to_dict()
     return TrainingMetrics().to_dict()
@@ -138,8 +149,77 @@ async def get_metrics() -> dict:
 
 @app.get("/api/training/status")
 async def training_status():
-    running = _training_task is not None and not _training_task.done()
-    return {"running": running}
+    # Check both old and lab training
+    old_running = _training_task is not None and not _training_task.done()
+    lab_running = _lab_thread is not None and _lab_thread.is_alive()
+    return {"running": old_running or lab_running, "mode": "lab" if lab_running else ("legacy" if old_running else "idle")}
+
+
+# ---- Training Lab (GPU) endpoints ----
+
+@app.post("/api/training/lab/start")
+async def start_lab_training(req: LabTrainingRequest):
+    global _lab_runner, _lab_thread, _lab_sink, _trainer, _training_task
+
+    # Don't start if anything is already running
+    if _training_task and not _training_task.done():
+        return {"status": "already_running", "mode": "legacy"}
+    if _lab_thread and _lab_thread.is_alive():
+        return {"status": "already_running", "mode": "lab"}
+
+    # Stop old trainer if lingering
+    if _trainer:
+        _trainer.stop()
+        _trainer = None
+
+    from tarok.adapters.ai.lab_bridge import start_lab_training as _start_lab
+    import threading
+
+    # Resolve checkpoint path
+    checkpoint_path = None
+    if req.resume_from:
+        from pathlib import Path
+        cp = Path("checkpoints") / req.resume_from
+        if cp.exists():
+            checkpoint_path = str(cp)
+
+    runner, sink = _start_lab(
+        checkpoint_path=checkpoint_path,
+        config_overrides={
+            "num_sessions": req.num_sessions,
+            "games_per_session": req.games_per_session,
+            "learning_rate": req.learning_rate,
+            "hidden_size": req.hidden_size,
+            "concurrency": req.concurrency,
+            "buffer_capacity": req.buffer_capacity,
+            "min_experiences": req.min_experiences,
+            "ppo_epochs": req.ppo_epochs,
+            "batch_size": req.batch_size,
+            "explore_rate": req.explore_rate,
+            "checkpoint_interval": req.checkpoint_interval,
+            "device": req.device,
+        },
+    )
+
+    _lab_runner = runner
+    _lab_sink = sink
+
+    def _run():
+        import logging
+        try:
+            runner.run()
+        except Exception:
+            logging.getLogger(__name__).exception("Lab training failed")
+
+    _lab_thread = threading.Thread(target=_run, name="lab-training", daemon=True)
+    _lab_thread.start()
+
+    return {
+        "status": "started",
+        "mode": "lab",
+        "num_sessions": req.num_sessions,
+        "device": req.device,
+    }
 
 
 # Checkpoint metadata cache: {filepath_str: (mtime, metadata_dict)}
@@ -1590,3 +1670,297 @@ async def lab_hof_unpin(model_hash: str):
         from starlette.responses import JSONResponse
         return JSONResponse({"error": "Model not found"}, status_code=404)
     return {"ok": True}
+
+
+# ---- Bot Arena: Mass analytics simulation ----
+
+class ArenaRequest(BaseModel):
+    agents: list[dict]  # [{name, type, checkpoint?}] — exactly 4
+    total_games: int = 100000
+    session_size: int = 50  # games per session for progress tracking
+
+
+_arena_task: asyncio.Task | None = None
+_arena_progress: dict | None = None
+
+
+@app.post("/api/arena/start")
+async def start_arena(req: ArenaRequest):
+    """Run a large-scale bot arena and collect detailed analytics."""
+    global _arena_task, _arena_progress
+
+    if _arena_task and not _arena_task.done():
+        return {"status": "already_running"}
+
+    total = max(1, min(req.total_games, 500_000))
+    session_size = max(1, min(req.session_size, 1000))
+    agent_configs = req.agents[:4]
+    while len(agent_configs) < 4:
+        agent_configs.append({"name": f"Random-{len(agent_configs)}", "type": "random"})
+
+    _arena_progress = {
+        "status": "running",
+        "games_done": 0,
+        "total_games": total,
+        "analytics": None,
+    }
+
+    async def _run_arena():
+        global _arena_progress
+        import logging
+        log = logging.getLogger(__name__)
+
+        from tarok.entities.game_state import Contract, Announcement, KontraLevel
+
+        # Build agents once
+        agents = [_build_agent(cfg, i) for i, cfg in enumerate(agent_configs)]
+        agent_names = [a.name for a in agents]
+
+        # Per-player stats
+        player_stats = []
+        for i in range(4):
+            player_stats.append({
+                "name": agent_names[i],
+                "type": agent_configs[i].get("type", "rl"),
+                "total_score": 0,
+                "games_played": 0,
+                "placements": {1: 0, 2: 0, 3: 0, 4: 0},
+                "placement_sum": 0,
+                "wins": 0,  # 1st place
+                "positive_games": 0,  # score > 0
+                "bids_made": {},  # contract_name -> count
+                "declared_count": 0,
+                "declared_won": 0,
+                "defended_count": 0,
+                "defended_won": 0,
+                "announcements_made": {},  # ann_name -> count
+                "kontra_count": 0,
+                "best_game_score": None,
+                "worst_game_score": None,
+                "best_game_idx": None,
+                "worst_game_idx": None,
+                "score_history": [],  # cumulative score per session
+            })
+
+        # Contract-level stats
+        contract_stats = {}
+
+        # Session-level tracking
+        session_scores = [{} for _ in range(4)]  # per-player cumulative per session
+        games_done = 0
+
+        try:
+            num_sessions = (total + session_size - 1) // session_size
+            for session_idx in range(num_sessions):
+                games_this_session = min(session_size, total - games_done)
+                session_cumulative = [0, 0, 0, 0]
+
+                for g in range(games_this_session):
+                    game_idx = games_done + g
+                    dealer = game_idx % 4
+                    try:
+                        loop = GameLoop(agents)
+                        state, scores = await loop.run(dealer=dealer)
+                    except Exception:
+                        log.exception("Arena game %d failed, skipping", game_idx)
+                        continue
+
+                    # --- Extract per-game data ---
+                    contract = state.contract
+                    contract_name = contract.name if contract else "UNKNOWN"
+
+                    # Scores & placements
+                    score_list = [(pid, scores.get(pid, 0)) for pid in range(4)]
+                    sorted_scores = sorted(score_list, key=lambda x: x[1], reverse=True)
+                    for rank_idx, (pid, sc) in enumerate(sorted_scores):
+                        place = rank_idx + 1
+                        ps = player_stats[pid]
+                        ps["total_score"] += sc
+                        ps["games_played"] += 1
+                        ps["placements"][place] += 1
+                        ps["placement_sum"] += place
+                        if place == 1:
+                            ps["wins"] += 1
+                        if sc > 0:
+                            ps["positive_games"] += 1
+                        session_cumulative[pid] += sc
+
+                        # Best/worst
+                        if ps["best_game_score"] is None or sc > ps["best_game_score"]:
+                            ps["best_game_score"] = sc
+                            ps["best_game_idx"] = game_idx
+                        if ps["worst_game_score"] is None or sc < ps["worst_game_score"]:
+                            ps["worst_game_score"] = sc
+                            ps["worst_game_idx"] = game_idx
+
+                    # Bids tracking
+                    for bid in (state.bids or []):
+                        if bid.contract is not None:
+                            bid_name = bid.contract.name
+                            ps = player_stats[bid.player]
+                            ps["bids_made"][bid_name] = ps["bids_made"].get(bid_name, 0) + 1
+
+                    # Declarer/defender stats
+                    if contract and not contract.is_klop:
+                        declarer = state.declarer
+                        partner = state.partner
+                        decl_team = {declarer}
+                        if partner is not None:
+                            decl_team.add(partner)
+
+                        decl_won = scores.get(declarer, 0) > 0 if declarer is not None else False
+
+                        for pid in range(4):
+                            if pid in decl_team:
+                                player_stats[pid]["declared_count"] += 1
+                                if decl_won:
+                                    player_stats[pid]["declared_won"] += 1
+                            else:
+                                player_stats[pid]["defended_count"] += 1
+                                if not decl_won:
+                                    player_stats[pid]["defended_won"] += 1
+
+                        # Contract stats
+                        if contract_name not in contract_stats:
+                            contract_stats[contract_name] = {
+                                "played": 0, "decl_won": 0,
+                                "total_decl_score": 0, "total_def_score": 0,
+                            }
+                        cs = contract_stats[contract_name]
+                        cs["played"] += 1
+                        if decl_won:
+                            cs["decl_won"] += 1
+                        if declarer is not None:
+                            cs["total_decl_score"] += scores.get(declarer, 0)
+                        # Average defender score
+                        def_scores = [scores.get(p, 0) for p in range(4) if p not in decl_team]
+                        cs["total_def_score"] += sum(def_scores)
+                    else:
+                        # Klop
+                        if "KLOP" not in contract_stats:
+                            contract_stats["KLOP"] = {
+                                "played": 0, "decl_won": 0,
+                                "total_decl_score": 0, "total_def_score": 0,
+                            }
+                        contract_stats["KLOP"]["played"] += 1
+
+                    # Announcements
+                    for pid, anns in (state.announcements or {}).items():
+                        for ann in anns:
+                            ann_name = ann.name if hasattr(ann, 'name') else str(ann)
+                            ps = player_stats[pid]
+                            ps["announcements_made"][ann_name] = ps["announcements_made"].get(ann_name, 0) + 1
+
+                    # Kontra tracking
+                    for key, level in (state.kontra_levels or {}).items():
+                        if hasattr(level, 'value'):
+                            lv = level.value if isinstance(level.value, int) else 0
+                        else:
+                            lv = int(level) if level else 0
+                        if lv > 0:
+                            # Attribute kontra to opponents of declarer
+                            if state.declarer is not None:
+                                for pid in range(4):
+                                    if pid != state.declarer and (state.partner is None or pid != state.partner):
+                                        player_stats[pid]["kontra_count"] += 1
+
+                    await asyncio.sleep(0)  # yield to event loop
+
+                # End of session: update progress
+                games_done += games_this_session
+                for pid in range(4):
+                    player_stats[pid]["score_history"].append(session_cumulative[pid])
+
+                # Build analytics snapshot
+                analytics = _build_arena_analytics(player_stats, contract_stats, games_done, total)
+                _arena_progress = {
+                    "status": "running",
+                    "games_done": games_done,
+                    "total_games": total,
+                    "analytics": analytics,
+                }
+                await asyncio.sleep(0)
+
+        except asyncio.CancelledError:
+            log.info("Arena cancelled at game %d/%d", games_done, total)
+            _arena_progress["status"] = "cancelled"
+            _arena_progress["analytics"] = _build_arena_analytics(player_stats, contract_stats, games_done, total)
+            return
+        except Exception:
+            log.exception("Arena failed at game %d/%d", games_done, total)
+            _arena_progress["status"] = "error"
+            _arena_progress["analytics"] = _build_arena_analytics(player_stats, contract_stats, games_done, total)
+            return
+
+        # Done
+        _arena_progress = {
+            "status": "done",
+            "games_done": games_done,
+            "total_games": total,
+            "analytics": _build_arena_analytics(player_stats, contract_stats, games_done, total),
+        }
+
+    _arena_task = asyncio.create_task(_run_arena())
+    return {"status": "started", "total_games": total, "session_size": session_size}
+
+
+def _build_arena_analytics(player_stats, contract_stats, games_done, total_games):
+    """Build the analytics payload from accumulated stats."""
+    players = []
+    for ps in player_stats:
+        gp = max(ps["games_played"], 1)
+        players.append({
+            "name": ps["name"],
+            "type": ps["type"],
+            "games_played": ps["games_played"],
+            "total_score": ps["total_score"],
+            "avg_score": round(ps["total_score"] / gp, 2),
+            "placements": ps["placements"],
+            "avg_placement": round(ps["placement_sum"] / gp, 2),
+            "win_rate": round(ps["wins"] / gp * 100, 2),
+            "positive_rate": round(ps["positive_games"] / gp * 100, 2),
+            "bids_made": ps["bids_made"],
+            "declared_count": ps["declared_count"],
+            "declared_won": ps["declared_won"],
+            "declared_win_rate": round(ps["declared_won"] / max(ps["declared_count"], 1) * 100, 2),
+            "defended_count": ps["defended_count"],
+            "defended_won": ps["defended_won"],
+            "defended_win_rate": round(ps["defended_won"] / max(ps["defended_count"], 1) * 100, 2),
+            "announcements_made": ps["announcements_made"],
+            "kontra_count": ps["kontra_count"],
+            "best_game": {"score": ps["best_game_score"], "game_idx": ps["best_game_idx"]},
+            "worst_game": {"score": ps["worst_game_score"], "game_idx": ps["worst_game_idx"]},
+            "score_history": ps["score_history"],
+        })
+
+    contracts = {}
+    for name, cs in contract_stats.items():
+        played = max(cs["played"], 1)
+        contracts[name] = {
+            "played": cs["played"],
+            "decl_win_rate": round(cs["decl_won"] / played * 100, 2),
+            "avg_decl_score": round(cs["total_decl_score"] / played, 2),
+            "avg_def_score": round(cs["total_def_score"] / played, 2),
+        }
+
+    return {
+        "games_done": games_done,
+        "total_games": total_games,
+        "players": players,
+        "contracts": contracts,
+    }
+
+
+@app.get("/api/arena/progress")
+async def arena_progress():
+    if _arena_progress:
+        return _arena_progress
+    return {"status": "idle", "games_done": 0, "total_games": 0, "analytics": None}
+
+
+@app.post("/api/arena/stop")
+async def stop_arena():
+    global _arena_task
+    if _arena_task and not _arena_task.done():
+        _arena_task.cancel()
+    return {"status": "stopped"}
