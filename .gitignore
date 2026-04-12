@@ -59,3 +59,17 @@ backend/checkpoints/evo_tmp/
 backend/checkpoints/breeding_results/
 test-results/
 engine-rs/target/
+
+# One-off fix/patch scripts (not production code)
+fix_*.py
+patch_*.py
+precise_patch.py
+export_codebase.py
+process_cards.py
+update_dashboard.py
+frontend/patch_*.py
+backend/fix_*.py
+backend/find_*.py
+backend/test_list_get.py
+backend/trigger_bug.py
+backend/backend/

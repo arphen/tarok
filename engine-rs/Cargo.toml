@@ -12,6 +12,7 @@ pyo3 = { version = "0.25", features = ["extension-module"] }
 numpy = "0.25"
 rand = "0.9"
 rayon = "1.10"
+tch = "0.24"
 
 [profile.release]
 lto = true

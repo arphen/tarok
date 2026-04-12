@@ -4,6 +4,8 @@
 /// objects, no heap allocations per move where possible.
 
 use crate::card::*;
+use crate::trick_eval;
+use rand::prelude::*;
 
 // -----------------------------------------------------------------------
 // Enums
@@ -503,5 +505,102 @@ impl GameState {
             }
         }
         mask
+    }
+
+    // ------------------------------------------------------------------
+    // Game lifecycle methods (moved from PyGameState for self-play use)
+    // ------------------------------------------------------------------
+
+    /// Shuffle a full deck and deal 12 cards per player + 6 to talon.
+    pub fn deal(&mut self, rng: &mut impl Rng) {
+        let mut deck = build_deck();
+        deck.shuffle(rng);
+        for (i, &card) in deck.iter().enumerate() {
+            if i < 48 {
+                self.hands[i / 12].insert(card);
+            } else {
+                self.talon.insert(card);
+            }
+        }
+        self.phase = Phase::Bidding;
+    }
+
+    /// Record a bid (pass = None).
+    pub fn add_bid(&mut self, player: u8, contract: Option<Contract>) {
+        self.bids.push(Bid { player, contract });
+    }
+
+    /// Return the list of contracts this player may legally bid.
+    pub fn legal_bids(&self, player: u8) -> Vec<Contract> {
+        let is_forehand = player == self.forehand();
+        let highest = self
+            .bids
+            .iter()
+            .filter_map(|b| b.contract)
+            .max_by_key(|c| c.strength());
+
+        let mut result = Vec::new();
+        for c in Contract::BIDDABLE {
+            if c == Contract::Three && !is_forehand {
+                continue;
+            }
+            let legal = match highest {
+                Some(h) if is_forehand => c.strength() >= h.strength(),
+                Some(h) => c.strength() > h.strength(),
+                None => true,
+            };
+            if legal {
+                result.push(c);
+            }
+        }
+        result
+    }
+
+    /// Kings (or queens) that the declarer may call.
+    pub fn callable_kings(&self) -> Vec<Card> {
+        let declarer = match self.declarer {
+            Some(d) => d as usize,
+            None => return Vec::new(),
+        };
+        let hand = self.hands[declarer];
+        let mut kings = Vec::new();
+        for s in Suit::ALL {
+            let king = Card::suit_card(s, SuitRank::King);
+            if !hand.contains(king) {
+                kings.push(king);
+            }
+        }
+        if kings.is_empty() {
+            for s in Suit::ALL {
+                let queen = Card::suit_card(s, SuitRank::Queen);
+                if !hand.contains(queen) {
+                    kings.push(queen);
+                }
+            }
+        }
+        kings
+    }
+
+    /// Begin a new trick with the given lead player.
+    pub fn start_trick(&mut self, lead_player: u8) {
+        self.current_trick = Some(Trick::new(lead_player));
+    }
+
+    /// Play a card: remove from hand, add to trick, mark as played.
+    pub fn play_card(&mut self, player: u8, card: Card) {
+        self.hands[player as usize].remove(card);
+        if let Some(ref mut trick) = self.current_trick {
+            trick.play(player, card);
+        }
+        self.played_cards.insert(card);
+    }
+
+    /// Evaluate the current trick, archive it, return (winner, points).
+    pub fn finish_trick(&mut self) -> (u8, u8) {
+        let trick = self.current_trick.take().expect("No current trick");
+        let is_last = self.tricks.len() == 11;
+        let result = trick_eval::evaluate_trick(&trick, is_last, self.contract);
+        self.tricks.push(trick);
+        (result.winner, result.points)
     }
 }

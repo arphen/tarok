@@ -680,12 +680,180 @@ fn compute_legal_plays(hand: Vec<u8>, trick_cards: Vec<(u8, u8)>, contract: Opti
     legal.iter().map(|c| c.0).collect()
 }
 
+// -----------------------------------------------------------------------
+// Self-play with tch-rs (pure-Rust NN inference, zero GIL)
+// -----------------------------------------------------------------------
+
+/// Run batched self-play with a TorchScript model entirely in Rust.
+///
+/// Returns a dict of numpy arrays:
+///   states:         (N, STATE_SIZE) float32
+///   actions:        (N,) uint16
+///   log_probs:      (N,) float32
+///   values:         (N,) float32
+///   decision_types: (N,) uint8
+///   legal_masks:    list of N float32 arrays (variable length per dt)
+///   rewards:        (N,) float32  — per-step reward (based on final game score)
+///   game_ids:       (N,) uint32
+///   players:        (N,) uint8   — which seat made this decision
+///   n_games:        int
+///   n_experiences:  int
+///   scores:         (n_games, 4) int32
+#[pyfunction]
+#[pyo3(signature = (n_games, concurrency=64, model_path=None, explore_rate=0.05, seat_config="nn,nn,nn,nn"))]
+fn run_self_play(
+    py: Python<'_>,
+    n_games: u32,
+    concurrency: usize,
+    model_path: Option<&str>,
+    explore_rate: f64,
+    seat_config: &str,
+) -> PyResult<PyObject> {
+    use std::sync::Arc;
+    use crate::self_play::{SelfPlayRunner, GameResult};
+    use crate::player::BatchPlayer;
+    use crate::player_nn::NeuralNetPlayer;
+    use crate::player_bot::{StockSkisPlayer, BotVersion};
+
+    // Parse seat_config: "nn,nn,nn,nn" or "nn,bot_v5,bot_v5,bot_v5" etc.
+    let seat_labels: Vec<&str> = seat_config.split(',').map(|s| s.trim()).collect();
+    if seat_labels.len() != 4 {
+        return Err(pyo3::exceptions::PyValueError::new_err(
+            "seat_config must have exactly 4 comma-separated entries (e.g. 'nn,bot_v5,bot_v5,bot_v5')"
+        ));
+    }
+
+    let needs_nn = seat_labels.iter().any(|&s| s == "nn");
+    if needs_nn && model_path.is_none() {
+        return Err(pyo3::exceptions::PyValueError::new_err(
+            "model_path is required when seat_config contains 'nn'"
+        ));
+    }
+
+    // Build shared player instances — one per unique type
+    let nn_player: Option<Arc<dyn BatchPlayer>> = if needs_nn {
+        Some(Arc::new(NeuralNetPlayer::new(
+            model_path.unwrap(),
+            tch::Device::Cpu,
+            explore_rate,
+        )))
+    } else {
+        None
+    };
+
+    let mut bot_v5: Option<Arc<dyn BatchPlayer>> = None;
+    let mut bot_v6: Option<Arc<dyn BatchPlayer>> = None;
+
+    let mut players: Vec<Arc<dyn BatchPlayer>> = Vec::with_capacity(4);
+    for &label in &seat_labels {
+        let player: Arc<dyn BatchPlayer> = match label {
+            "nn" => nn_player.as_ref().unwrap().clone(),
+            "bot_v5" => {
+                if bot_v5.is_none() {
+                    bot_v5 = Some(Arc::new(StockSkisPlayer::v5()));
+                }
+                bot_v5.as_ref().unwrap().clone()
+            }
+            "bot_v6" => {
+                if bot_v6.is_none() {
+                    bot_v6 = Some(Arc::new(StockSkisPlayer::v6()));
+                }
+                bot_v6.as_ref().unwrap().clone()
+            }
+            other => {
+                return Err(pyo3::exceptions::PyValueError::new_err(
+                    format!("Unknown seat type '{}'. Use 'nn', 'bot_v5', or 'bot_v6'.", other)
+                ));
+            }
+        };
+        players.push(player);
+    }
+
+    let players_arr: [Arc<dyn BatchPlayer>; 4] = [
+        players[0].clone(),
+        players[1].clone(),
+        players[2].clone(),
+        players[3].clone(),
+    ];
+
+    // Release GIL — the entire self-play loop runs in pure Rust
+    let results: Vec<GameResult> = py.allow_threads(|| {
+        let runner = SelfPlayRunner::new(players_arr);
+        runner.run(n_games, concurrency)
+    });
+
+    // Flatten results into numpy arrays
+    let total_games = results.len();
+    let state_size = encoding::STATE_SIZE;
+
+    let total_exp: usize = results.iter().map(|r| r.experiences.len()).sum();
+
+    let mut all_states = Vec::with_capacity(total_exp * state_size);
+    let mut all_actions = Vec::with_capacity(total_exp);
+    let mut all_log_probs = Vec::with_capacity(total_exp);
+    let mut all_values = Vec::with_capacity(total_exp);
+    let mut all_dt = Vec::with_capacity(total_exp);
+    let mut all_rewards = Vec::with_capacity(total_exp);
+    let mut all_game_ids = Vec::with_capacity(total_exp);
+    let mut all_players = Vec::with_capacity(total_exp);
+    let mut all_masks: Vec<Vec<f32>> = Vec::with_capacity(total_exp);
+    let mut all_scores: Vec<[i32; 4]> = Vec::with_capacity(total_games);
+
+    for result in &results {
+        all_scores.push(result.scores);
+
+        for exp in &result.experiences {
+            all_states.extend_from_slice(&exp.state);
+            all_actions.push(exp.action);
+            all_log_probs.push(exp.log_prob);
+            all_values.push(exp.value);
+            all_dt.push(exp.decision_type);
+            all_masks.push(exp.legal_mask.clone());
+            all_game_ids.push(exp.game_id);
+            all_players.push(exp.player);
+            all_rewards.push(0.0f32);
+        }
+    }
+
+    let dict = pyo3::types::PyDict::new(py);
+
+    let states_arr = PyArray1::<f32>::from_vec(py, all_states)
+        .reshape([total_exp, state_size])
+        .map_err(|e| pyo3::exceptions::PyValueError::new_err(format!("states: {e}")))?;
+    dict.set_item("states", states_arr)?;
+    dict.set_item("actions", numpy::PyArray1::<u16>::from_vec(py, all_actions))?;
+    dict.set_item("log_probs", numpy::PyArray1::<f32>::from_vec(py, all_log_probs))?;
+    dict.set_item("values", numpy::PyArray1::<f32>::from_vec(py, all_values))?;
+    dict.set_item("decision_types", numpy::PyArray1::<u8>::from_vec(py, all_dt))?;
+    dict.set_item("rewards", numpy::PyArray1::<f32>::from_vec(py, all_rewards))?;
+    dict.set_item("game_ids", numpy::PyArray1::<u32>::from_vec(py, all_game_ids))?;
+    dict.set_item("players", numpy::PyArray1::<u8>::from_vec(py, all_players))?;
+
+    let masks_list = pyo3::types::PyList::new(
+        py,
+        all_masks.iter().map(|m| numpy::PyArray1::<f32>::from_slice(py, m)),
+    )?;
+    dict.set_item("legal_masks", masks_list)?;
+
+    let scores_flat: Vec<i32> = all_scores.iter().flat_map(|s| s.iter().copied()).collect();
+    let scores_arr = numpy::PyArray1::<i32>::from_vec(py, scores_flat)
+        .reshape([total_games, 4])
+        .map_err(|e| pyo3::exceptions::PyValueError::new_err(format!("scores: {e}")))?;
+    dict.set_item("scores", scores_arr)?;
+
+    dict.set_item("n_games", total_games)?;
+    dict.set_item("n_experiences", total_exp)?;
+
+    Ok(dict.into())
+}
+
 pub fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<PyGameState>()?;
     m.add_function(wrap_pyfunction!(generate_warmup_data, m)?)?;
     m.add_function(wrap_pyfunction!(generate_expert_data, m)?)?;
     m.add_function(wrap_pyfunction!(evaluate_trick_winner, m)?)?;
     m.add_function(wrap_pyfunction!(compute_legal_plays, m)?)?;
+    m.add_function(wrap_pyfunction!(run_self_play, m)?)?;
 
     // Expose constants
     m.add("STATE_SIZE", encoding::STATE_SIZE)?;
