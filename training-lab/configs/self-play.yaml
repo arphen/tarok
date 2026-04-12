@@ -1,0 +1,23 @@
+# Pure self-play (4 neural networks, no bots)
+#
+# All four seats run copies of your neural network.  The agent learns
+# entirely from playing against itself.  Use this once the NN has
+# surpassed bot_v5 and you want it to keep improving.
+#
+# Usage:
+#   make train CONFIG=self-play MODEL=backend/checkpoints/tarok_agent_latest.pt
+
+seats: "nn,nn,nn,nn"
+bench_seats: "nn,bot_v5,bot_v5,bot_v5"   # still benchmark vs bots
+
+iterations: 10
+games: 10000
+bench_games: 10000
+
+ppo_epochs: 6
+batch_size: 8192
+lr: 0.0003
+explore_rate: 0.10
+
+concurrency: 128
+device: auto

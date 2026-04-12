@@ -1,0 +1,23 @@
+# Train with 3 NNs vs 1 rule-based bot
+#
+# Three copies of your neural network (seats 0-2) play against one
+# StockŠkis v5 bot.  Good for late-stage training when your NN is
+# already stronger than the bots.
+#
+# Usage:
+#   make train CONFIG=vs-1-bot MODEL=backend/checkpoints/tarok_agent_latest.pt
+
+seats: "nn,nn,nn,bot_v5"
+bench_seats: "nn,bot_v5,bot_v5,bot_v5"
+
+iterations: 10
+games: 10000
+bench_games: 10000
+
+ppo_epochs: 6
+batch_size: 8192
+lr: 0.0003
+explore_rate: 0.10
+
+concurrency: 128
+device: auto
