@@ -138,9 +138,11 @@ train-bred:
 # 3-Phase Training Pipeline
 # ──────────────────────────────────────────────
 
-# Build the Rust engine (required before training)
+# Build the Rust engine (required before training).
+# maturin must be in the backend venv — install dev deps first (see pyproject.toml).
 build-engine:
-	cd backend && LIBTORCH_USE_PYTORCH=1 uv run --default-index https://pypi.org/simple maturin develop --release --manifest-path ../engine-rs/Cargo.toml
+	cd backend && uv sync --default-index https://pypi.org/simple --extra dev --quiet && \
+		LIBTORCH_USE_PYTORCH=1 uv run --default-index https://pypi.org/simple maturin develop --release --manifest-path ../engine-rs/Cargo.toml
 
 # Auto-install Rust + build engine if the .so is missing
 ensure-engine:

@@ -39,6 +39,14 @@ from tarok.adapters.ai.training_lab import PPOTrainer, TrainingMetrics
 from tarok.use_cases.game_loop import GameLoop
 
 
+def _training_win_rate(m: TrainingMetrics) -> float:
+    """Breeding logs expect a 0..1 rate; lab PPOTrainer uses avg_placement 1..4."""
+    pl = m.avg_placement
+    if pl <= 0:
+        return 0.0
+    return max(0.0, min(1.0, (4.0 - pl) / 3.0))
+
+
 # ---------------------------------------------------------------------------
 # Breeding progress (for dashboard)
 # ---------------------------------------------------------------------------
@@ -375,7 +383,7 @@ async def run_breeding(config: BreedingConfig | None = None) -> dict[str, Any]:
     warmup_result = await warmup_trainer.train(config.warmup_sessions)
 
     base_weights = copy.deepcopy(warmup_trainer.shared_network.state_dict())
-    print(f"\n  Warmup done: win_rate={warmup_result.win_rate:.1%} avg_reward={warmup_result.avg_reward:+.2f}")
+    print(f"\n  Warmup done: win_rate={_training_win_rate(warmup_result):.1%} avg_reward={warmup_result.avg_reward:+.2f}")
     print()
 
     # ===================================================================
@@ -556,12 +564,12 @@ async def run_breeding(config: BreedingConfig | None = None) -> dict[str, Any]:
             "cycle": cycle + 1,
             "best_fitness": progress.best_fitness,
             "best_profile": progress.best_profile,
-            "refine_win_rate": refine_result.win_rate,
+            "refine_win_rate": _training_win_rate(refine_result),
             "refine_avg_reward": refine_result.avg_reward,
         }
         progress.cycle_summaries.append(cycle_summary)
 
-        print(f"  Cycle {cycle + 1} refined: wr={refine_result.win_rate:.1%} reward={refine_result.avg_reward:+.2f}")
+        print(f"  Cycle {cycle + 1} refined: wr={_training_win_rate(refine_result):.1%} reward={refine_result.avg_reward:+.2f}")
         print()
 
         # Save per-cycle checkpoint
