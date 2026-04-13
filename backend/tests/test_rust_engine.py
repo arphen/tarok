@@ -139,10 +139,10 @@ async def test_rust_game_loop_mixed_players_compatible():
     """RustGameLoop should support non-RL players via compatibility fallback."""
     from tarok.adapters.ai.agent import RLAgent
     from tarok.adapters.ai.rust_game_loop import RustGameLoop
-    from tarok.adapters.ai.stockskis_v5 import StockSkisPlayerV5
+    from tarok.adapters.ai.stockskis import RustStockskisPlayer
 
     agents = [RLAgent(name="RL-0")]
-    agents.extend(StockSkisPlayerV5(name=f"Skis-{i}") for i in range(1, 4))
+    agents.extend(RustStockskisPlayer(variant="v5", name=f"Skis-{i}") for i in range(1, 4))
     agents[0].set_training(False)
 
     loop = RustGameLoop(agents)
@@ -156,9 +156,3 @@ def test_rust_game_loop_import_succeeds():
     """RustGameLoop should be importable when engine is installed."""
     from tarok.adapters.ai.rust_game_loop import RustGameLoop
     assert RustGameLoop is not None
-
-
-def test_batch_game_runner_import_succeeds():
-    """BatchGameRunner should be importable when engine is installed."""
-    from tarok.adapters.ai.batch_game_runner import BatchGameRunner
-    assert BatchGameRunner is not None

@@ -13,7 +13,7 @@ from abc import ABC, abstractmethod
 import torch
 import torch.nn as nn
 
-from tarok.adapters.ai.encoding import DecisionType
+from tarok.core.encoding import DecisionType
 
 
 class ComputeBackend(ABC):

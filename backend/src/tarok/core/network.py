@@ -24,7 +24,7 @@ from __future__ import annotations
 import torch
 import torch.nn as nn
 
-from tarok.adapters.ai.encoding import (
+from tarok.core.encoding import (
     STATE_SIZE,
     ORACLE_STATE_SIZE,
     BID_ACTION_SIZE,

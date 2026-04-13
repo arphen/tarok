@@ -9,13 +9,15 @@ import os
 @pytest.mark.asyncio
 async def test_arena_runs_with_nn_agent(tmp_path, monkeypatch):
     # Patch arena_results path to temp
-    from tarok.adapters.api import server
+    from tarok.adapters.api.routers import arena_router
     arena_results = tmp_path / "arena_results.json"
-    monkeypatch.setattr(server, "_arena_history_path", arena_results)
+    monkeypatch.setattr(arena_router, "_arena_history_path", arena_results)
 
-    # Create a dummy checkpoint file (simulate a valid file)
+    # Create a real checkpoint file (TorchScript export needs valid weights)
+    import torch
+    from tarok.core.network import TarokNet
     ckpt_path = tmp_path / "dummy.pt"
-    ckpt_path.write_bytes(b"FAKEPT")
+    torch.save(TarokNet().state_dict(), str(ckpt_path))
 
     # Compose request: 1 NN agent, 3 bots
     req_agents = [
@@ -26,7 +28,7 @@ async def test_arena_runs_with_nn_agent(tmp_path, monkeypatch):
     ]
 
     # Patch checkpoint search to look in tmp_path
-    monkeypatch.setattr(server, "_ARENA_CHECKPOINT_DIRS", [tmp_path])
+    monkeypatch.setattr(arena_router, "_ARENA_CHECKPOINT_DIRS", [tmp_path])
 
     transport = ASGITransport(app=app)
     async with AsyncClient(transport=transport, base_url="http://test") as client:

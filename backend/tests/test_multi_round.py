@@ -8,8 +8,7 @@ from httpx import ASGITransport, AsyncClient
 
 from tarok.adapters.api.server import app
 from tarok.adapters.api.ws_observer import _build_card_tracker, _state_for_player
-from tarok.entities.card import Card, CardType, Suit, SuitRank, DECK
-from tarok.entities.game_state import GameState, Phase, Contract, Trick
+from tarok.entities import Card, CardType, Suit, SuitRank, DECK, GameState, Phase, Contract, Trick, tarok, suit_card
 from tarok.adapters.ai.rust_game_loop import RustGameLoop as GameLoop, NullObserver
 
 
@@ -95,10 +94,10 @@ def test_card_tracker_after_trick():
     state.hands = [deck_list[:12], deck_list[12:24], deck_list[24:36], deck_list[36:48]]
 
     # Play a trick with known cards
-    hearts_king = Card(CardType.SUIT, SuitRank.KING.value, Suit.HEARTS)
-    tarok_1 = Card(CardType.TAROK, 1, None)
-    tarok_2 = Card(CardType.TAROK, 2, None)
-    tarok_21 = Card(CardType.TAROK, 21, None)
+    hearts_king = suit_card(Suit.HEARTS, SuitRank.KING)
+    tarok_1 = tarok(1)
+    tarok_2 = tarok(2)
+    tarok_21 = tarok(21)
 
     trick = Trick(lead_player=0)
     trick.cards = [(0, hearts_king), (1, tarok_1), (2, tarok_2), (3, tarok_21)]

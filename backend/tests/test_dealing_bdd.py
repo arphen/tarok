@@ -5,7 +5,7 @@ import random
 import pytest
 from pytest_bdd import scenarios, given, when, then, parsers
 
-from tarok.entities.game_state import GameState, Phase
+from tarok.entities import GameState, Phase
 from tarok.use_cases.deal import deal
 
 scenarios("features/dealing.feature")

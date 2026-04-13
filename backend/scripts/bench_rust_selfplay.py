@@ -11,7 +11,7 @@ import torch
 # Add paths
 sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
 
-from tarok.adapters.ai.network import TarokNet
+from tarok.core.network import TarokNet
 
 
 class AllHeadsModel(torch.nn.Module):

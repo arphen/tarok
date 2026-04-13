@@ -33,6 +33,7 @@ const INITIAL_STATE: SpectatorState = {
   put_down: [],
   score_breakdown: null,
   trick_summary: null,
+  dealer: null,
 };
 
 let spectatorLogSeq = 0;
@@ -270,6 +271,46 @@ export function useSpectator() {
     }
   }, [disconnect]);
 
+  const connectToGame = useCallback(async (existingGameId: string, replayFileName?: string) => {
+    setLoading(true);
+    disconnect();
+    setTimeline([]);
+    setCurrentIndex(0);
+    setIsPlaying(false);
+    setMode('live');
+    liveReplayRef.current = replayFileName ?? null;
+    setReplayName(replayFileName ?? null);
+    setGameId(existingGameId);
+
+    try {
+      const protocol = window.location.protocol === 'https:' ? 'wss' : 'ws';
+      const ws = new WebSocket(`${protocol}://${window.location.host}/ws/spectate/${existingGameId}`);
+
+      ws.onopen = () => setConnected(true);
+      ws.onmessage = (e) => {
+        const msg: SpectatorEvent = JSON.parse(e.data);
+        setTimeline(prev => {
+          const newState = [...prev, toTimelineItem(msg)];
+          if (newState.length === 1) setIsPlaying(true);
+          return newState;
+        });
+        if (msg.event === 'game_end' && liveReplayRef.current) {
+          void backfillFromReplayIfLonger(liveReplayRef.current);
+        }
+      };
+      ws.onclose = () => {
+        setConnected(false);
+        if (liveReplayRef.current) {
+          void backfillFromReplayIfLonger(liveReplayRef.current);
+        }
+      };
+      ws.onerror = () => setConnected(false);
+      wsRef.current = ws;
+    } finally {
+      setLoading(false);
+    }
+  }, [disconnect, backfillFromReplayIfLonger]);
+
   // Playback control
   useEffect(() => {
     if (isPlaying) {
@@ -427,6 +468,7 @@ export function useSpectator() {
     logEntries,
     currentEventName,
     startGame,
+    connectToGame,
     loadReplay,
     disconnect,
     

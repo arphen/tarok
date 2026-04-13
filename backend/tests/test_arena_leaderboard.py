@@ -5,7 +5,7 @@ from pathlib import Path
 import pytest
 from httpx import ASGITransport, AsyncClient
 
-from tarok.adapters.api import server
+from tarok.adapters.api.routers import arena_router
 from tarok.adapters.api.server import app
 
 
@@ -43,7 +43,7 @@ def _player(
 
 async def test_arena_history_persists_and_filters_by_checkpoint(tmp_path: Path, monkeypatch, client):
     arena_results = tmp_path / "arena_results.json"
-    monkeypatch.setattr(server, "_arena_history_path", arena_results)
+    monkeypatch.setattr(arena_router, "_arena_history_path", arena_results)
 
     req_agents = [
         {"name": "RL-A", "type": "rl", "checkpoint": "cp_a.pt"},
@@ -65,7 +65,7 @@ async def test_arena_history_persists_and_filters_by_checkpoint(tmp_path: Path, 
         },
     }
 
-    server._persist_arena_run(req_agents, total_games=100, session_size=20, payload=payload)
+    arena_router._persist_arena_run(req_agents, total_games=100, session_size=20, payload=payload)
 
     assert arena_results.exists()
 
@@ -87,7 +87,7 @@ async def test_arena_history_persists_and_filters_by_checkpoint(tmp_path: Path, 
 
 async def test_arena_checkpoint_leaderboard_aggregates_across_runs(tmp_path: Path, monkeypatch, client):
     arena_results = tmp_path / "arena_results.json"
-    monkeypatch.setattr(server, "_arena_history_path", arena_results)
+    monkeypatch.setattr(arena_router, "_arena_history_path", arena_results)
 
     run1_agents = [
         {"name": "RL-A", "type": "rl", "checkpoint": "cp_a.pt"},
@@ -127,8 +127,8 @@ async def test_arena_checkpoint_leaderboard_aggregates_across_runs(tmp_path: Pat
         },
     }
 
-    server._persist_arena_run(run1_agents, total_games=200, session_size=20, payload=run1_payload)
-    server._persist_arena_run(run2_agents, total_games=100, session_size=20, payload=run2_payload)
+    arena_router._persist_arena_run(run1_agents, total_games=200, session_size=20, payload=run1_payload)
+    arena_router._persist_arena_run(run2_agents, total_games=100, session_size=20, payload=run2_payload)
 
     resp = await client.get("/api/arena/leaderboard/checkpoints")
     assert resp.status_code == 200

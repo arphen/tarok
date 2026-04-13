@@ -741,6 +741,222 @@
 .val-neg { color: #e57373; }
 .val-detail { color: var(--text-secondary); font-style: italic; }
 
+/* ---- Match Data & Metadata ---- */
+.match-metadata {
+  margin-top: 8px;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 8px;
+  padding: 12px;
+  background: rgba(0, 0, 0, 0.15);
+}
+
+.match-metadata-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+
+.match-metadata-header h4 {
+  margin: 0;
+  border-bottom: none;
+  padding-bottom: 0;
+}
+
+.match-metadata-summary {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.metadata-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 3px 0;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.04);
+}
+
+.metadata-label {
+  color: var(--text-secondary);
+  font-size: 12px;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  min-width: 100px;
+}
+
+.metadata-value {
+  font-size: 13px;
+  text-align: right;
+}
+
+.match-metadata-detail {
+  margin-top: 12px;
+  border-top: 1px solid rgba(255, 255, 255, 0.1);
+  padding-top: 8px;
+}
+
+.metadata-section {
+  margin-bottom: 12px;
+}
+
+.metadata-section h5 {
+  color: var(--accent-gold);
+  font-size: 12px;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  margin: 0 0 6px 0;
+}
+
+.metadata-section-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 6px;
+}
+
+.metadata-section-header h5 {
+  margin: 0;
+}
+
+.btn-xs {
+  font-size: 10px;
+  padding: 2px 8px;
+  border-radius: 4px;
+}
+
+/* Bidding sequence */
+.bidding-sequence {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+
+.bid-chip {
+  font-size: 11px;
+  padding: 3px 8px;
+  border-radius: 4px;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+}
+
+.bid-chip-active {
+  background: rgba(76, 175, 80, 0.15);
+  color: #81c784;
+  border-color: rgba(76, 175, 80, 0.3);
+}
+
+.bid-chip-pass {
+  background: rgba(255, 255, 255, 0.04);
+  color: var(--text-secondary);
+}
+
+/* Talon / put down metadata */
+.metadata-talon-groups {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.metadata-talon-group {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  flex-wrap: wrap;
+}
+
+.metadata-talon-group-label {
+  font-size: 11px;
+  color: var(--text-secondary);
+  min-width: 58px;
+}
+
+.metadata-card-chip {
+  font-size: 11px;
+  padding: 2px 6px;
+  border-radius: 3px;
+  background: rgba(255, 255, 255, 0.06);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+}
+
+.metadata-put-down {
+  display: flex;
+  gap: 4px;
+  flex-wrap: wrap;
+}
+
+/* Card points breakdown */
+.card-points-breakdown {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.cpb-team {
+  padding: 6px 10px;
+  border-radius: 6px;
+}
+
+.cpb-decl {
+  background: rgba(76, 175, 80, 0.08);
+  border: 1px solid rgba(76, 175, 80, 0.2);
+}
+
+.cpb-opp {
+  background: rgba(244, 67, 54, 0.08);
+  border: 1px solid rgba(244, 67, 54, 0.2);
+}
+
+.cpb-team-label {
+  font-size: 12px;
+  font-weight: 600;
+  margin-right: 8px;
+}
+
+.cpb-team-pts {
+  font-size: 12px;
+  color: var(--text-secondary);
+}
+
+.cpb-cards {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 3px;
+  margin-top: 6px;
+}
+
+.cpb-card {
+  font-size: 10px;
+  padding: 1px 5px;
+  border-radius: 3px;
+  background: rgba(255, 255, 255, 0.06);
+  font-family: monospace;
+}
+
+.cpb-card sup {
+  font-size: 8px;
+  color: var(--accent-gold);
+  margin-left: 1px;
+}
+
+/* Lead / winner arrows in trick table */
+.lead-card {
+  /* subtle indicator for lead player */
+}
+
+.lead-arrow {
+  color: #64b5f6;
+  font-size: 10px;
+  margin-right: 1px;
+}
+
+.winner-arrow {
+  color: var(--accent-gold);
+  font-size: 10px;
+  margin-left: 1px;
+}
+
 /* Trick results table */
 .trick-results {
   margin-top: 4px;

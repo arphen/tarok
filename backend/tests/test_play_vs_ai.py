@@ -16,8 +16,7 @@ from tarok.adapters.ai.agent import RLAgent
 from tarok.adapters.ai.random_agent import RandomPlayer
 from tarok.adapters.api.human_player import HumanPlayer
 from tarok.adapters.api.ws_observer import _state_for_player
-from tarok.entities.card import Card, CardType, Suit, SuitRank
-from tarok.entities.game_state import Bid, Contract, GameState, Phase
+from tarok.entities import Card, CardType, Suit, SuitRank, Bid, Contract, GameState, Phase, DECK, tarok, suit_card
 from tarok.adapters.ai.rust_game_loop import RustGameLoop as GameLoop, NullObserver
 
 
@@ -261,7 +260,7 @@ async def test_callable_kings_sent_during_king_calling():
     state.contract = Contract.THREE
     # Give player 0 a hand without the hearts king
     state.hands = [
-        [Card(CardType.TAROK, v, None) for v in range(1, 13)],
+        [tarok(v) for v in range(1, 13)],
         [], [], [],
     ]
 
@@ -288,8 +287,8 @@ async def test_must_discard_set_after_talon_pickup():
 
     # Player 0 has 15 cards (12 original + 3 picked from talon)
     state.hands = [
-        [Card(CardType.TAROK, v, None) for v in range(1, 13)]
-        + [Card(CardType.SUIT, 1, Suit.HEARTS), Card(CardType.SUIT, 2, Suit.HEARTS), Card(CardType.SUIT, 3, Suit.HEARTS)],
+        [tarok(v) for v in range(1, 13)]
+        + [suit_card(Suit.HEARTS, SuitRank.PIP_1), suit_card(Suit.HEARTS, SuitRank.PIP_2), suit_card(Suit.HEARTS, SuitRank.PIP_3)],
         [], [], [],
     ]
 

@@ -29,10 +29,7 @@ Usage::
 
 from __future__ import annotations
 
-import importlib
-import re
 from dataclasses import dataclass, field
-from pathlib import Path
 from typing import Any, Callable
 
 
@@ -60,9 +57,6 @@ class BotInfo:
 # Type for factory callables: (name: str, **kwargs) -> PlayerPort
 BotFactory = Callable[..., Any]
 
-_STOCKSKIS_FILE_RE = re.compile(r"^stockskis(?:_v(\d+))?(?:_\d+)?\.py$")
-_STOCKSKIS_NAMED_RE = re.compile(r"^stockskis_([a-z]\w+)\.py$")
-
 # Descriptions for known StockSkis versions
 _STOCKSKIS_DESCRIPTIONS: dict[int, str] = {
     1: "Basic heuristics ported from the original Dart engine",
@@ -70,6 +64,7 @@ _STOCKSKIS_DESCRIPTIONS: dict[int, str] = {
     3: "Bayesian inference + endgame awareness + game phase tracking",
     4: "Tighter béraç gating + clearer declarer/defender roles",
     5: "Rust-backed engine for maximum speed (delegates to Rust)",
+    6: "Improved v5 with better discarding and king protection",
 }
 
 _STOCKSKIS_NAMED_VARIANTS: dict[str, tuple[str, str]] = {
@@ -142,65 +137,38 @@ class BotRegistry:
         )
 
     def _discover_stockskis(self) -> None:
-        """Scan the ai/ directory for stockskis*.py files and register them."""
-        ai_dir = Path(__file__).resolve().parent
-        seen_versions: set[int] = set()
-        seen_named: set[str] = set()
+        """Register Rust-backed StockŠkis bots (v5, v6, m6)."""
+        from tarok.adapters.ai.stockskis import RustStockskisPlayer
 
-        for fpath in sorted(ai_dir.iterdir()):
-            # Numeric versions: stockskis.py, stockskis_v5.py, etc.
-            m = _STOCKSKIS_FILE_RE.match(fpath.name)
-            if m:
-                version = int(m.group(1)) if m.group(1) else 1
-                if version in seen_versions:
-                    continue
-                seen_versions.add(version)
+        for version in (5,):
+            variant = f"v{version}"
+            bot_id = f"stockskis_{variant}"
+            desc = _STOCKSKIS_DESCRIPTIONS.get(version, f"StockŠkis heuristic bot version {version}")
 
-                module_name = fpath.stem
-                class_name = f"StockSkisPlayerV{version}"
-                full_module = f"tarok.adapters.ai.{module_name}"
+            self.register(
+                BotInfo(
+                    id=bot_id,
+                    name=f"StockŠkis v{version}",
+                    description=desc,
+                    category="heuristic",
+                    version=version,
+                ),
+                lambda name=f"StockŠkis-v{version}", v=variant, **kw: RustStockskisPlayer(variant=v, name=name),
+            )
 
-                bot_id = f"stockskis_v{version}"
-                desc = _STOCKSKIS_DESCRIPTIONS.get(version, f"StockŠkis heuristic bot version {version}")
-
-                self.register(
-                    BotInfo(
-                        id=bot_id,
-                        name=f"StockŠkis v{version}",
-                        description=desc,
-                        category="heuristic",
-                        version=version,
-                    ),
-                    _make_stockskis_factory(full_module, class_name, version),
-                )
-                continue
-
-            # Named variants: stockskis_m6.py, etc.
-            m = _STOCKSKIS_NAMED_RE.match(fpath.name)
-            if m:
-                variant = m.group(1)
-                if variant in seen_named:
-                    continue
-                seen_named.add(variant)
-
-                if variant not in _STOCKSKIS_NAMED_VARIANTS:
-                    continue
-
-                class_name, desc = _STOCKSKIS_NAMED_VARIANTS[variant]
-                module_name = fpath.stem
-                full_module = f"tarok.adapters.ai.{module_name}"
-                bot_id = f"stockskis_{variant}"
-
-                self.register(
-                    BotInfo(
-                        id=bot_id,
-                        name=f"StockŠkis {variant}",
-                        description=desc,
-                        category="heuristic",
-                        version=None,
-                    ),
-                    _make_named_stockskis_factory(full_module, class_name, variant),
-                )
+        # Named variant: m6
+        for variant, (_, desc) in _STOCKSKIS_NAMED_VARIANTS.items():
+            bot_id = f"stockskis_{variant}"
+            self.register(
+                BotInfo(
+                    id=bot_id,
+                    name=f"StockŠkis {variant}",
+                    description=desc,
+                    category="heuristic",
+                    version=None,
+                ),
+                lambda name=f"StockŠkis-{variant}", v=variant, **kw: RustStockskisPlayer(variant=v, name=name),
+            )
 
     # ------------------------------------------------------------------
     # Queries
@@ -255,28 +223,6 @@ class BotRegistry:
             if info.category == "heuristic":
                 types.append(bot_id)
         return sorted(types)
-
-
-def _make_named_stockskis_factory(module_path: str, class_name: str, variant: str) -> BotFactory:
-    """Create a factory for a named StockŠkis variant (e.g. m6)."""
-
-    def factory(name: str = f"StockŠkis-{variant}", **kwargs: Any) -> Any:
-        mod = importlib.import_module(module_path)
-        cls = getattr(mod, class_name)
-        return cls(name=name, **kwargs)
-
-    return factory
-
-
-def _make_stockskis_factory(module_path: str, class_name: str, version: int) -> BotFactory:
-    """Create a factory that lazily imports and instantiates a StockŠkis player."""
-
-    def factory(name: str = f"StockŠkis-v{version}", **kwargs: Any) -> Any:
-        mod = importlib.import_module(module_path)
-        cls = getattr(mod, class_name)
-        return cls(name=name, **kwargs)
-
-    return factory
 
 
 def _make_nn_factory() -> BotFactory:

@@ -11,9 +11,7 @@ from typing import Any
 
 from fastapi import WebSocket
 
-from tarok.entities.card import Card
-from tarok.entities.game_state import Contract, GameState, Trick
-from tarok.entities.scoring import score_game_breakdown
+from tarok.entities import Card, Contract, GameState, Trick
 
 
 BACKEND_ROOT = Path(__file__).resolve().parents[4]
@@ -135,6 +133,7 @@ def _full_state(state: GameState, player_names: list[str]) -> dict:
             for k, v in (state.kontra_levels or {}).items()
         },
         "put_down": [_card_to_dict(c) for c in state.put_down] if state.put_down else [],
+        "dealer": state.dealer,
     }
 
 
@@ -261,11 +260,10 @@ class SpectatorObserver:
             # Auto mode but extra delay for end of trick
             await asyncio.sleep(self._delay)
 
-    async def on_game_end(self, scores: dict[int, int], state: GameState) -> None:
-        breakdown_data = score_game_breakdown(state)
-        await self._broadcast("game_end", {
-            "scores": {str(k): v for k, v in scores.items()},
-            "breakdown": breakdown_data["breakdown"],
-            "trick_summary": breakdown_data["trick_summary"],
-        }, state)
+    async def on_game_end(self, scores: dict[int, int], state: GameState, breakdown: dict | None = None) -> None:
+        data: dict = {"scores": {str(k): v for k, v in scores.items()}}
+        if breakdown is not None:
+            data["breakdown"] = breakdown.get("breakdown") or breakdown
+            data["trick_summary"] = breakdown.get("trick_summary")
+        await self._broadcast("game_end", data, state)
         self._save_replay()

@@ -16,6 +16,7 @@ import type { CardInGroup, CountingGroup, CountingTeamView } from '../utils/card
 interface SpectatorViewProps {
   onBack: () => void;
   checkpoints: { filename: string; episode: number; win_rate: number; model_name?: string; is_hof?: boolean }[];
+  arenaReplayGameId?: string | null;
 }
 
 type AgentType = string;
@@ -46,7 +47,7 @@ const SOLO_CONTRACTS = new Set([-3, -2, -1, 0, -100, -101]);
 
 type TeamRole = 'declarer' | 'defender' | null;
 
-export default function SpectatorView({ onBack, checkpoints }: SpectatorViewProps) {
+export default function SpectatorView({ onBack, checkpoints, arenaReplayGameId }: SpectatorViewProps) {
   const spectator = useSpectator();
   const [agents, setAgents] = useState<AgentSetup[]>(DEFAULT_AGENTS);
   const [stockskisTypes, setStockskisTypes] = useState<string[]>(['stockskis_v2', 'stockskis_v3', 'stockskis_v4', 'stockskis_v5', 'stockskis_m6']);
@@ -59,6 +60,8 @@ export default function SpectatorView({ onBack, checkpoints }: SpectatorViewProp
   const [calledCounts, setCalledCounts] = useState<Record<string, number>>({});
   const [roundHistory, setRoundHistory] = useState<RoundResult[]>([]);
   const [showCountingCards, setShowCountingCards] = useState(false);
+  const [showMatchDetail, setShowMatchDetail] = useState(false);
+  const [showCardBreakdown, setShowCardBreakdown] = useState(false);
 
   useEffect(() => {
     fetch('/api/replays')
@@ -84,6 +87,14 @@ export default function SpectatorView({ onBack, checkpoints }: SpectatorViewProp
       })
       .catch(() => {});
   }, []);
+
+  // Auto-connect to arena replay if game_id passed from BotArena
+  useEffect(() => {
+    if (arenaReplayGameId && spectator.connectToGame) {
+      spectator.connectToGame(arenaReplayGameId);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [arenaReplayGameId]);
 
   const isSetup = !spectator.gameId;
   const { state } = spectator;
@@ -537,6 +548,174 @@ export default function SpectatorView({ onBack, checkpoints }: SpectatorViewProp
                         </div>
                       )}
 
+                      {/* Match Data & Metadata */}
+                      <div className="match-metadata">
+                        <div className="match-metadata-header">
+                          <h4>Match Data</h4>
+                          <button
+                            className="btn-secondary btn-sm"
+                            onClick={() => setShowMatchDetail(v => !v)}
+                            type="button"
+                          >
+                            {showMatchDetail ? 'Hide Details' : 'Show Details'}
+                          </button>
+                        </div>
+
+                        <div className="match-metadata-summary">
+                          <div className="metadata-row">
+                            <span className="metadata-label">Date &amp; Time</span>
+                            <span className="metadata-value">
+                              {spectator.logEntries.length > 0
+                                ? new Date(spectator.logEntries[0].timestamp).toLocaleString()
+                                : '—'}
+                            </span>
+                          </div>
+                          <div className="metadata-row">
+                            <span className="metadata-label">Players</span>
+                            <span className="metadata-value">{names.join(', ')}</span>
+                          </div>
+                          <div className="metadata-row">
+                            <span className="metadata-label">Dealer</span>
+                            <span className="metadata-value">
+                              {state.dealer !== null ? names[state.dealer] : '—'}
+                            </span>
+                          </div>
+                          <div className="metadata-row">
+                            <span className="metadata-label">Contract</span>
+                            <span className="metadata-value">
+                              {state.contract !== null ? (CONTRACT_NAMES[state.contract] ?? state.contract) : '—'}
+                              {state.declarer !== null && ` by ${names[state.declarer]}`}
+                            </span>
+                          </div>
+                          {state.called_king && (
+                            <div className="metadata-row">
+                              <span className="metadata-label">Called King</span>
+                              <span className="metadata-value">
+                                {SUIT_SYMBOLS[state.called_king.suit!] ?? ''} {state.called_king.label}
+                                {state.partner !== null && ` → Partner: ${names[state.partner]}`}
+                              </span>
+                            </div>
+                          )}
+                        </div>
+
+                        {showMatchDetail && (
+                          <div className="match-metadata-detail">
+                            {/* Bidding sequence */}
+                            {state.bids.length > 0 && (
+                              <div className="metadata-section">
+                                <h5>Bidding Sequence</h5>
+                                <div className="bidding-sequence">
+                                  {state.bids.map((b, i) => (
+                                    <span key={i} className={`bid-chip ${b.contract !== null ? 'bid-chip-active' : 'bid-chip-pass'}`}>
+                                      {names[b.player]}: {b.contract !== null ? (CONTRACT_NAMES[b.contract] ?? b.contract) : 'Pass'}
+                                    </span>
+                                  ))}
+                                </div>
+                              </div>
+                            )}
+
+                            {/* Talon */}
+                            {state.talon_groups && state.talon_groups.length > 0 && (
+                              <div className="metadata-section">
+                                <h5>Talon</h5>
+                                <div className="metadata-talon-groups">
+                                  {state.talon_groups.map((group, i) => (
+                                    <div key={i} className="metadata-talon-group">
+                                      <span className="metadata-talon-group-label">Group {i + 1}:</span>
+                                      {group.map((card, j) => (
+                                        <span key={j} className="metadata-card-chip">{card.label}</span>
+                                      ))}
+                                    </div>
+                                  ))}
+                                </div>
+                              </div>
+                            )}
+
+                            {/* Put down */}
+                            {state.put_down.length > 0 && (
+                              <div className="metadata-section">
+                                <h5>Put Down</h5>
+                                <div className="metadata-put-down">
+                                  {state.put_down.map((card, j) => (
+                                    <span key={j} className="metadata-card-chip">{card.label}</span>
+                                  ))}
+                                </div>
+                              </div>
+                            )}
+
+                            {/* Card points breakdown by team */}
+                            {state.trick_summary && state.trick_summary.length > 0 && (
+                              <div className="metadata-section">
+                                <div className="metadata-section-header">
+                                  <h5>Card Points Breakdown</h5>
+                                  <button
+                                    className="btn-secondary btn-xs"
+                                    onClick={() => setShowCardBreakdown(v => !v)}
+                                    type="button"
+                                  >
+                                    {showCardBreakdown ? 'Hide' : 'Show Cards'}
+                                  </button>
+                                </div>
+                                {(() => {
+                                  const declCards: { label: string; points: number }[] = [];
+                                  const oppCards: { label: string; points: number }[] = [];
+                                  let declPts = 0;
+                                  let oppPts = 0;
+                                  for (const trick of state.trick_summary!) {
+                                    const winnerRole = state.roles[String(trick.winner)];
+                                    const isDeclTeam = winnerRole === 'declarer' || winnerRole === 'partner';
+                                    for (const c of trick.cards) {
+                                      if (isDeclTeam) {
+                                        declCards.push({ label: c.label, points: c.points });
+                                        declPts += c.points;
+                                      } else {
+                                        oppCards.push({ label: c.label, points: c.points });
+                                        oppPts += c.points;
+                                      }
+                                    }
+                                  }
+                                  // Add put-down cards to declarer
+                                  for (const c of state.put_down) {
+                                    declCards.push({ label: c.label, points: c.points });
+                                    declPts += c.points;
+                                  }
+                                  return (
+                                    <div className="card-points-breakdown">
+                                      <div className="cpb-team cpb-decl">
+                                        <span className="cpb-team-label">Declarer team</span>
+                                        <span className="cpb-team-pts">{declPts} pts ({declCards.length} cards)</span>
+                                        {showCardBreakdown && (
+                                          <div className="cpb-cards">
+                                            {declCards.map((c, i) => (
+                                              <span key={i} className="cpb-card" title={`${c.points} pts`}>
+                                                {c.label}<sup>{c.points}</sup>
+                                              </span>
+                                            ))}
+                                          </div>
+                                        )}
+                                      </div>
+                                      <div className="cpb-team cpb-opp">
+                                        <span className="cpb-team-label">Opponents</span>
+                                        <span className="cpb-team-pts">{oppPts} pts ({oppCards.length} cards)</span>
+                                        {showCardBreakdown && (
+                                          <div className="cpb-cards">
+                                            {oppCards.map((c, i) => (
+                                              <span key={i} className="cpb-card" title={`${c.points} pts`}>
+                                                {c.label}<sup>{c.points}</sup>
+                                              </span>
+                                            ))}
+                                          </div>
+                                        )}
+                                      </div>
+                                    </div>
+                                  );
+                                })()}
+                              </div>
+                            )}
+                          </div>
+                        )}
+                      </div>
+
                       {/* Trick-by-trick results table */}
                       {state.trick_summary && state.trick_summary.length > 0 && (
                         <div className="trick-results">
@@ -559,8 +738,11 @@ export default function SpectatorView({ onBack, checkpoints }: SpectatorViewProp
                                   <td>{trick.trick_num}</td>
                                   <td className="trick-cards-cell">
                                     {trick.cards.map((c, j) => (
-                                      <span key={j} className={c.player === trick.winner ? 'winning-card' : ''}>
-                                        {names[c.player]}: {c.label}{j < trick.cards.length - 1 ? ' · ' : ''}
+                                      <span key={j} className={`${c.player === trick.winner ? 'winning-card' : ''}${c.player === trick.lead_player ? ' lead-card' : ''}`}>
+                                        {c.player === trick.lead_player && <span className="lead-arrow" title="Lead">➤ </span>}
+                                        {names[c.player]}: {c.label}
+                                        {c.player === trick.winner && <span className="winner-arrow" title="Takes trick"> ✓</span>}
+                                        {j < trick.cards.length - 1 ? ' · ' : ''}
                                       </span>
                                     ))}
                                   </td>

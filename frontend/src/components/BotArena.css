@@ -383,6 +383,23 @@ td.negative {
   color: #666;
 }
 
+button.arena-bw-replay-btn {
+  border: 1px solid currentColor;
+  background: transparent;
+  border-radius: 6px;
+  cursor: pointer;
+  padding: 2px 10px;
+  transition: background 0.15s, transform 0.1s;
+}
+button.arena-bw-replay-btn:hover:not(:disabled) {
+  background: rgba(255,255,255,0.08);
+  transform: scale(1.05);
+}
+button.arena-bw-replay-btn:disabled {
+  opacity: 0.5;
+  cursor: wait;
+}
+
 .arena-bw-summary {
   font-size: 0.8rem;
   color: #aaa;

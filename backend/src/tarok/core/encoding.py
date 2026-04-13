@@ -14,8 +14,10 @@ from enum import Enum
 
 import torch
 
-from tarok.entities.card import Card, CardType, DECK, Suit
-from tarok.entities.game_state import Announcement, Contract, GameState, KontraLevel, Phase, Team
+from tarok.entities import (
+    Card, CardType, DECK, Suit,
+    Announcement, Contract, GameState, KontraLevel, Phase, Team,
+)
 
 # Build a card-to-index mapping
 CARD_TO_IDX: dict[Card, int] = {card: idx for idx, card in enumerate(DECK)}

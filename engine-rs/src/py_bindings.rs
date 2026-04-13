@@ -16,6 +16,7 @@ use crate::legal_moves;
 use crate::scoring;
 use crate::trick_eval;
 use crate::warmup;
+use serde_json;
 
 // -----------------------------------------------------------------------
 // PyGameState — the main Python-visible object
@@ -96,6 +97,11 @@ impl PyGameState {
     #[getter]
     fn dealer(&self) -> u8 {
         self.state.dealer
+    }
+
+    #[setter]
+    fn set_dealer(&mut self, v: u8) {
+        self.state.dealer = v;
     }
 
     #[getter]
@@ -298,6 +304,10 @@ impl PyGameState {
         };
     }
 
+    fn get_role(&self, player: u8) -> u8 {
+        self.state.roles[player as usize] as u8
+    }
+
     fn get_team(&self, player: u8) -> u8 {
         self.state.get_team(player) as u8
     }
@@ -388,6 +398,12 @@ impl PyGameState {
 
     fn score_game(&self) -> [i32; 4] {
         scoring::score_game(&self.state)
+    }
+
+    /// Return a JSON string with full scoring breakdown for UI display.
+    fn score_game_breakdown_json(&self) -> String {
+        let breakdown = scoring::score_game_breakdown(&self.state);
+        serde_json::to_string(&breakdown).expect("breakdown serialization failed")
     }
 
     // -- Card utilities --
@@ -846,6 +862,10 @@ fn run_self_play(
     let mut all_partners: Vec<i8> = Vec::with_capacity(total_games);
     let mut all_bid_contracts: Vec<[i8; 4]> = Vec::with_capacity(total_games);
     let mut all_taroks_in_hand: Vec<[u8; 4]> = Vec::with_capacity(total_games);
+    // Initial hands: (n_games, 4, 12) u8 — card indices per player
+    let mut all_initial_hands: Vec<u8> = Vec::with_capacity(total_games * 4 * 12);
+    // Initial talon: (n_games, 6) u8 — card indices
+    let mut all_initial_talon: Vec<u8> = Vec::with_capacity(total_games * 6);
 
     for result in &results {
         all_scores.push(result.scores);
@@ -854,6 +874,17 @@ fn run_self_play(
         all_partners.push(result.partner);
         all_bid_contracts.push(result.bid_contracts);
         all_taroks_in_hand.push(result.taroks_in_hand);
+
+        // Flatten initial hands: 4 players × 12 cards
+        for hand in &result.initial_hands {
+            for card in hand.iter() {
+                all_initial_hands.push(card.0);
+            }
+        }
+        // Flatten initial talon: 6 cards
+        for card in result.initial_talon.iter() {
+            all_initial_talon.push(card.0);
+        }
 
         for exp in &result.experiences {
             all_states.extend_from_slice(&exp.state);
@@ -908,6 +939,64 @@ fn run_self_play(
         .reshape([total_games, 4])
         .map_err(|e| pyo3::exceptions::PyValueError::new_err(format!("taroks_in_hand: {e}")))?;
     dict.set_item("taroks_in_hand", taroks_arr)?;
+
+    // Initial hands: (n_games, 4, 12) u8 — card indices for replay
+    let hands_arr = PyArray1::<u8>::from_vec(py, all_initial_hands)
+        .reshape([total_games, 4, 12])
+        .map_err(|e| pyo3::exceptions::PyValueError::new_err(format!("initial_hands: {e}")))?;
+    dict.set_item("initial_hands", hands_arr)?;
+    // Initial talon: (n_games, 6) u8
+    let talon_arr = PyArray1::<u8>::from_vec(py, all_initial_talon)
+        .reshape([total_games, 6])
+        .map_err(|e| pyo3::exceptions::PyValueError::new_err(format!("initial_talon: {e}")))?;
+    dict.set_item("initial_talon", talon_arr)?;
+
+    // Per-game traces: list of dicts for deterministic replay
+    let traces_list = pyo3::types::PyList::empty(py);
+    for result in &results {
+        let trace_dict = pyo3::types::PyDict::new(py);
+        let bids: Vec<(u8, u8)> = result.trace.bids.clone();
+        let bids_list = pyo3::types::PyList::new(
+            py,
+            bids.iter().map(|(p, a)| pyo3::types::PyTuple::new(py, &[*p, *a]).unwrap()),
+        )?;
+        trace_dict.set_item("bids", bids_list)?;
+
+        match result.trace.king_call {
+            Some((p, a)) => {
+                trace_dict.set_item("king_call", pyo3::types::PyTuple::new(py, &[p, a])?)?;
+            }
+            None => {
+                trace_dict.set_item("king_call", py.None())?;
+            }
+        }
+
+        match result.trace.talon_pick {
+            Some((p, a)) => {
+                trace_dict.set_item("talon_pick", pyo3::types::PyTuple::new(py, &[p, a])?)?;
+            }
+            None => {
+                trace_dict.set_item("talon_pick", py.None())?;
+            }
+        }
+
+        let put_down_list = pyo3::types::PyList::new(
+            py,
+            result.trace.put_down.iter().map(|&c| c),
+        )?;
+        trace_dict.set_item("put_down", put_down_list)?;
+
+        let cards_list = pyo3::types::PyList::new(
+            py,
+            result.trace.cards_played.iter().map(|(p, c)| pyo3::types::PyTuple::new(py, &[*p, *c]).unwrap()),
+        )?;
+        trace_dict.set_item("cards_played", cards_list)?;
+
+        trace_dict.set_item("dealer", (result.game_id % 4) as u8)?;
+
+        traces_list.append(trace_dict)?;
+    }
+    dict.set_item("traces", traces_list)?;
 
     dict.set_item("n_games", total_games)?;
     dict.set_item("n_experiences", total_exp)?;

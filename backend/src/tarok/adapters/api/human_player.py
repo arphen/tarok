@@ -4,8 +4,7 @@ from __future__ import annotations
 
 import asyncio
 
-from tarok.entities.card import Card, CardType, Suit, SuitRank
-from tarok.entities.game_state import Announcement, Contract, GameState
+from tarok.entities import Card, CardType, Suit, SuitRank, Announcement, Contract, GameState
 
 
 class HumanPlayer:

@@ -4,8 +4,7 @@ from __future__ import annotations
 
 import random
 
-from tarok.entities.card import Card, CardType
-from tarok.entities.game_state import Announcement, Contract, GameState
+from tarok.entities import Card, CardType, Announcement, Contract, GameState
 
 
 class RandomPlayer:

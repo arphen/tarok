@@ -54,6 +54,9 @@ struct InFlightGame {
     // Arena metadata
     initial_taroks: [u8; 4],
     bid_choices: [i8; 4],
+    initial_hands: [CardSet; 4],
+    initial_talon: CardSet,
+    trace: GameTrace,
 }
 
 /// Internal tracking for a pending decision.
@@ -63,6 +66,24 @@ struct Pending {
     decision_type: DecisionType,
     state_buf: Vec<f32>,
     legal_mask: Vec<f32>,
+}
+
+// -----------------------------------------------------------------------
+// Game trace — compact record of every decision for deterministic replay
+// -----------------------------------------------------------------------
+
+#[derive(Clone, Default)]
+pub struct GameTrace {
+    /// (player, action_idx) for each bid in chronological order
+    pub bids: Vec<(u8, u8)>,
+    /// (player, suit_action_idx) for king call, if any
+    pub king_call: Option<(u8, u8)>,
+    /// (player, group_idx) for talon pick, if any
+    pub talon_pick: Option<(u8, u8)>,
+    /// Card indices that were discarded after talon exchange
+    pub put_down: Vec<u8>,
+    /// (player, card_index) for every card played, in order
+    pub cards_played: Vec<(u8, u8)>,
 }
 
 // -----------------------------------------------------------------------
@@ -91,6 +112,9 @@ pub struct GameResult {
     pub partner: i8,
     pub bid_contracts: [i8; 4],
     pub taroks_in_hand: [u8; 4],
+    pub initial_hands: [CardSet; 4],
+    pub initial_talon: CardSet,
+    pub trace: GameTrace,
 }
 
 // -----------------------------------------------------------------------
@@ -281,6 +305,8 @@ impl SelfPlayRunner {
         gs.deal(rng);
         let first = (dealer + 1) % 4;
         let mut initial_taroks = [0u8; 4];
+        let initial_hands = gs.hands;
+        let initial_talon = gs.talon;
         for (pid, hand) in gs.hands.iter().enumerate() {
             initial_taroks[pid] = hand.tarok_count();
         }
@@ -300,6 +326,9 @@ impl SelfPlayRunner {
             step_counter: 0,
             initial_taroks,
             bid_choices: [-1i8; 4],
+            initial_hands,
+            initial_talon,
+            trace: GameTrace::default(),
         }
     }
 
@@ -321,6 +350,9 @@ impl SelfPlayRunner {
             partner,
             bid_contracts: game.bid_choices,
             taroks_in_hand: game.initial_taroks,
+            initial_hands: game.initial_hands,
+            initial_talon: game.initial_talon,
+            trace: game.trace.clone(),
         }
     }
 
@@ -383,6 +415,7 @@ impl SelfPlayRunner {
 
     fn apply_bid(game: &mut InFlightGame, action_idx: usize) {
         let bidder = game.current_bidder;
+        game.trace.bids.push((bidder, action_idx as u8));
         let contract = if action_idx < BID_IDX_TO_CONTRACT.len() {
             BID_IDX_TO_CONTRACT[action_idx]
         } else {
@@ -505,6 +538,7 @@ impl SelfPlayRunner {
             Some(d) => d,
             None => return,
         };
+        game.trace.king_call = Some((declarer, action_idx as u8));
         let callable = game.gs.callable_kings();
         let chosen = callable
             .iter()
@@ -601,6 +635,7 @@ impl SelfPlayRunner {
         let num_groups = talon_cards.len() / group_size.max(1);
 
         let pick_idx = action_idx.min(num_groups.saturating_sub(1));
+        game.trace.talon_pick = Some((declarer, pick_idx as u8));
         let start = pick_idx * group_size;
         let end = (start + group_size).min(talon_cards.len());
         let picked: Vec<Card> = talon_cards[start..end].to_vec();
@@ -636,6 +671,9 @@ impl SelfPlayRunner {
                 game.gs.put_down.insert(card);
             }
         }
+
+        // Record discarded cards in trace
+        game.trace.put_down = game.gs.put_down.iter().map(|c| c.0).collect();
 
         game.gs.phase = Phase::TrickPlay;
         game.phase = GamePhase::TrickPlay;
@@ -683,14 +721,16 @@ impl SelfPlayRunner {
         let player = (game.lead_player + game.trick_offset) % 4;
         let card = Card(action_idx as u8);
 
+        let actual_card;
         if !game.gs.hands[player as usize].contains(card) {
             // Fallback: play first legal card
-            if let Some(first) = game.gs.hands[player as usize].iter().next() {
-                game.gs.play_card(player, first);
-            }
+            actual_card = game.gs.hands[player as usize].iter().next().unwrap_or(card);
+            game.gs.play_card(player, actual_card);
         } else {
+            actual_card = card;
             game.gs.play_card(player, card);
         }
+        game.trace.cards_played.push((player, actual_card.0));
 
         game.trick_offset += 1;
 

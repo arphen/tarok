@@ -6,7 +6,7 @@ import shutil
 
 import torch
 
-from tarok.adapters.ai.network import TarokNet
+from tarok.core.network import TarokNet
 
 from training.ports import ModelPort
 

@@ -8,8 +8,7 @@ from typing import Any
 
 from fastapi import WebSocket
 
-from tarok.entities.card import Card, CardType, Suit, DECK
-from tarok.entities.game_state import Contract, GameState, Phase, Trick
+from tarok.entities import Card, CardType, Suit, DECK, Contract, GameState, Phase, Trick
 
 
 def _card_to_dict(card: Card) -> dict:
@@ -116,30 +115,34 @@ def _build_card_tracker(state: GameState) -> dict:
 def _state_for_player(state: GameState, player_idx: int, player_names: list[str],
                       match_info: dict | None = None, reveal_hands: bool = False,
                       card_tracker: dict | None = None) -> dict:
-    from tarok.entities.game_state import Phase
 
     is_current = state.current_player == player_idx
 
     # Phase-appropriate legal actions
+    # Note: legal_bids/legal_plays/callable_kings are game logic that now
+    # lives exclusively in the Rust engine.  The game loop communicates
+    # these to players directly; the state snapshot may not have them.
     legal_plays: list[dict] = []
     legal_bids: list[int | None] | None = None
     callable_kings: list[dict] | None = None
     must_discard: int = 0
 
     if state.phase == Phase.BIDDING and is_current:
-        legal_bids = [
-            b.value if b is not None else None
-            for b in state.legal_bids(player_idx)
-        ]
+        if hasattr(state, 'legal_bids') and callable(getattr(state, 'legal_bids', None)):
+            legal_bids = [
+                b.value if b is not None else None
+                for b in state.legal_bids(player_idx)
+            ]
     elif state.phase == Phase.KING_CALLING and is_current:
-        callable_kings = [_card_to_dict(k) for k in state.callable_kings()]
+        if hasattr(state, 'callable_kings') and callable(getattr(state, 'callable_kings', None)):
+            callable_kings = [_card_to_dict(k) for k in state.callable_kings()]
     elif state.phase == Phase.TALON_EXCHANGE and is_current:
         if state.contract and state.contract.talon_cards > 0:
-            expected_hand_size = 12 + state.contract.talon_cards
             if len(state.hands[player_idx]) > 12:
                 must_discard = len(state.hands[player_idx]) - 12
     elif state.phase == Phase.TRICK_PLAY and is_current:
-        legal_plays = [_card_to_dict(c) for c in state.legal_plays(player_idx)]
+        if hasattr(state, 'legal_plays') and callable(getattr(state, 'legal_plays', None)):
+            legal_plays = [_card_to_dict(c) for c in state.legal_plays(player_idx)]
 
     return {
         "phase": state.phase.value,
@@ -292,7 +295,7 @@ class WebSocketObserver:
             "cards": [(p, _card_to_dict(c)) for p, c in trick.cards],
         }, state)
 
-    async def on_game_end(self, scores: dict[int, int], state: GameState) -> None:
+    async def on_game_end(self, scores: dict[int, int], state: GameState, breakdown: dict | None = None) -> None:
         await self._send("game_end", {
             "scores": {str(k): v for k, v in scores.items()},
         }, state)

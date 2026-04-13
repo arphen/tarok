@@ -7,14 +7,13 @@ Discard remains heuristic (combinatorial action space too large for a single hea
 from __future__ import annotations
 
 import random
-from dataclasses import dataclass, field
 
 import torch
 
-from tarok.entities.card import Card, CardType, Suit
-from tarok.entities.game_state import Announcement, Contract, GameState, KontraLevel
-from tarok.adapters.ai.network import TarokNet
-from tarok.adapters.ai.encoding import (
+from tarok.entities import Card, CardType, Suit, Announcement, Contract, GameState, KontraLevel
+from tarok.core.network import TarokNet
+from tarok.core.experience import Experience
+from tarok.core.encoding import (
     DecisionType,
     encode_state,
     encode_oracle_state,
@@ -33,22 +32,6 @@ from tarok.adapters.ai.encoding import (
     ANNOUNCE_IDX_TO_ANN,
     KONTRA_IDX_TO_KEY,
 )
-
-
-@dataclass
-class Experience:
-    """A single step of experience for PPO training."""
-    state: torch.Tensor
-    action: int
-    log_prob: torch.Tensor
-    value: torch.Tensor
-    decision_type: DecisionType = DecisionType.CARD_PLAY
-    reward: float = 0.0
-    done: bool = False
-    oracle_state: torch.Tensor | None = None
-    legal_mask: torch.Tensor | None = None  # actual legal mask from game time
-    game_id: int = 0          # which game this experience belongs to
-    step_in_game: int = 0     # temporal position within game
 
 
 class RLAgent:

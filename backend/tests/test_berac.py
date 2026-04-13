@@ -12,11 +12,11 @@ import pytest
 
 from tarok.adapters.ai.agent import RLAgent
 from tarok.adapters.ai.random_agent import RandomPlayer
-from tarok.entities.card import Card, CardType, Suit, SuitRank, DECK
-from tarok.entities.game_state import (
+from tarok.entities import (
+    Card, CardType, Suit, SuitRank, DECK,
     Bid, Contract, GameState, Phase, PlayerRole, Trick,
+    score_game,
 )
-from tarok.entities.scoring import score_game
 from tarok.adapters.ai.rust_game_loop import RustGameLoop as GameLoop, NullObserver
 from tarok.use_cases.deal import deal
 from tarok.use_cases.play_trick import start_trick, play_card

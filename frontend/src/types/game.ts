@@ -178,6 +178,7 @@ export interface SpectatorState {
   put_down: CardData[];
   score_breakdown: ScoreBreakdown | null;
   trick_summary: TrickSummaryEntry[] | null;
+  dealer: number | null;
 }
 
 export interface ScoreBreakdownLine {

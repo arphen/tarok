@@ -2,10 +2,10 @@
 
 import pytest
 
-from tarok.entities.card import (
+from tarok.entities import (
     Card, CardType, Suit, SuitRank, tarok, suit_card, PAGAT, MOND, SKIS, DECK,
+    compute_card_points, TOTAL_GAME_POINTS,
 )
-from tarok.entities.scoring import compute_card_points, TOTAL_GAME_POINTS
 
 
 def _filler(n: int) -> list[Card]:

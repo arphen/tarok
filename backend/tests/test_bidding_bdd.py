@@ -3,7 +3,7 @@
 import pytest
 from pytest_bdd import scenarios, given, when, then, parsers
 
-from tarok.entities.game_state import Bid, Contract, GameState, Phase, PlayerRole
+from tarok.entities import Bid, Contract, GameState, Phase, PlayerRole
 from tarok.use_cases.bid import place_bid
 
 scenarios("features/bidding.feature")

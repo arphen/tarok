@@ -5,11 +5,11 @@ import random
 from hypothesis import given as hgiven, settings, assume
 from hypothesis import strategies as st
 
-from tarok.entities.card import Card, CardType, Suit, SuitRank, DECK, tarok, suit_card, PAGAT, MOND, SKIS
-from tarok.entities.game_state import (
+from tarok.entities import (
+    Card, CardType, Suit, SuitRank, DECK, tarok, suit_card, PAGAT, MOND, SKIS,
     Contract, GameState, Phase, PlayerRole, Team, Trick, Announcement,
+    compute_card_points,
 )
-from tarok.entities.scoring import compute_card_points, score_game, TOTAL_GAME_POINTS
 from tarok.use_cases.deal import deal
 from tarok.use_cases.bid import place_bid
 from tarok.use_cases.play_trick import play_card, start_trick

@@ -9,8 +9,8 @@ from __future__ import annotations
 import torch
 import torch.nn as nn
 
-from tarok.adapters.ai.compute.backend import ComputeBackend
-from tarok.adapters.ai.encoding import DecisionType
+from tarok.core.compute.backend import ComputeBackend
+from tarok.core.encoding import DecisionType
 
 
 class CpuBackend(ComputeBackend):

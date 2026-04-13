@@ -14,9 +14,9 @@ import torch
 import torch.nn as nn
 import torch.optim as optim
 
-from tarok.adapters.ai.agent import Experience
-from tarok.adapters.ai.compute import create_backend
-from tarok.adapters.ai.encoding import (
+from tarok.core.experience import Experience
+from tarok.core.compute import create_backend
+from tarok.core.encoding import (
     ANNOUNCE_ACTION_SIZE,
     BID_ACTION_SIZE,
     CARD_ACTION_SIZE,
@@ -24,7 +24,7 @@ from tarok.adapters.ai.encoding import (
     KING_ACTION_SIZE,
     TALON_ACTION_SIZE,
 )
-from tarok.adapters.ai.network import TarokNet
+from tarok.core.network import TarokNet
 
 from training.entities import TrainingConfig
 from training.ports import PPOPort

@@ -2,7 +2,7 @@
 
 Usage::
 
-    from tarok.adapters.ai.compute import create_backend
+    from tarok.core.compute import create_backend
 
     backend = create_backend("auto")   # best available (CUDA > MPS > CPU)
     backend = create_backend("cpu")    # explicit CPU
@@ -15,9 +15,9 @@ from __future__ import annotations
 
 import torch
 
-from tarok.adapters.ai.compute.backend import ComputeBackend
-from tarok.adapters.ai.compute.cpu_backend import CpuBackend
-from tarok.adapters.ai.compute.gpu_backend import GpuBackend
+from tarok.core.compute.backend import ComputeBackend
+from tarok.core.compute.cpu_backend import CpuBackend
+from tarok.core.compute.gpu_backend import GpuBackend
 
 
 def create(device: str = "auto") -> ComputeBackend:

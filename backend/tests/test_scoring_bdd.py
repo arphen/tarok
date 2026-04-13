@@ -4,22 +4,11 @@ import random
 
 from pytest_bdd import scenarios, given, then, parsers
 
-from tarok.entities.card import (
+from tarok.entities import (
     CardType, Suit, SuitRank, PAGAT, MOND, SKIS,
     tarok, suit_card, DECK,
-)
-from tarok.entities.game_state import (
     Announcement, Contract, GameState, KontraLevel, Phase, PlayerRole, Team, Trick,
-)
-from tarok.entities.scoring import (
-    _contract_multiplier,
     compute_card_points,
-    score_game,
-    POINT_HALF,
-    _SILENT_TRULA,
-    _SILENT_PAGAT_ULTIMO,
-    _ANNOUNCED_TRULA,
-    _ANNOUNCED_PAGAT_ULTIMO,
 )
 from tarok.use_cases.deal import deal
 from tarok.use_cases.play_trick import play_card, start_trick

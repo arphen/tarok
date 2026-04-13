@@ -7,8 +7,7 @@ from __future__ import annotations
 
 from typing import Protocol
 
-from tarok.entities.card import Card
-from tarok.entities.game_state import Contract, GameState, Announcement
+from tarok.entities import Card, Contract, GameState, Announcement
 
 
 class PlayerPort(Protocol):

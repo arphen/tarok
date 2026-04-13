@@ -26,7 +26,7 @@ try:
 except ImportError:
     te = None  # type: ignore[assignment]
 
-from tarok.adapters.ai.encoding import (
+from tarok.core.encoding import (
     DecisionType,
     BID_ACTIONS,
     BID_TO_IDX,
@@ -42,14 +42,9 @@ from tarok.adapters.ai.encoding import (
     encode_announce_mask,
     card_idx_to_card,
 )
-from tarok.entities.card import Card, CardType, Suit, DECK
-from tarok.entities.game_state import (
-    Announcement,
-    Contract,
-    GameState,
-    KontraLevel,
-    Phase,
-    PlayerRole,
+from tarok.entities import (
+    Card, CardType, Suit, DECK,
+    Announcement, Contract, GameState, KontraLevel, Phase, PlayerRole,
 )
 from tarok.ports.observer_port import GameObserverPort
 
@@ -113,7 +108,7 @@ class NullObserver:
     async def on_card_played(self, player, card, state): pass
     async def on_rule_verified(self, player, rule, state): pass
     async def on_trick_won(self, trick, winner, state): pass
-    async def on_game_end(self, scores, state): pass
+    async def on_game_end(self, scores, state, breakdown=None): pass
 
 
 class _RustTrickSnapshot:
@@ -177,10 +172,13 @@ class RustGameLoop:
         self._rng = rng or random.Random()
         self._allow_berac = allow_berac
 
-    async def run(self, dealer: int = 0) -> tuple[GameState, dict[int, int]]:
+    async def run(self, dealer: int = 0, preset_hands: list[list[int]] | None = None, preset_talon: list[int] | None = None) -> tuple[GameState, dict[int, int]]:
         """Play one full game, returning (final_state, {player: score})."""
         gs = te.RustGameState(dealer)
-        gs.deal()
+        if preset_hands is not None and preset_talon is not None:
+            gs.deal_hands(preset_hands, preset_talon)
+        else:
+            gs.deal()
         completed_tricks: list[_RustTrickSnapshot] = []
         bid_history: list[_PyBid] = []
 
@@ -351,7 +349,31 @@ class RustGameLoop:
         )
         py_state.scores = scores
 
-        await self._observer.on_game_end(scores, py_state)
+        # Scoring breakdown — computed entirely in Rust, no Python scoring
+        import json as _json
+        breakdown = None
+        try:
+            breakdown_json = gs.score_game_breakdown_json()
+            raw = _json.loads(breakdown_json)
+            breakdown = {
+                "breakdown": {
+                    "contract": raw.get("contract"),
+                    "mode": raw.get("mode"),
+                    "declarer_won": raw.get("declarer_won"),
+                    "declarer_points": raw.get("declarer_points"),
+                    "opponent_points": raw.get("opponent_points"),
+                    "lines": raw.get("lines", []),
+                },
+                "trick_summary": raw.get("trick_summary", []),
+            }
+        except Exception:
+            pass
+
+        try:
+            await self._observer.on_game_end(scores, py_state, breakdown=breakdown)
+        except TypeError:
+            # Observer doesn't accept breakdown kwarg (e.g. legacy/test observers)
+            await self._observer.on_game_end(scores, py_state)
 
         return py_state, scores
 
@@ -710,6 +732,10 @@ def _build_py_state_from_rust(
     state.scores = {}
     state.current_player = getattr(gs, 'current_player', 0)
 
+    # Attach the raw Rust state so adapters (e.g. RustStockskisPlayer)
+    # can call Rust-side heuristic methods directly.
+    state._rust_gs = gs
+
     return state
 
 
@@ -742,6 +768,7 @@ def _build_py_state_stub(
     state.put_down = []
     state.called_king = None
     state.scores = {}
+    state.current_player = getattr(gs, 'current_player', 0)
     state.initial_tarok_counts = initial_tarok_counts
 
     # Build roles dict from Rust state

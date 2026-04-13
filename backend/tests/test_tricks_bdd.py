@@ -9,8 +9,7 @@ import random
 import pytest
 from pytest_bdd import scenarios, given, when, then, parsers
 
-from tarok.entities.card import Card, CardType, Suit, SuitRank, tarok, suit_card
-from tarok.entities.game_state import GameState, Phase, Trick, Contract, PlayerRole
+from tarok.entities import Card, CardType, Suit, SuitRank, tarok, suit_card, GameState, Phase, Trick, Contract, PlayerRole
 from tarok.use_cases.play_trick import play_card, start_trick
 
 scenarios("features/tricks.feature")

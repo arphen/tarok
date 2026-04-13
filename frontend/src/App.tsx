@@ -24,6 +24,7 @@ export default function App() {
   const [numRounds, setNumRounds] = useState(1);
   const [playSidebarOpen, setPlaySidebarOpen] = useState(false);
   const [showAllHands, setShowAllHands] = useState(false);
+  const [arenaReplayGameId, setArenaReplayGameId] = useState<string | null>(null);
   const game = useGame();
 
   useEffect(() => {
@@ -47,7 +48,8 @@ export default function App() {
   }
 
   if (page === 'spectate') {
-    return <Suspense fallback={<div className="app"><p>Loading…</p></div>}><SpectatorView onBack={() => setPage('home')} checkpoints={checkpoints} /></Suspense>;
+    const replayId = arenaReplayGameId;
+    return <Suspense fallback={<div className="app"><p>Loading…</p></div>}><SpectatorView onBack={() => { setArenaReplayGameId(null); setPage('home'); }} checkpoints={checkpoints} arenaReplayGameId={replayId} /></Suspense>;
   }
 
   if (page === 'tournament') {
@@ -55,7 +57,7 @@ export default function App() {
   }
 
   if (page === 'arena') {
-    return <Suspense fallback={<div className="app"><p>Loading…</p></div>}><BotArena onBack={() => setPage('home')} checkpoints={checkpoints} /></Suspense>;
+    return <Suspense fallback={<div className="app"><p>Loading…</p></div>}><BotArena onBack={() => setPage('home')} checkpoints={checkpoints} onReplayGame={(gameId) => { setArenaReplayGameId(gameId); setPage('spectate'); }} /></Suspense>;
   }
 
   if (page === 'arenaLeaderboard') {

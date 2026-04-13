@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Protocol
 
-from tarok.entities.game_state import GameState
+from tarok.entities import GameState
 
 
 class GameRepoPort(Protocol):

@@ -4,6 +4,7 @@ import './BotArena.css';
 interface BotArenaProps {
   onBack: () => void;
   checkpoints: { filename: string; episode: number; win_rate: number; model_name?: string; is_hof?: boolean }[];
+  onReplayGame?: (gameId: string) => void;
 }
 
 interface AgentSetup {
@@ -36,12 +37,13 @@ interface PlayerAnalytics {
   kontra_count: number;
   times_called: number;
   avg_taroks_in_hand: number;
-  best_game: { score: number | null; game_idx: number | null };
-  worst_game: { score: number | null; game_idx: number | null };
+  best_game: { score: number | null; game_idx: number | null; hands: number[][] | null; talon: number[] | null; trace: Record<string, unknown> | null };
+  worst_game: { score: number | null; game_idx: number | null; hands: number[][] | null; talon: number[] | null; trace: Record<string, unknown> | null };
   avg_win_score: number;
   avg_loss_score: number;
   score_history: number[];
   taroks_per_contract?: Record<string, number>;
+  contract_stats?: Record<string, { declared: number; won: number; win_rate: number; avg_score: number }>;
 }
 
 interface ContractAnalytics {
@@ -89,7 +91,7 @@ const PLAYER_COLORS = ['#e74c3c', '#3498db', '#2ecc71', '#f39c12'];
 
 type Tab = 'overview' | 'bidding' | 'contracts' | 'announcements' | 'best_worst' | 'scores' | 'history';
 
-export default function BotArena({ onBack, checkpoints }: BotArenaProps) {
+export default function BotArena({ onBack, checkpoints, onReplayGame }: BotArenaProps) {
   const [agents, setAgents] = useState<AgentSetup[]>(DEFAULT_AGENTS.map(a => ({ ...a })));
   const [totalGames, setTotalGames] = useState(100000);
   const [sessionSize, setSessionSize] = useState(50);
@@ -317,9 +319,9 @@ export default function BotArena({ onBack, checkpoints }: BotArenaProps) {
             )}
             {tab === 'overview' && displayAnalytics && <OverviewTab players={displayAnalytics.players} />}
             {tab === 'bidding' && displayAnalytics && <BiddingTab players={displayAnalytics.players} taroksPerContract={displayAnalytics.taroks_per_contract} />}
-            {tab === 'contracts' && displayAnalytics && <ContractsTab contracts={displayAnalytics.contracts} />}
+            {tab === 'contracts' && displayAnalytics && <ContractsTab contracts={displayAnalytics.contracts} players={displayAnalytics.players} />}
             {tab === 'announcements' && displayAnalytics && <AnnouncementsTab players={displayAnalytics.players} />}
-            {tab === 'best_worst' && displayAnalytics && <BestWorstTab players={displayAnalytics.players} />}
+            {tab === 'best_worst' && displayAnalytics && <BestWorstTab players={displayAnalytics.players} onReplayGame={onReplayGame} />}
             {tab === 'scores' && displayAnalytics && <ScoresTab players={displayAnalytics.players} sessionSize={sessionSize} />}
             {tab === 'history' && <HistoryTab runs={historyRuns} />}
           </div>
@@ -339,7 +341,7 @@ function OverviewTab({ players }: { players: PlayerAnalytics[] }) {
             <tr>
               <th>Player</th>
               <th>Games</th>
-              <th>Avg Score</th>
+              <th>Avg Score / Sess</th>
               <th>Avg Place</th>
               <th>1st %</th>
               <th>Positive %</th>
@@ -608,13 +610,24 @@ function BiddingTab({ players, taroksPerContract }: { players: PlayerAnalytics[]
 }
 
 /* ============ Contracts Tab ============ */
-function ContractsTab({ contracts }: { contracts: Record<string, ContractAnalytics> }) {
+function ContractsTab({ contracts, players }: { contracts: Record<string, ContractAnalytics>; players: PlayerAnalytics[] }) {
   const entries = Object.entries(contracts).sort((a, b) => b[1].played - a[1].played);
   const maxPlayed = Math.max(...entries.map(([, c]) => c.played), 1);
+  // Collect all contract names across all players
+  const allContracts = new Set<string>();
+  entries.forEach(([name]) => allContracts.add(name));
+  players.forEach(p => {
+    if (p.contract_stats) Object.keys(p.contract_stats).forEach(n => allContracts.add(n));
+  });
+  const sortedContracts = Array.from(allContracts).sort((a, b) => {
+    const ca = contracts[a]?.played ?? 0;
+    const cb = contracts[b]?.played ?? 0;
+    return cb - ca;
+  });
 
   return (
     <div className="arena-contracts">
-      <h3>Contract Statistics</h3>
+      <h3>Contract Statistics (Global)</h3>
       <div className="arena-table-wrapper">
         <table className="arena-table">
           <thead>
@@ -640,6 +653,58 @@ function ContractsTab({ contracts }: { contracts: Record<string, ContractAnalyti
                     <div className="arena-bar-fill contract-bar" style={{ width: `${(c.played / maxPlayed) * 100}%` }} />
                   </div>
                 </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+
+      <h3 style={{ marginTop: '2rem' }}>Contract Statistics by Player</h3>
+      <div className="arena-table-wrapper">
+        <table className="arena-table">
+          <thead>
+            <tr>
+              <th>Contract</th>
+              {players.map((p, i) => (
+                <th key={i} colSpan={3}>
+                  <span className="arena-dot" style={{ background: PLAYER_COLORS[i] }} />{p.name}
+                </th>
+              ))}
+            </tr>
+            <tr>
+              <th></th>
+              {players.map((_, i) => (
+                <React.Fragment key={i}>
+                  <th>Declared</th>
+                  <th>Win %</th>
+                  <th>Avg Score</th>
+                </React.Fragment>
+              ))}
+            </tr>
+          </thead>
+          <tbody>
+            {sortedContracts.map(name => (
+              <tr key={name}>
+                <td><strong>{formatContractName(name)}</strong></td>
+                {players.map((p, i) => {
+                  const cs = p.contract_stats?.[name];
+                  if (!cs || cs.declared === 0) {
+                    return (
+                      <React.Fragment key={i}>
+                        <td>0</td>
+                        <td>—</td>
+                        <td>—</td>
+                      </React.Fragment>
+                    );
+                  }
+                  return (
+                    <React.Fragment key={i}>
+                      <td>{cs.declared.toLocaleString()}</td>
+                      <td>{cs.win_rate.toFixed(1)}%</td>
+                      <td className={cs.avg_score >= 0 ? 'positive' : 'negative'}>{cs.avg_score.toFixed(1)}</td>
+                    </React.Fragment>
+                  );
+                })}
               </tr>
             ))}
           </tbody>
@@ -689,7 +754,35 @@ function AnnouncementsTab({ players }: { players: PlayerAnalytics[] }) {
 }
 
 /* ============ Best / Worst Tab ============ */
-function BestWorstTab({ players }: { players: PlayerAnalytics[] }) {
+function BestWorstTab({ players, onReplayGame }: { players: PlayerAnalytics[]; onReplayGame?: (gameId: string) => void }) {
+  const [replaying, setReplaying] = useState<string | null>(null);
+
+  const handleReplay = async (game: PlayerAnalytics['best_game'], player: PlayerAnalytics) => {
+    if (!game.hands || !game.talon || !onReplayGame) return;
+    setReplaying(`${player.name}-${game.game_idx}`);
+    try {
+      const agents = players.map(p => ({ name: p.name, type: p.type }));
+      const res = await fetch('/api/arena/replay', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          hands: game.hands,
+          talon: game.talon,
+          agents,
+          dealer: game.trace?.dealer ?? (game.game_idx ?? 0) % 4,
+          delay: 0,
+          trace: game.trace ?? undefined,
+        }),
+      });
+      const data = await res.json();
+      onReplayGame(data.game_id);
+    } catch (e) {
+      console.error('Failed to start arena replay', e);
+    } finally {
+      setReplaying(null);
+    }
+  };
+
   return (
     <div className="arena-best-worst">
       <h3>Best & Worst Single-Game Scores</h3>
@@ -700,18 +793,40 @@ function BestWorstTab({ players }: { players: PlayerAnalytics[] }) {
             <div className="arena-bw-row">
               <div className="arena-bw-stat best">
                 <span className="arena-bw-label">Best</span>
-                <span className="arena-bw-score positive">{p.best_game.score ?? '—'}</span>
+                {p.best_game.hands && onReplayGame ? (
+                  <button
+                    className="arena-bw-score positive arena-bw-replay-btn"
+                    onClick={() => handleReplay(p.best_game, p)}
+                    disabled={replaying !== null}
+                    title="Click to replay this game"
+                  >
+                    {p.best_game.score ?? '—'} ▶
+                  </button>
+                ) : (
+                  <span className="arena-bw-score positive">{p.best_game.score ?? '—'}</span>
+                )}
                 {p.best_game.game_idx != null && <span className="arena-bw-game">Game #{p.best_game.game_idx}</span>}
               </div>
               <div className="arena-bw-stat worst">
                 <span className="arena-bw-label">Worst</span>
-                <span className="arena-bw-score negative">{p.worst_game.score ?? '—'}</span>
+                {p.worst_game.hands && onReplayGame ? (
+                  <button
+                    className="arena-bw-score negative arena-bw-replay-btn"
+                    onClick={() => handleReplay(p.worst_game, p)}
+                    disabled={replaying !== null}
+                    title="Click to replay this game"
+                  >
+                    {p.worst_game.score ?? '—'} ▶
+                  </button>
+                ) : (
+                  <span className="arena-bw-score negative">{p.worst_game.score ?? '—'}</span>
+                )}
                 {p.worst_game.game_idx != null && <span className="arena-bw-game">Game #{p.worst_game.game_idx}</span>}
               </div>
             </div>
             <div className="arena-bw-summary">
               <div><strong>Total Score:</strong> {p.total_score.toLocaleString()}</div>
-              <div><strong>Avg Score:</strong> {p.avg_score.toFixed(1)}</div>
+              <div><strong>Avg Score / Session:</strong> {p.avg_score.toFixed(1)}</div>
               <div><strong>Avg Win Score:</strong> <span className="positive">{p.avg_win_score.toFixed(1)}</span></div>
               <div><strong>Avg Loss Score:</strong> <span className="negative">{p.avg_loss_score.toFixed(1)}</span></div>
               <div><strong>Score Spread:</strong> {((p.best_game.score ?? 0) - (p.worst_game.score ?? 0)).toLocaleString()}</div>

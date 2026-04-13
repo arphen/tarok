@@ -3,8 +3,7 @@
 import pytest
 from pytest_bdd import scenarios, given, then
 
-from tarok.entities.card import DECK, CardType, Suit, SuitRank, PAGAT, MOND, SKIS
-from tarok.entities.scoring import compute_card_points
+from tarok.entities import DECK, CardType, Suit, SuitRank, PAGAT, MOND, SKIS, compute_card_points
 
 scenarios("features/deck.feature")
 
