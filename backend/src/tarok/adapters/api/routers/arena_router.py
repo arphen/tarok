@@ -38,6 +38,19 @@ _ARENA_CONTRACT_NAMES = [
     "SOLO_THREE", "SOLO_TWO", "SOLO_ONE", "SOLO",
     "BERAC", "BARVNI_VALAT",
 ]
+_VALAT_CONTRACT_IDX = 9  # BARVNI_VALAT
+
+
+def _serialize_trace(t: dict) -> dict:
+    """Convert a raw numpy trace dict to JSON-serialisable form."""
+    return {
+        "bids": [list(b) for b in t["bids"]],
+        "king_call": list(t["king_call"]) if t["king_call"] is not None else None,
+        "talon_pick": list(t["talon_pick"]) if t["talon_pick"] is not None else None,
+        "put_down": list(t["put_down"]),
+        "cards_played": [list(c) for c in t["cards_played"]],
+        "dealer": int(t["dealer"]),
+    }
 
 
 # ---- History persistence ----
@@ -244,7 +257,7 @@ def _export_checkpoint_to_torchscript(checkpoint_path: str) -> str:
 
 # ---- Analytics builder ----
 
-def _build_arena_analytics(player_stats, contract_stats, taroks_per_contract, games_done, total_games, session_size=50):
+def _build_arena_analytics(player_stats, contract_stats, taroks_per_contract, games_done, total_games, session_size=50, notable_games=None):
     """Build the analytics payload from accumulated stats."""
     players = []
     for ps in player_stats:
@@ -315,6 +328,7 @@ def _build_arena_analytics(player_stats, contract_stats, taroks_per_contract, ga
         "players": players,
         "contracts": contracts,
         "taroks_per_contract": tpc,
+        "notable_games": notable_games,
     }
 
 
@@ -461,6 +475,13 @@ async def start_arena(req: ArenaRequest):
             })
         contract_stats: dict = {}
         taroks_per_contract: dict = {}
+        notable_games: dict = {
+            "best_non_valat": None,
+            "worst_non_valat": None,
+            "best_valat": None,
+            "worst_valat": None,
+            "by_contract": {},
+        }
         games_done = 0
         sessions_played = 0
         session_scores = [0, 0, 0, 0]
@@ -495,15 +516,7 @@ async def start_arena(req: ArenaRequest):
                         ps["best_game_hands"] = initial_hands[batch_max_idx].tolist()
                         ps["best_game_talon"] = initial_talon[batch_max_idx].tolist()
                     if traces is not None:
-                        t = traces[batch_max_idx]
-                        ps["best_game_trace"] = {
-                            "bids": [list(b) for b in t["bids"]],
-                            "king_call": list(t["king_call"]) if t["king_call"] is not None else None,
-                            "talon_pick": list(t["talon_pick"]) if t["talon_pick"] is not None else None,
-                            "put_down": list(t["put_down"]),
-                            "cards_played": [list(c) for c in t["cards_played"]],
-                            "dealer": int(t["dealer"]),
-                        }
+                        ps["best_game_trace"] = _serialize_trace(traces[batch_max_idx])
                 if ps["worst_game_score"] is None or batch_min < ps["worst_game_score"]:
                     ps["worst_game_score"] = batch_min
                     ps["worst_game_idx"] = games_done + batch_min_idx
@@ -511,15 +524,7 @@ async def start_arena(req: ArenaRequest):
                         ps["worst_game_hands"] = initial_hands[batch_min_idx].tolist()
                         ps["worst_game_talon"] = initial_talon[batch_min_idx].tolist()
                     if traces is not None:
-                        t = traces[batch_min_idx]
-                        ps["worst_game_trace"] = {
-                            "bids": [list(b) for b in t["bids"]],
-                            "king_call": list(t["king_call"]) if t["king_call"] is not None else None,
-                            "talon_pick": list(t["talon_pick"]) if t["talon_pick"] is not None else None,
-                            "put_down": list(t["put_down"]),
-                            "cards_played": [list(c) for c in t["cards_played"]],
-                            "dealer": int(t["dealer"]),
-                        }
+                        ps["worst_game_trace"] = _serialize_trace(traces[batch_min_idx])
 
             # Session tracking: score_history + placement
             batch_offset = 0
@@ -671,6 +676,60 @@ async def start_arena(req: ArenaRequest):
                     cs["total_decl_score"] += int(c_decl.sum())
                     cs["total_def_score"] += int(def_total_arr[c_mask].sum())
 
+            # ---- Notable games (valat / non-valat / by-contract) ----
+            game_max_scores = np.max(scores, axis=1)
+            game_min_scores = np.min(scores, axis=1)
+            game_max_pids = np.argmax(scores, axis=1)
+            game_min_pids = np.argmin(scores, axis=1)
+            valat_mask = (contracts == _VALAT_CONTRACT_IDX) | (np.max(np.abs(scores), axis=1) >= 250)
+
+            def _make_notable(gi: int, pid: int, sc: int) -> dict:
+                cu = int(contracts[gi])
+                return {
+                    "score": sc,
+                    "game_idx": games_done + gi,
+                    "player_idx": pid,
+                    "player_name": agent_names[pid],
+                    "contract": _ARENA_CONTRACT_NAMES[cu] if cu < len(_ARENA_CONTRACT_NAMES) else "UNKNOWN",
+                    "hands": initial_hands[gi].tolist() if initial_hands is not None else None,
+                    "talon": initial_talon[gi].tolist() if initial_talon is not None else None,
+                    "trace": _serialize_trace(traces[gi]) if traces is not None else None,
+                }
+
+            # Best / worst non-valat
+            nv = ~valat_mask
+            if nv.any():
+                nv_idx = np.where(nv)[0]
+                bi = nv_idx[int(game_max_scores[nv_idx].argmax())]
+                wi = nv_idx[int(game_min_scores[nv_idx].argmin())]
+                bs, ws = int(game_max_scores[bi]), int(game_min_scores[wi])
+                if notable_games["best_non_valat"] is None or bs > notable_games["best_non_valat"]["score"]:
+                    notable_games["best_non_valat"] = _make_notable(int(bi), int(game_max_pids[bi]), bs)
+                if notable_games["worst_non_valat"] is None or ws < notable_games["worst_non_valat"]["score"]:
+                    notable_games["worst_non_valat"] = _make_notable(int(wi), int(game_min_pids[wi]), ws)
+
+            # Best / worst valat
+            vm = valat_mask
+            if vm.any():
+                v_idx = np.where(vm)[0]
+                bi = v_idx[int(game_max_scores[v_idx].argmax())]
+                wi = v_idx[int(game_min_scores[v_idx].argmin())]
+                bs, ws = int(game_max_scores[bi]), int(game_min_scores[wi])
+                if notable_games["best_valat"] is None or bs > notable_games["best_valat"]["score"]:
+                    notable_games["best_valat"] = _make_notable(int(bi), int(game_max_pids[bi]), bs)
+                if notable_games["worst_valat"] is None or ws < notable_games["worst_valat"]["score"]:
+                    notable_games["worst_valat"] = _make_notable(int(wi), int(game_min_pids[wi]), ws)
+
+            # Best sample per contract type
+            for cu8 in np.unique(contracts):
+                cname = _ARENA_CONTRACT_NAMES[int(cu8)] if int(cu8) < len(_ARENA_CONTRACT_NAMES) else "UNKNOWN"
+                c_idx = np.where(contracts == cu8)[0]
+                ci = c_idx[int(game_max_scores[c_idx].argmax())]
+                sc = int(game_max_scores[ci])
+                prev = notable_games["by_contract"].get(cname)
+                if prev is None or sc > prev["score"]:
+                    notable_games["by_contract"][cname] = _make_notable(int(ci), int(game_max_pids[ci]), sc)
+
         try:
             while games_done < total:
                 n_batch = min(batch_size, total - games_done)
@@ -712,7 +771,7 @@ async def start_arena(req: ArenaRequest):
                     for pid in range(4):
                         player_stats[pid]["score_history"].append(session_scores[pid])
 
-                analytics = _build_arena_analytics(player_stats, contract_stats, taroks_per_contract, games_done, total, session_size)
+                analytics = _build_arena_analytics(player_stats, contract_stats, taroks_per_contract, games_done, total, session_size, notable_games)
                 _arena_progress = {
                     "status": "running",
                     "games_done": games_done,
@@ -724,13 +783,13 @@ async def start_arena(req: ArenaRequest):
         except asyncio.CancelledError:
             log.info("Arena cancelled at game %d/%d", games_done, total)
             _arena_progress["status"] = "cancelled"
-            _arena_progress["analytics"] = _build_arena_analytics(player_stats, contract_stats, taroks_per_contract, games_done, total, session_size)
+            _arena_progress["analytics"] = _build_arena_analytics(player_stats, contract_stats, taroks_per_contract, games_done, total, session_size, notable_games)
             _persist_arena_run(req.agents[:4], total, session_size, _arena_progress)
             return
         except Exception:
             log.exception("Arena failed at game %d/%d", games_done, total)
             _arena_progress["status"] = "error"
-            _arena_progress["analytics"] = _build_arena_analytics(player_stats, contract_stats, taroks_per_contract, games_done, total, session_size)
+            _arena_progress["analytics"] = _build_arena_analytics(player_stats, contract_stats, taroks_per_contract, games_done, total, session_size, notable_games)
             _persist_arena_run(req.agents[:4], total, session_size, _arena_progress)
             return
         finally:
@@ -745,7 +804,7 @@ async def start_arena(req: ArenaRequest):
             "status": "done",
             "games_done": games_done,
             "total_games": total,
-            "analytics": _build_arena_analytics(player_stats, contract_stats, taroks_per_contract, games_done, total, session_size),
+            "analytics": _build_arena_analytics(player_stats, contract_stats, taroks_per_contract, games_done, total, session_size, notable_games),
         }
         _persist_arena_run(req.agents[:4], total, session_size, _arena_progress)
 

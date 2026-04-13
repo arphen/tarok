@@ -303,7 +303,8 @@ impl SelfPlayRunner {
         let dealer = (game_id % 4) as u8;
         let mut gs = GameState::new(dealer);
         gs.deal(rng);
-        let first = (dealer + 1) % 4;
+        let forehand = (dealer + 1) % 4;
+        let first_bidder = (dealer + 2) % 4;
         let mut initial_taroks = [0u8; 4];
         let initial_hands = gs.hands;
         let initial_talon = gs.talon;
@@ -318,11 +319,11 @@ impl SelfPlayRunner {
             passed: [false; 4],
             highest_bid: None,
             winning_bidder: None,
-            current_bidder: first,
+            current_bidder: first_bidder,
             bid_round: 0,
             trick_num: 0,
             trick_offset: 0,
-            lead_player: first,
+            lead_player: forehand,
             step_counter: 0,
             initial_taroks,
             bid_choices: [-1i8; 4],

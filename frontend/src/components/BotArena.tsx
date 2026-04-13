@@ -53,12 +53,32 @@ interface ContractAnalytics {
   avg_def_score: number;
 }
 
+interface NotableGame {
+  score: number;
+  game_idx: number;
+  player_idx: number;
+  player_name: string;
+  contract: string;
+  hands: number[][] | null;
+  talon: number[] | null;
+  trace: Record<string, unknown> | null;
+}
+
+interface NotableGames {
+  best_non_valat: NotableGame | null;
+  worst_non_valat: NotableGame | null;
+  best_valat: NotableGame | null;
+  worst_valat: NotableGame | null;
+  by_contract: Record<string, NotableGame>;
+}
+
 interface ArenaAnalytics {
   games_done: number;
   total_games: number;
   players: PlayerAnalytics[];
   contracts: Record<string, ContractAnalytics>;
   taroks_per_contract?: Record<string, number>;
+  notable_games?: NotableGames | null;
 }
 
 interface ArenaProgress {
@@ -306,7 +326,7 @@ export default function BotArena({ onBack, checkpoints, onReplayGame }: BotArena
                  t === 'bidding' ? 'Bidding' :
                  t === 'contracts' ? 'Contracts' :
                  t === 'announcements' ? 'Announcements' :
-                 t === 'best_worst' ? 'Best / Worst' :
+                 t === 'best_worst' ? 'Notable Games' :
                  t === 'scores' ? 'Score Trends' :
                  'History'}
               </button>
@@ -321,7 +341,7 @@ export default function BotArena({ onBack, checkpoints, onReplayGame }: BotArena
             {tab === 'bidding' && displayAnalytics && <BiddingTab players={displayAnalytics.players} taroksPerContract={displayAnalytics.taroks_per_contract} />}
             {tab === 'contracts' && displayAnalytics && <ContractsTab contracts={displayAnalytics.contracts} players={displayAnalytics.players} />}
             {tab === 'announcements' && displayAnalytics && <AnnouncementsTab players={displayAnalytics.players} />}
-            {tab === 'best_worst' && displayAnalytics && <BestWorstTab players={displayAnalytics.players} onReplayGame={onReplayGame} />}
+            {tab === 'best_worst' && displayAnalytics && <BestWorstTab players={displayAnalytics.players} notableGames={displayAnalytics.notable_games} onReplayGame={onReplayGame} />}
             {tab === 'scores' && displayAnalytics && <ScoresTab players={displayAnalytics.players} sessionSize={sessionSize} />}
             {tab === 'history' && <HistoryTab runs={historyRuns} />}
           </div>
@@ -754,12 +774,12 @@ function AnnouncementsTab({ players }: { players: PlayerAnalytics[] }) {
 }
 
 /* ============ Best / Worst Tab ============ */
-function BestWorstTab({ players, onReplayGame }: { players: PlayerAnalytics[]; onReplayGame?: (gameId: string) => void }) {
+function BestWorstTab({ players, notableGames, onReplayGame }: { players: PlayerAnalytics[]; notableGames?: NotableGames | null; onReplayGame?: (gameId: string) => void }) {
   const [replaying, setReplaying] = useState<string | null>(null);
 
-  const handleReplay = async (game: PlayerAnalytics['best_game'], player: PlayerAnalytics) => {
+  const handleReplayNotable = async (game: NotableGame) => {
     if (!game.hands || !game.talon || !onReplayGame) return;
-    setReplaying(`${player.name}-${game.game_idx}`);
+    setReplaying(`${game.contract}-${game.game_idx}`);
     try {
       const agents = players.map(p => ({ name: p.name, type: p.type }));
       const res = await fetch('/api/arena/replay', {
@@ -769,7 +789,7 @@ function BestWorstTab({ players, onReplayGame }: { players: PlayerAnalytics[]; o
           hands: game.hands,
           talon: game.talon,
           agents,
-          dealer: game.trace?.dealer ?? (game.game_idx ?? 0) % 4,
+          dealer: game.trace?.dealer ?? game.game_idx % 4,
           delay: 0,
           trace: game.trace ?? undefined,
         }),
@@ -783,57 +803,104 @@ function BestWorstTab({ players, onReplayGame }: { players: PlayerAnalytics[]; o
     }
   };
 
+  const renderNotableCard = (label: string, game: NotableGame | null | undefined, colorClass: 'positive' | 'negative') => (
+    <div className="arena-notable-card">
+      <span className="arena-bw-label">{label}</span>
+      {game ? (
+        <>
+          {game.hands && onReplayGame ? (
+            <button
+              className={`arena-bw-score ${colorClass} arena-bw-replay-btn`}
+              onClick={() => handleReplayNotable(game)}
+              disabled={replaying !== null}
+              title="Click to replay this game"
+            >
+              {game.score > 0 ? '+' : ''}{game.score} ▶
+            </button>
+          ) : (
+            <span className={`arena-bw-score ${colorClass}`}>{game.score > 0 ? '+' : ''}{game.score}</span>
+          )}
+          <span className="arena-notable-contract">{game.contract.replace(/_/g, ' ')}</span>
+          <span className="arena-bw-game">{game.player_name} · Game #{game.game_idx}</span>
+        </>
+      ) : (
+        <span className="arena-bw-score" style={{ opacity: 0.3 }}>—</span>
+      )}
+    </div>
+  );
+
+  const CONTRACT_ORDER = ['THREE', 'TWO', 'ONE', 'SOLO_THREE', 'SOLO_TWO', 'SOLO_ONE', 'SOLO', 'BERAC', 'KLOP', 'BARVNI_VALAT'];
+  const byContract = notableGames?.by_contract ?? {};
+  const sortedContracts = Object.keys(byContract).sort((a, b) => {
+    const ai = CONTRACT_ORDER.indexOf(a), bi = CONTRACT_ORDER.indexOf(b);
+    return (ai < 0 ? 99 : ai) - (bi < 0 ? 99 : bi);
+  });
+
   return (
     <div className="arena-best-worst">
-      <h3>Best & Worst Single-Game Scores</h3>
-      <div className="arena-bw-grid">
-        {players.map((p, i) => (
-          <div key={i} className="arena-bw-card" style={{ borderColor: PLAYER_COLORS[i] }}>
-            <h4 style={{ color: PLAYER_COLORS[i] }}>{p.name}</h4>
-            <div className="arena-bw-row">
-              <div className="arena-bw-stat best">
-                <span className="arena-bw-label">Best</span>
-                {p.best_game.hands && onReplayGame ? (
-                  <button
-                    className="arena-bw-score positive arena-bw-replay-btn"
-                    onClick={() => handleReplay(p.best_game, p)}
-                    disabled={replaying !== null}
-                    title="Click to replay this game"
-                  >
-                    {p.best_game.score ?? '—'} ▶
-                  </button>
-                ) : (
-                  <span className="arena-bw-score positive">{p.best_game.score ?? '—'}</span>
-                )}
-                {p.best_game.game_idx != null && <span className="arena-bw-game">Game #{p.best_game.game_idx}</span>}
-              </div>
-              <div className="arena-bw-stat worst">
-                <span className="arena-bw-label">Worst</span>
-                {p.worst_game.hands && onReplayGame ? (
-                  <button
-                    className="arena-bw-score negative arena-bw-replay-btn"
-                    onClick={() => handleReplay(p.worst_game, p)}
-                    disabled={replaying !== null}
-                    title="Click to replay this game"
-                  >
-                    {p.worst_game.score ?? '—'} ▶
-                  </button>
-                ) : (
-                  <span className="arena-bw-score negative">{p.worst_game.score ?? '—'}</span>
-                )}
-                {p.worst_game.game_idx != null && <span className="arena-bw-game">Game #{p.worst_game.game_idx}</span>}
-              </div>
-            </div>
-            <div className="arena-bw-summary">
-              <div><strong>Total Score:</strong> {p.total_score.toLocaleString()}</div>
-              <div><strong>Avg Score / Session:</strong> {p.avg_score.toFixed(1)}</div>
-              <div><strong>Avg Win Score:</strong> <span className="positive">{p.avg_win_score.toFixed(1)}</span></div>
-              <div><strong>Avg Loss Score:</strong> <span className="negative">{p.avg_loss_score.toFixed(1)}</span></div>
-              <div><strong>Score Spread:</strong> {((p.best_game.score ?? 0) - (p.worst_game.score ?? 0)).toLocaleString()}</div>
-            </div>
+      <h3>Notable Games</h3>
+
+      <div className="arena-notable-grid">
+        <div className="arena-notable-section">
+          <h4>Non-Valat</h4>
+          <div className="arena-notable-pair">
+            {renderNotableCard('Best', notableGames?.best_non_valat, 'positive')}
+            {renderNotableCard('Worst', notableGames?.worst_non_valat, 'negative')}
           </div>
-        ))}
+        </div>
+        <div className="arena-notable-section">
+          <h4>Valat</h4>
+          <div className="arena-notable-pair">
+            {renderNotableCard('Best', notableGames?.best_valat, 'positive')}
+            {renderNotableCard('Worst', notableGames?.worst_valat, 'negative')}
+          </div>
+        </div>
       </div>
+
+      {sortedContracts.length > 0 && (
+        <>
+          <h3 style={{ marginTop: '24px' }}>Sample Games by Contract</h3>
+          <div className="arena-table-wrapper">
+            <table className="arena-table arena-contract-samples">
+              <thead>
+                <tr>
+                  <th>Contract</th>
+                  <th>Best Score</th>
+                  <th>Player</th>
+                  <th>Game</th>
+                  <th></th>
+                </tr>
+              </thead>
+              <tbody>
+                {sortedContracts.map(cname => {
+                  const g = byContract[cname];
+                  return (
+                    <tr key={cname}>
+                      <td><strong>{cname.replace(/_/g, ' ')}</strong></td>
+                      <td className={g.score > 0 ? 'positive' : g.score < 0 ? 'negative' : ''}>{g.score > 0 ? '+' : ''}{g.score}</td>
+                      <td><span className="arena-dot" style={{ background: PLAYER_COLORS[g.player_idx] ?? '#888' }} />{g.player_name}</td>
+                      <td className="arena-bw-game">#{g.game_idx}</td>
+                      <td>
+                        {g.hands && onReplayGame ? (
+                          <button
+                            className="arena-bw-replay-btn arena-bw-score"
+                            onClick={() => handleReplayNotable(g)}
+                            disabled={replaying !== null}
+                            title="Replay this game"
+                            style={{ fontSize: '0.85rem' }}
+                          >
+                            ▶
+                          </button>
+                        ) : null}
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+        </>
+      )}
     </div>
   );
 }

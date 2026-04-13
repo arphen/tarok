@@ -391,7 +391,7 @@ class RustGameLoop:
         passed = [False] * 4
         highest: int | None = None  # Rust contract u8
         winning_player: int | None = None
-        bidder = (gs.dealer + 1) % 4
+        bidder = (gs.dealer + 2) % 4  # bidding starts after forehand
 
         for _round in range(20):
             active = [i for i in range(4) if not passed[i]]

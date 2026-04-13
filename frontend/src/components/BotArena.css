@@ -327,6 +327,49 @@ td.negative {
 
 /* ---- Best / Worst ---- */
 
+.arena-notable-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 20px;
+}
+
+.arena-notable-section {
+  background: #16213e;
+  border: 1px solid #333;
+  border-radius: 8px;
+  padding: 16px;
+}
+
+.arena-notable-section h4 {
+  margin: 0 0 12px;
+  color: #ccc;
+  font-size: 0.95rem;
+  text-transform: uppercase;
+  letter-spacing: 1px;
+}
+
+.arena-notable-pair {
+  display: flex;
+  gap: 16px;
+}
+
+.arena-notable-card {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+}
+
+.arena-notable-contract {
+  font-size: 0.8rem;
+  color: #aaa;
+  font-weight: 600;
+}
+
+.arena-contract-samples td.positive { color: #2ecc71; }
+.arena-contract-samples td.negative { color: #e74c3c; }
+
 .arena-bw-grid {
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));

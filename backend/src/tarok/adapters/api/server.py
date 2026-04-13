@@ -786,7 +786,26 @@ async def _replay_from_trace(
     )
     py_state.scores = scores
 
-    await observer.on_game_end(scores, py_state)
+    # Scoring breakdown — computed entirely in Rust
+    import json as _json
+    breakdown = None
+    try:
+        raw = _json.loads(gs.score_game_breakdown_json())
+        breakdown = {
+            "breakdown": {
+                "contract": raw.get("contract"),
+                "mode": raw.get("mode"),
+                "declarer_won": raw.get("declarer_won"),
+                "declarer_points": raw.get("declarer_points"),
+                "opponent_points": raw.get("opponent_points"),
+                "lines": raw.get("lines", []),
+            },
+            "trick_summary": raw.get("trick_summary", []),
+        }
+    except Exception:
+        pass
+
+    await observer.on_game_end(scores, py_state, breakdown=breakdown)
 
 
 @app.post("/api/arena/replay")
