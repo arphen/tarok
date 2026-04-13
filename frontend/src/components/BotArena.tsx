@@ -230,7 +230,6 @@ export default function BotArena({ onBack, checkpoints }: BotArenaProps) {
                     <option key={t} value={t}>{t.replace('_', ' ')}</option>
                   ))}
                   <option value="rl">Neural Network (checkpoint)</option>
-                  <option value="lookahead">Lookahead</option>
                 </select>
                 {agent.type === 'rl' && (
                   <select

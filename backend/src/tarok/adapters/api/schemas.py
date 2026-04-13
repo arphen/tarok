@@ -75,9 +75,6 @@ class TrainingRequest(BaseModel):
     resume_from: str | None = None
     stockskis_ratio: float = 0.0
     stockskis_strength: float = 1.0
-    lookahead_ratio: float = 0.0
-    lookahead_sims: int = 20
-    lookahead_perfect_info: bool = True
     use_rust_engine: bool = False
     warmup_games: int = 0
     batch_concurrency: int = 32

@@ -7,11 +7,11 @@ import sys
 def main():
     cmd = sys.argv[1] if len(sys.argv) > 1 else ""
     if cmd == "train":
-        num_sessions = int(sys.argv[2]) if len(sys.argv) > 2 else 50
-        games_per_session = int(sys.argv[3]) if len(sys.argv) > 3 else 20
-        asyncio.run(run_training(num_sessions, games_per_session))
+        print("Training lab has been removed. 'train' command is no longer available.")
+        raise SystemExit(1)
     elif cmd == "pipeline":
-        asyncio.run(run_pipeline_cli())
+        print("Training lab has been removed. 'pipeline' command is no longer available.")
+        raise SystemExit(1)
     elif cmd == "generate-expert-data":
         asyncio.run(run_generate_expert_data())
     elif cmd == "imitation-pretrain":
@@ -34,7 +34,6 @@ async def run_training(num_sessions: int, games_per_session: int):
     import os
     import torch
     from tarok.adapters.ai.agent import RLAgent
-    from tarok.adapters.ai.training_lab import PPOTrainer
 
     device = "cpu"
     if torch.cuda.is_available():
@@ -230,7 +229,6 @@ async def run_pipeline_cli():
     import torch
     from tarok.adapters.ai.agent import RLAgent
     from tarok.adapters.ai.imitation import imitation_pretrain
-    from tarok.adapters.ai.training_lab import PPOTrainer
 
     device = "cpu"
     if torch.cuda.is_available():

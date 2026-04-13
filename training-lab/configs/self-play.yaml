@@ -5,10 +5,10 @@
 # surpassed bot_v5 and you want it to keep improving.
 #
 # Usage:
-#   make train CONFIG=self-play MODEL=backend/checkpoints/tarok_agent_latest.pt
+#   make train-iterate CONFIG=self-play MODEL=path/to/model.pt
 
 seats: "nn,nn,nn,nn"
-bench_seats: "nn,bot_v5,bot_v5,bot_v5"   # still benchmark vs bots
+bench_seats: "nn,bot_v5,bot_v5,bot_v5"
 
 iterations: 10
 games: 10000

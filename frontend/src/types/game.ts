@@ -117,8 +117,6 @@ export interface TrainingMetrics {
   contract_win_rate_history: Record<string, number[]>;
   session_avg_score_history: number[];
   stockskis_place_history: number[];
-  lookahead_score_history: number[];
-  lookahead_bid_rate_history: number[];
   snapshots: SnapshotInfo[];
   tarok_count_bids?: Record<string, Record<string, number>>;
   // Per-opponent avg placement histories

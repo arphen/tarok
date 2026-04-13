@@ -5,7 +5,7 @@ import { useState, useCallback, useRef, useEffect } from 'react';
 export interface TournamentEntry {
   id: string;
   name: string;
-  type: 'rl' | 'random' | 'lookahead';
+  type: 'rl' | 'random';
   checkpoint: string;
 }
 

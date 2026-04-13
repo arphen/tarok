@@ -8,7 +8,6 @@ import type { CardData } from './types/game';
 import './App.css';
 
 // Lazy-load heavy dashboard components — they pull in Recharts and other large deps
-const TrainingLab = lazy(() => import('./components/TrainingLab'));
 const CameraAgent = lazy(() => import('./components/CameraAgent'));
 const SpectatorView = lazy(() => import('./components/SpectatorView'));
 const TournamentBracket = lazy(() => import('./components/TournamentBracket'));
@@ -42,14 +41,6 @@ export default function App() {
     await game.startNewGame(opponents, numRounds);
     setPage('play');
   };
-
-  if (page === 'training') {
-    return <Suspense fallback={<div className="app"><p>Loading…</p></div>}><TrainingLab onBack={() => setPage('home')} /></Suspense>;
-  }
-
-  if (page === 'lab') {
-    return <Suspense fallback={<div className="app"><p>Loading…</p></div>}><TrainingLab onBack={() => setPage('home')} /></Suspense>;
-  }
 
   if (page === 'camera') {
     return <Suspense fallback={<div className="app"><p>Loading…</p></div>}><CameraAgent onBack={() => setPage('home')} /></Suspense>;
@@ -273,14 +264,6 @@ export default function App() {
         </div>
 
         <div className="home-actions">
-          <button className="btn-gold btn-large" onClick={() => setPage('lab')}>
-            <span className="btn-icon">🧪</span>
-            <span>
-              <strong>Training Lab</strong>
-              <small>Imitation learning + self-play PPO pipeline</small>
-            </span>
-          </button>
-
           <button className="btn-primary btn-large" onClick={() => setPage('lobby')}>
             <span className="btn-icon">🃏</span>
             <span>

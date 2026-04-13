@@ -4,7 +4,7 @@
 # Use this when the NN already beats v5 comfortably.
 #
 # Usage:
-#   make train CONFIG=vs-3-v6 MODEL=backend/checkpoints/tarok_agent_latest.pt
+#   make train-iterate CONFIG=vs-3-v6 MODEL=path/to/model.pt
 
 seats: "nn,bot_v6,bot_v6,bot_v6"
 bench_seats: "nn,bot_v6,bot_v6,bot_v6"

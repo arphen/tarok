@@ -40,7 +40,7 @@ from typing import Any, Callable
 class BotInfo:
     """Metadata for a registered bot plugin."""
 
-    id: str  # e.g. "stockskis_v3", "random", "lookahead"
+    id: str  # e.g. "stockskis_v3", "random", "nn"
     name: str  # human-readable, e.g. "StockŠkis v3"
     description: str
     category: str  # "heuristic", "neural", "baseline", "search"
@@ -100,7 +100,7 @@ class BotRegistry:
     # ------------------------------------------------------------------
 
     def discover(self) -> None:
-        """Auto-discover built-in bots (StockŠkis v1-v*, random, lookahead)."""
+        """Auto-discover built-in bots (StockŠkis v1-v*, random, nn)."""
         self._register_builtins()
         self._discover_stockskis()
 
@@ -117,25 +117,6 @@ class BotRegistry:
             ),
             lambda name="Random", **kw: RandomPlayer(name=name),
         )
-
-        # Lookahead (Monte Carlo search) — import lazily to avoid hard dep
-        try:
-            from tarok.adapters.ai.lookahead_agent import LookaheadAgent
-
-            self.register(
-                BotInfo(
-                    id="lookahead",
-                    name="Lookahead (MCTS)",
-                    description="Monte Carlo tree search with configurable simulations",
-                    category="search",
-                    default_params={"n_simulations": 50},
-                ),
-                lambda name="Lookahead", n_simulations=50, **kw: LookaheadAgent(
-                    n_simulations=n_simulations, name=name
-                ),
-            )
-        except ImportError:
-            pass
 
         # Neural network agent
         self.register(

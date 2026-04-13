@@ -2,8 +2,8 @@
 """Train a Tarok agent iteratively and track improvement.
 
 Each iteration:
-  1. Self-play N games (seat layout from config)
-  2. PPO update on the collected experiences (MPS GPU)
+  1. Self-play N games (seat layout from config) via Rust engine
+  2. PPO update on the collected experiences (GPU if available)
   3. Benchmark: N games greedy, measure avg placement
 
 Configs live in training-lab/configs/ — pick a profile or make your own.
@@ -17,261 +17,59 @@ from __future__ import annotations
 
 import argparse
 import os
-import shutil
 import sys
-import time
 from pathlib import Path
 
-import yaml
-
-import hashlib
-import random
-
-import math
-
-import numpy as np
 import torch
-import torch.nn as nn
 
-# ── Ensure training-lab and backend are importable ──────────────────
-_root = Path(__file__).resolve().parent.parent
-sys.path.insert(0, str(_root / "training-lab" / "src"))
+# ── Resolve paths before chdir ──────────────────────────────────────
+# Config files may be given relative to cwd (Makefile) or to script dir (manual).
+# Checkpoint paths are always relative to project root (cwd after chdir).
+_script_dir = Path(__file__).resolve().parent
+_orig_cwd = Path.cwd()
+_root = _script_dir.parent
+
 sys.path.insert(0, str(_root / "backend" / "src"))
+sys.path.insert(0, str(_script_dir))
 os.chdir(str(_root))
 
-import tarok_engine as te
-from training_lab import DecisionType
-from training_lab.entities.config import TrainingConfig
-from training_lab.entities.experience import Experience
-from training_lab.entities.network import TarokNet
-from training_lab.adapters.compute.factory import create as create_compute
-from training_lab.adapters.storage.file_checkpoint_store import FileCheckpointStore
-from training_lab.use_cases.ppo_training import RunPPOTraining
-
-# ── Constants ───────────────────────────────────────────────────────
-DT_MAP = {
-    0: DecisionType.BID,
-    1: DecisionType.KING_CALL,
-    2: DecisionType.TALON_PICK,
-    3: DecisionType.CARD_PLAY,
-}
-
-# Slovenian female first and last names for random model naming
-_SL_FIRST = [
-    "Ana", "Maja", "Eva", "Nina", "Sara", "Lara", "Anja", "Ema",
-    "Katja", "Tina", "Živa", "Pia", "Lina", "Zala", "Neža",
-    "Teja", "Rok", "Urša", "Janja", "Alja", "Špela", "Manca",
-    "Petra", "Metka", "Monika", "Irena", "Andreja", "Brigita",
-    "Vera", "Marta", "Klara", "Nataša", "Polona", "Mateja",
-    "Lea", "Nika", "Hana", "Julija", "Lucija", "Tamara",
-]
-_SL_LAST = [
-    "Novak", "Horvat", "Kovačič", "Krajnc", "Zupančič",
-    "Potočnik", "Kos", "Golob", "Vidmar", "Kolar",
-    "Mlakar", "Bizjak", "Žagar", "Turk", "Hribar",
-    "Kavčič", "Hočevar", "Rupnik", "Debeljak", "Černe",
-    "Gregorčič", "Vesel", "Kern", "Starič", "Oblak",
-    "Pečnik", "Gorenc", "Šuštar", "Bogataj", "Kranjc",
-]
+from training.container import Container
+from training.entities import TrainingConfig
 
 
-def _random_slovenian_name() -> str:
-    """Return a random Slovenian female name like 'Ana_Novak'."""
-    return f"{random.choice(_SL_FIRST)}_{random.choice(_SL_LAST)}"
+def _detect_device(requested: str) -> str:
+    if requested != "auto":
+        return requested
+    if torch.cuda.is_available():
+        return "cuda"
+    if hasattr(torch.backends, "mps") and torch.backends.mps.is_available():
+        return "mps"
+    return "cpu"
 
 
-def _name_from_checkpoint(path: str) -> str | None:
-    """Extract a human-readable model name from a checkpoint path.
-
-    Examples:
-        checkpoints/Brigita_Kranjc/best.pt          → Brigita_Kranjc
-        checkpoints/Brigita_Kranjc/iter_008.pt      → Brigita_Kranjc
-        hof_Katja_Vidmar_age59_014692c0.pt          → Katja_Vidmar
-        backend/checkpoints/tarok_agent_latest.pt   → None (generic)
-        checkpoints/training_run/best.pt            → None (generic)
-    """
-    p = Path(path)
-    # Try parent directory name first (checkpoints/<Name>/best.pt)
-    parent = p.parent.name
-    if parent and parent not in ("checkpoints", "training_run", "pinned", "hall_of_fame", "."):
-        return parent
-    # Try HoF naming: hof_FirstName_LastName_age123_hash.pt
-    stem = p.stem
-    import re
-    m = re.match(r"hof_([A-Z]\w+_[A-Z][a-z]+)", stem)
-    if m:
-        return m.group(1)
-    return None
+def _resolve_path(raw: str | None) -> str | None:
+    """Resolve a path that might be relative to the original cwd or script dir."""
+    if raw is None:
+        return None
+    # Try relative to original cwd first (handles Makefile invocation)
+    candidate = _orig_cwd / raw
+    if candidate.exists():
+        return str(candidate)
+    # Try relative to script dir (handles `cd training-lab && python ...`)
+    candidate = _script_dir / raw
+    if candidate.exists():
+        return str(candidate)
+    # Try relative to project root (cwd after chdir)
+    candidate = _root / raw
+    if candidate.exists():
+        return str(candidate)
+    # Return as-is and let downstream fail with a clear error
+    return raw
 
 
-# ── Helpers ─────────────────────────────────────────────────────────
-
-def _scheduled_lr(
-    iteration: int, total_iterations: int,
-    lr_max: float, lr_min: float, schedule: str,
-) -> float:
-    """Compute learning rate for a given iteration."""
-    if schedule == "constant" or total_iterations <= 1:
-        return lr_max
-    frac = iteration / (total_iterations - 1)  # 0.0 → 1.0
-    if schedule == "linear":
-        return lr_max + (lr_min - lr_max) * frac
-    if schedule == "cosine":
-        return lr_min + 0.5 * (lr_max - lr_min) * (1 + math.cos(math.pi * frac))
-    return lr_max
-
-
-def _format_time(seconds: float) -> str:
-    """Human-friendly elapsed / ETA string."""
-    if seconds < 60:
-        return f"{seconds:.0f}s"
-    m, s = divmod(int(seconds), 60)
-    if m < 60:
-        return f"{m}m {s:02d}s"
-    h, m = divmod(m, 60)
-    return f"{h}h {m:02d}m"
-
-
-def _progress_bar(fraction: float, width: int = 40) -> str:
-    filled = int(width * fraction)
-    return "[" + "=" * filled + ">" * min(1, width - filled) + "." * max(0, width - filled - 1) + "]"
-
-
-def _export_torchscript(model: TarokNet, path: str) -> None:
-    """Trace model to TorchScript for Rust self-play."""
-    class Wrapper(torch.nn.Module):
-        def __init__(self, base: TarokNet):
-            super().__init__()
-            self.base = base
-
-        def forward(self, x: torch.Tensor):
-            s = self.base.shared(x)
-            s = self.base.res_blocks(s)
-            cf = self.base._extract_card_features(x)
-            a = self.base.card_attention(cf)
-            f = self.base.fuse(torch.cat([s, a], dim=-1))
-            return (
-                self.base.bid_head(f),
-                self.base.king_head(f),
-                self.base.talon_head(f),
-                self.base.card_head(f),
-                self.base.critic(f).squeeze(-1),
-            )
-
-    w = Wrapper(model)
-    w.eval()
-    with torch.no_grad():
-        traced = torch.jit.trace(w, torch.randn(1, 450), check_trace=False)
-    traced.save(path)
-
-
-def _self_play(
-    model_path: str,
-    n_games: int,
-    seat_config: str,
-    explore_rate: float,
-    concurrency: int = 128,
-) -> dict:
-    """Run Rust self-play and return raw result dict."""
-    return te.run_self_play(
-        n_games=n_games,
-        concurrency=concurrency,
-        model_path=model_path,
-        explore_rate=explore_rate,
-        seat_config=seat_config,
-    )
-
-
-def _raw_to_experiences(raw: dict) -> dict[int, list[Experience]]:
-    """Convert raw Rust output to per-game Experience lists (NN player only)."""
-    exps_by_game: dict[int, list[Experience]] = {}
-    for i in range(len(raw["actions"])):
-        # Only collect experiences from player 0 (our NN agent)
-        if int(raw["players"][i]) != 0:
-            continue
-        gid = int(raw["game_ids"][i])
-        scores = raw["scores"]
-        # Reward = player-0 score normalised
-        reward = float(scores[gid % scores.shape[0], 0]) / 100.0
-        exps_by_game.setdefault(gid, []).append(
-            Experience(
-                state=torch.tensor(raw["states"][i], dtype=torch.float32),
-                action=torch.tensor(int(raw["actions"][i]), dtype=torch.long),
-                log_prob=torch.tensor(float(raw["log_probs"][i]), dtype=torch.float32),
-                value=torch.tensor(float(raw["values"][i]), dtype=torch.float32),
-                reward=reward,
-                decision_type=DT_MAP[int(raw["decision_types"][i])],
-                legal_mask=torch.tensor(raw["legal_masks"][i], dtype=torch.float32),
-                game_id=gid,
-            )
-        )
-    return exps_by_game
-
-
-def _benchmark_placement(model_path: str, n_games: int, seat_config: str, concurrency: int = 128, session_size: int = 50) -> float:
-    """Play n_games greedy (NN vs opponents), return avg placement.
-
-    Placement is computed at the SESSION level (cumulative score across
-    session_size games), not per-game.  In Tarok the losing team scores 0,
-    so per-game placement is meaningless — it just reflects team assignment.
-    """
-    raw = te.run_self_play(
-        n_games=n_games,
-        concurrency=concurrency,
-        model_path=model_path,
-        explore_rate=0.0,  # greedy
-        seat_config=seat_config,
-    )
-    scores = np.array(raw["scores"])  # (n_games, 4)
-    n_total = scores.shape[0]
-    n_sessions = max(1, n_total // session_size)
-
-    session_placements = []
-    for s in range(n_sessions):
-        start = s * session_size
-        end = min(start + session_size, n_total)
-        if start >= n_total:
-            break
-        cumulative = scores[start:end].sum(axis=0)  # shape (4,)
-        # Rank: count how many players scored strictly higher than player 0
-        placement = int(np.sum(cumulative > cumulative[0])) + 1
-        session_placements.append(placement)
-
-    return float(np.mean(session_placements)) if session_placements else 2.5
-
-
-# ── Main ────────────────────────────────────────────────────────────
-
-def _load_config(config_path: str, cli_args: argparse.Namespace) -> argparse.Namespace:
-    """Load a YAML config and let CLI args override any values."""
-    with open(config_path) as f:
-        cfg = yaml.safe_load(f)
-
-    # Map YAML keys to argparse attribute names
-    key_map = {
-        "seats": "seats",
-        "bench_seats": "bench_seats",
-        "iterations": "iterations",
-        "games": "games",
-        "bench_games": "bench_games",
-        "ppo_epochs": "ppo_epochs",
-        "batch_size": "batch_size",
-        "lr": "lr",
-        "explore_rate": "explore_rate",
-        "device": "device",
-        "concurrency": "concurrency",
-    }
-
-    for yaml_key, attr in key_map.items():
-        if yaml_key in cfg and getattr(cli_args, attr, None) is None:
-            setattr(cli_args, attr, cfg[yaml_key])
-
-    return cli_args
-
-
-def main() -> None:
+def _parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
-        description="Iterative PPO training with progress tracking and benchmark evaluation",
+        description="Iterative PPO training with progress bar + benchmark placement tracking",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Configs live in training-lab/configs/.  Available profiles:
@@ -288,37 +86,22 @@ Examples:
   python train_and_evaluate.py --new --config configs/vs-3-bots.yaml
         """,
     )
-    parser.add_argument("--config", type=str, default=None,
-                        help="Path to a YAML training config (e.g. configs/vs-3-bots.yaml)")
+    parser.add_argument("--config", type=str, default=None)
     group = parser.add_mutually_exclusive_group(required=True)
-    group.add_argument("--checkpoint", "-c", type=str, default=None,
-                       help="Path to pre-trained .pt checkpoint")
-    group.add_argument("--new", action="store_true", default=False,
-                       help="Train a brand-new randomly-initialized model with a random Slovenian name")
-    parser.add_argument("--seats", type=str, default=None,
-                        help="Seat layout: e.g. nn,bot_v5,bot_v5,bot_v5 (default from config)")
-    parser.add_argument("--bench-seats", type=str, default=None,
-                        help="Seat layout for benchmarks (default: same as --seats)")
-    parser.add_argument("--iterations", "-n", type=int, default=None,
-                        help="Number of train→evaluate iterations (default: 10)")
-    parser.add_argument("--games", "-g", type=int, default=None,
-                        help="Self-play games per training iteration (default: 10000)")
-    parser.add_argument("--bench-games", type=int, default=None,
-                        help="Benchmark games per evaluation (default: 10000)")
-    parser.add_argument("--ppo-epochs", type=int, default=None,
-                        help="PPO epochs per iteration (default: 6)")
-    parser.add_argument("--batch-size", type=int, default=None,
-                        help="PPO mini-batch size (default: 8192)")
-    parser.add_argument("--lr", type=float, default=None,
-                        help="Learning rate (default: 3e-4)")
-    parser.add_argument("--explore-rate", type=float, default=None,
-                        help="Exploration rate during training self-play (default: 0.10)")
-    parser.add_argument("--device", type=str, default=None,
-                        help="Training device: auto/cpu/mps/cuda (default: auto)")
-    parser.add_argument("--save-dir", type=str, default=None,
-                        help="Directory to save iteration checkpoints")
-    parser.add_argument("--concurrency", type=int, default=None,
-                        help="Rust self-play concurrency (default: 128)")
+    group.add_argument("--checkpoint", "-c", type=str, default=None)
+    group.add_argument("--new", action="store_true", default=False)
+    parser.add_argument("--seats", type=str, default=None)
+    parser.add_argument("--bench-seats", type=str, default=None)
+    parser.add_argument("--iterations", "-n", type=int, default=None)
+    parser.add_argument("--games", "-g", type=int, default=None)
+    parser.add_argument("--bench-games", type=int, default=None)
+    parser.add_argument("--ppo-epochs", type=int, default=None)
+    parser.add_argument("--batch-size", type=int, default=None)
+    parser.add_argument("--lr", type=float, default=None)
+    parser.add_argument("--explore-rate", type=float, default=None)
+    parser.add_argument("--device", type=str, default=None)
+    parser.add_argument("--save-dir", type=str, default=None)
+    parser.add_argument("--concurrency", type=int, default=None)
     parser.add_argument("--hidden-size", type=int, default=None,
                         help="Hidden layer size for new models (default: 256)")
     parser.add_argument("--lr-schedule", type=str, default="constant",
@@ -326,341 +109,66 @@ Examples:
                         help="LR schedule across iterations: constant (default), cosine, or linear decay")
     parser.add_argument("--lr-min", type=float, default=None,
                         help="Minimum LR for cosine/linear schedules (default: lr / 10)")
-    args = parser.parse_args()
+    return parser.parse_args()
 
-    # Load YAML config if provided, then apply CLI overrides
-    if args.config:
-        args = _load_config(args.config, args)
 
-    # Apply hardcoded defaults for anything still None
-    defaults = dict(
-        seats="nn,bot_v5,bot_v5,bot_v5",
-        bench_seats=None,  # will fall back to seats
-        iterations=10,
-        games=10_000,
-        bench_games=10_000,
-        ppo_epochs=6,
-        batch_size=8192,
-        lr=3e-4,
-        explore_rate=0.10,
-        device="auto",
-        save_dir="checkpoints/training_run",
-        concurrency=128,
-    )
-    for k, v in defaults.items():
-        if getattr(args, k, None) is None:
-            setattr(args, k, v)
-    if args.bench_seats is None:
-        args.bench_seats = args.seats
+def main() -> None:
+    args = _parse_args()
+    container = Container()
 
-    # ── Load or create model ─────────────────────────────────────────
-    # Track whether user explicitly set --save-dir
-    _user_set_save_dir = args.save_dir != "checkpoints/training_run"
+    # ── Resolve config ──────────────────────────────────────────────
+    cli_overrides = {
+        "seats": args.seats,
+        "bench_seats": getattr(args, "bench_seats", None),
+        "iterations": args.iterations,
+        "games": args.games,
+        "bench_games": getattr(args, "bench_games", None),
+        "ppo_epochs": getattr(args, "ppo_epochs", None),
+        "batch_size": getattr(args, "batch_size", None),
+        "lr": args.lr,
+        "lr_schedule": args.lr_schedule if args.lr_schedule != "constant" else None,
+        "lr_min": getattr(args, "lr_min", None),
+        "explore_rate": getattr(args, "explore_rate", None),
+        "device": args.device,
+        "concurrency": args.concurrency,
+    }
+    config_path = _resolve_path(args.config)
+    config = container.resolve_config().resolve(cli_overrides, config_path)
 
+    # ── Resolve model ───────────────────────────────────────────────
+    resolve = container.resolve_model()
     if args.new:
-        name = _random_slovenian_name()
-        hidden_size = args.hidden_size or 256
-        oracle = True
-        print(f"Creating new model: {name}  (hidden={hidden_size}, oracle={oracle})")
-        sd = None
-        # Override save_dir to include the model name
-        if not _user_set_save_dir:
-            args.save_dir = f"checkpoints/{name}"
+        hidden_size = getattr(args, "hidden_size", None) or 256
+        identity, weights = resolve.from_scratch(hidden_size=hidden_size)
     else:
-        name = _name_from_checkpoint(args.checkpoint)
+        checkpoint_path = _resolve_path(args.checkpoint)
         print(f"Loading checkpoint: {args.checkpoint}")
-        cp = torch.load(args.checkpoint, map_location="cpu", weights_only=False)
-        sd = cp.get("model_state_dict", cp)
-        hidden_size = sd["shared.0.weight"].shape[0]
-        oracle = any(k.startswith("critic_backbone") for k in sd)
-        print(f"  hidden_size={hidden_size}, oracle={oracle}")
-        # Use a named directory instead of generic "training_run"
-        if not _user_set_save_dir:
-            if name:
-                args.save_dir = f"checkpoints/{name}"
-            else:
-                # Generic checkpoint — give it a fresh random name
-                name = _random_slovenian_name()
-                args.save_dir = f"checkpoints/{name}"
-                print(f"  Training as: {name}")
+        identity, weights = resolve.from_checkpoint(checkpoint_path)
 
-    save_dir = Path(args.save_dir)
-    save_dir.mkdir(parents=True, exist_ok=True)
-    ts_path = str(save_dir / "_current.pt")
+    # ── Resolve save directory ──────────────────────────────────────
+    save_dir = args.save_dir if args.save_dir is not None else f"checkpoints/{identity.name}"
 
-    # ── Build model and export TorchScript ──────────────────────────
-    model = TarokNet(hidden_size=hidden_size, oracle_critic=oracle)
-    if sd is not None:
-        model.load_state_dict(sd)
-    else:
-        sd = model.state_dict()
-    model.eval()
-    _export_torchscript(model, ts_path)
+    config = TrainingConfig(
+        seats=config.seats,
+        bench_seats=config.bench_seats,
+        iterations=config.iterations,
+        games=config.games,
+        bench_games=config.bench_games,
+        ppo_epochs=config.ppo_epochs,
+        batch_size=config.batch_size,
+        lr=config.lr,
+        lr_schedule=config.lr_schedule,
+        lr_min=config.lr_min,
+        explore_rate=config.explore_rate,
+        device=config.device,
+        save_dir=save_dir,
+        concurrency=config.concurrency,
+    )
 
-    if name and args.new:
-        print(f"  Model '{name}' initialized with random weights")
-        print(f"  Checkpoints → {save_dir}/")
+    device = _detect_device(config.device)
 
-    # Resolve lr_min default
-    if args.lr_min is None:
-        args.lr_min = args.lr / 10
-
-    compute = create_compute(args.device)
-    print(f"Training device: {compute.device}")
-    print()
-
-    # ── Initial benchmark ───────────────────────────────────────────
-    print(f"{'=' * 70}")
-    print(f" INITIAL BENCHMARK  ({args.bench_games} games, {args.bench_seats}, greedy)")
-    print(f"{'=' * 70}")
-    t_bench = time.time()
-    initial_placement = _benchmark_placement(ts_path, args.bench_games, args.bench_seats, args.concurrency)
-    bench_time = time.time() - t_bench
-    print(f"  Avg placement: {initial_placement:.3f}  (1.0 = always 1st, 4.0 = always last)")
-    print(f"  Benchmark took {_format_time(bench_time)}")
-    print()
-
-    # ── Training loop ───────────────────────────────────────────────
-    placements = [initial_placement]
-    losses = []
-    iter_times = []
-
-    print(f"{'=' * 70}")
-    print(f" TRAINING PLAN")
-    print(f"   {args.iterations} iterations × {args.games} games/iter")
-    print(f"   train seats  = {args.seats}")
-    print(f"   bench seats  = {args.bench_seats}")
-    lr_info = f"lr={args.lr}"
-    if args.lr_schedule != "constant":
-        lr_info += f" → {args.lr_min} ({args.lr_schedule})"
-    print(f"   PPO: {args.ppo_epochs} epochs, batch_size={args.batch_size}, {lr_info}")
-    print(f"   Benchmark: {args.bench_games} games per iteration (greedy)")
-    print(f"{'=' * 70}")
-    print()
-
-    overall_t0 = time.time()
-
-    for iteration in range(1, args.iterations + 1):
-        iter_t0 = time.time()
-
-        # ── Progress header ─────────────────────────────────────────
-        frac = (iteration - 1) / args.iterations
-        elapsed_total = time.time() - overall_t0
-        if iteration > 1:
-            avg_iter_time = elapsed_total / (iteration - 1)
-            eta = avg_iter_time * (args.iterations - iteration + 1)
-            eta_str = f"ETA {_format_time(eta)}"
-        else:
-            eta_str = "ETA calculating..."
-
-        bar = _progress_bar(frac)
-        print(f"─── Iteration {iteration}/{args.iterations}  {bar} {frac*100:.0f}%  {eta_str} ───")
-
-        # ── Step 1: Self-play (training data) ───────────────────────
-        t0 = time.time()
-        print(f"  [1/3] Self-play: {args.games} games ({args.seats}, explore={args.explore_rate})...", end="", flush=True)
-        raw = _self_play(
-            ts_path, args.games,
-            seat_config=args.seats,
-            explore_rate=args.explore_rate,
-            concurrency=args.concurrency,
-        )
-        n_exps = sum(1 for p in raw["players"] if int(p) == 0)
-        sp_time = time.time() - t0
-        print(f" {n_exps} exps in {_format_time(sp_time)}")
-
-        # ── Step 2: PPO update ──────────────────────────────────────
-        t0 = time.time()
-        iter_lr = _scheduled_lr(
-            iteration - 1, args.iterations,
-            args.lr, args.lr_min, args.lr_schedule,
-        )
-        lr_tag = f", lr={iter_lr:.1e}" if args.lr_schedule != "constant" else ""
-        print(f"  [2/3] PPO update ({args.ppo_epochs} epochs, batch={args.batch_size}{lr_tag})...", end="", flush=True)
-
-        exps_by_game = _raw_to_experiences(raw)
-
-        config = TrainingConfig(
-            num_sessions=1,
-            games_per_session=args.games,
-            min_experiences=100,
-            ppo_epochs=args.ppo_epochs,
-            mini_batch_size=args.batch_size,
-            hidden_size=hidden_size,
-            oracle_critic=oracle,
-            learning_rate=iter_lr,
-            device=str(compute.device),
-        )
-
-        class _DummySim:
-            def play_batch(self, *a, **kw):
-                return []
-
-        store = FileCheckpointStore(str(save_dir))
-        trainer = RunPPOTraining(
-            simulator=_DummySim(),
-            compute=compute,
-            store=store,
-            config=config,
-            resume_state_dict=sd,
-        )
-
-        # Compute GAE and run PPO
-        all_data = []
-        for gid, game_exps in exps_by_game.items():
-            all_data.extend(trainer._compute_gae(game_exps))
-
-        metrics = trainer._ppo_update(all_data)
-        ppo_time = time.time() - t0
-
-        loss = metrics["total_loss"]
-        p_loss = metrics["policy_loss"]
-        v_loss = metrics["value_loss"]
-        entropy = metrics["entropy"]
-        losses.append(loss)
-        print(f" loss={loss:.4f} (p={p_loss:.4f} v={v_loss:.4f} ent={entropy:.4f}) in {_format_time(ppo_time)}")
-
-        # Update weights for next iteration
-        sd = trainer.network.state_dict()
-        model.load_state_dict(sd)
-        model.eval()
-        _export_torchscript(model, ts_path)
-
-        # ── Step 3: Benchmark ───────────────────────────────────────
-        t0 = time.time()
-        print(f"  [3/3] Benchmark: {args.bench_games} games (greedy, {args.bench_seats})...", end="", flush=True)
-        placement = _benchmark_placement(ts_path, args.bench_games, args.bench_seats, args.concurrency)
-        bench_time = time.time() - t0
-        placements.append(placement)
-        print(f" placement={placement:.3f} in {_format_time(bench_time)}")
-
-        # ── Save iteration checkpoint ───────────────────────────────
-        ckpt_path = save_dir / f"iter_{iteration:03d}.pt"
-        torch.save({
-            "model_state_dict": sd,
-            "hidden_size": hidden_size,
-            "oracle_critic": oracle,
-            "iteration": iteration,
-            "loss": loss,
-            "placement": placement,
-        }, ckpt_path)
-
-        iter_time = time.time() - iter_t0
-        iter_times.append(iter_time)
-
-        # ── Iteration summary ───────────────────────────────────────
-        delta = placements[-1] - placements[-2]
-        direction = "▲ better!" if delta < 0 else "▼ worse" if delta > 0 else "─ same"
-        print(f"  → placement {placements[-2]:.3f} → {placements[-1]:.3f}  ({delta:+.3f} {direction})")
-        print(f"  → iteration took {_format_time(iter_time)}")
-        print()
-
-    # ── Final summary ───────────────────────────────────────────────
-    total_time = time.time() - overall_t0
-    bar = _progress_bar(1.0)
-    print(f"─── Done  {bar} 100%  Total: {_format_time(total_time)} ───")
-    print()
-    print(f"{'=' * 70}")
-    print(f" RESULTS SUMMARY")
-    print(f"{'=' * 70}")
-    print()
-
-    # Placement table
-    print(f"  {'Iter':>6s}  {'Placement':>10s}  {'Change':>8s}  {'Loss':>10s}")
-    print(f"  {'─' * 6}  {'─' * 10}  {'─' * 8}  {'─' * 10}")
-    print(f"  {'init':>6s}  {placements[0]:>10.3f}  {'':>8s}  {'':>10s}")
-    for i in range(1, len(placements)):
-        delta = placements[i] - placements[i - 1]
-        arrow = "▲" if delta < 0 else "▼" if delta > 0 else "─"
-        loss_str = f"{losses[i - 1]:.4f}" if i - 1 < len(losses) else ""
-        print(f"  {i:>6d}  {placements[i]:>10.3f}  {delta:>+7.3f}{arrow}  {loss_str:>10s}")
-
-    print()
-    overall_delta = placements[-1] - placements[0]
-    direction = "IMPROVED" if overall_delta < 0 else "REGRESSED" if overall_delta > 0 else "UNCHANGED"
-    print(f"  Overall: {placements[0]:.3f} → {placements[-1]:.3f}  ({overall_delta:+.3f})  {direction}")
-    print(f"  Best: {min(placements):.3f} at iteration {placements.index(min(placements))}")
-    print()
-
-    # Save best model
-    best_iter = placements.index(min(placements))
-    if best_iter > 0:
-        best_src = save_dir / f"iter_{best_iter:03d}.pt"
-        best_dst = save_dir / "best.pt"
-        shutil.copy2(best_src, best_dst)
-        print(f"  Best model saved to {best_dst}")
-    else:
-        print(f"  Initial model was best — no improvement achieved.")
-        print(f"  Consider: more iterations, higher games/iter, lower LR, or different explore_rate.")
-
-    print()
-    print(f"  Total training time: {_format_time(total_time)}")
-    print(f"  Avg iteration time:  {_format_time(sum(iter_times) / len(iter_times))}")
-    print(f"  Checkpoints saved in {save_dir}/")
-
-    # ── Continuation prompts ────────────────────────────────────────
-    best_pt = save_dir / "best.pt"
-    last_pt = save_dir / f"iter_{args.iterations:03d}.pt"
-    model_pt = str(best_pt if best_pt.exists() else last_pt)
-
-    # Detect current config name from args
-    config_name = ""
-    if args.config:
-        config_name = Path(args.config).stem  # e.g. "vs-3-bots"
-
-    print()
-    print(f"{'=' * 70}")
-    print(f" WHAT NEXT?")
-    print(f"{'=' * 70}")
-    print()
-
-    # Option 1: Keep training with same config
-    more_iters = args.iterations * 2
-    cmd1 = f"make train-iterate MODEL={model_pt}"
-    if config_name and config_name != "vs-3-bots":
-        cmd1 += f" CONFIG={config_name}"
-    cmd1 += f' EXTRA="--iterations {more_iters}"'
-    print(f"  [1] Keep training ({more_iters} more iterations, same config):")
-    print(f"      {cmd1}")
-    print()
-
-    # Option 2: Train against harder opponents
-    if config_name in ("vs-3-bots", ""):
-        next_config = "vs-3-v6"
-        next_desc = "harder v6 bots"
-    elif config_name == "vs-3-v6":
-        next_config = "self-play"
-        next_desc = "pure self-play (no bots)"
-    elif config_name in ("vs-2-bots", "vs-1-bot"):
-        next_config = "self-play"
-        next_desc = "pure self-play (no bots)"
-    else:
-        next_config = "vs-3-v6"
-        next_desc = "harder v6 bots"
-    print(f"  [2] Escalate to {next_desc}:")
-    print(f"      make train-iterate MODEL={model_pt} CONFIG={next_config}")
-    print()
-
-    # Option 3: Lower LR for fine-tuning
-    fine_lr = args.lr / 3
-    cmd3 = f"make train-iterate MODEL={model_pt}"
-    if config_name and config_name != "vs-3-bots":
-        cmd3 += f" CONFIG={config_name}"
-    cmd3 += f' EXTRA="--iterations {args.iterations} --lr {fine_lr:.1e}"'
-    print(f"  [3] Fine-tune with lower learning rate ({fine_lr:.1e}):")
-    print(f"      {cmd3}")
-    print()
-
-    # Option 4: Play against it
-    print(f"  [4] Play in the browser (no checkpoint copy):")
-    print("      make run")
-    print(f"      Then select this checkpoint in the UI: {model_pt}")
-    print()
-
-    # Option 5: Train a new model from scratch
-    print(f"  [5] Train a brand-new model from scratch:")
-    print(f"      make train-new")
-    print()
+    # ── Run ─────────────────────────────────────────────────────────
+    container.train_model().execute(config, identity, weights, device)
 
 
 if __name__ == "__main__":

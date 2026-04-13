@@ -17,38 +17,27 @@ from pydantic import BaseModel
 from tarok.adapters.ai.agent import RLAgent
 from tarok.adapters.ai.bot_registry import get_registry
 from tarok.adapters.ai.random_agent import RandomPlayer
-from tarok.adapters.ai.training_lab import PPOTrainer, TrainingMetrics
 from tarok.adapters.api.human_player import HumanPlayer
 from tarok.adapters.api.spectator_observer import SpectatorObserver, list_replays, load_replay
 from tarok.adapters.api.ws_observer import WebSocketObserver
 from tarok.adapters.api.schemas import (
     NewGameRequest,
     TrainingRequest,
-    TrainingMetricsSchema,
-    LabTrainingRequest,
 )
 from tarok.entities.card import Card, CardType, Suit, SuitRank, DECK
 from tarok.entities.game_state import Bid, Contract, GameState, Phase, PlayerRole, Trick
 from tarok.adapters.ai.rust_game_loop import RustGameLoop as GameLoop
 
 # --- Globals managed by lifespan ---
-_trainer: PPOTrainer | None = None
 _training_task: asyncio.Task | None = None
-_latest_metrics: TrainingMetrics | None = None
+_latest_metrics: dict | None = None
 _active_games: dict[str, dict] = {}
-
-# --- Training-lab (GPU lab) mode ---
-_lab_runner = None      # RunPPOTraining instance
-_lab_thread = None      # background thread running the training loop
-_lab_sink = None        # DashboardMetricsSink for metrics polling
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     yield
-    global _trainer, _training_task
-    if _trainer:
-        _trainer.stop()
+    global _training_task
     if _training_task and not _training_task.done():
         _training_task.cancel()
 
@@ -67,159 +56,32 @@ app.add_middleware(
 
 @app.post("/api/training/start")
 async def start_training(req: TrainingRequest):
-    global _trainer, _training_task, _latest_metrics
-
-    if _training_task and not _training_task.done():
-        return {"status": "already_running", "metrics": _latest_metrics.to_dict() if _latest_metrics else None}
-
-    # Resume from latest checkpoint if available
-    checkpoint_path = Path("checkpoints/tarok_agent_latest.pt")
-    if req.resume_from:
-        checkpoint_path = Path("checkpoints") / req.resume_from
-        req.resume = True
-
-    if req.resume and checkpoint_path.exists():
-        # Infer hidden_size from checkpoint to avoid shape mismatch
-        agents = [
-            RLAgent.from_checkpoint(checkpoint_path, name="Agent-0"),
-            *[RLAgent(name=f"Agent-{i}", hidden_size=req.hidden_size) for i in range(1, 4)],
-        ]
-    else:
-        agents = [RLAgent(name=f"Agent-{i}", hidden_size=req.hidden_size) for i in range(4)]
-
-    _trainer = PPOTrainer(
-        agents, lr=req.learning_rate, device="cpu",
-        games_per_session=req.games_per_session,
-        stockskis_ratio=req.stockskis_ratio,
-        stockskis_strength=req.stockskis_strength,
-        lookahead_ratio=req.lookahead_ratio,
-        lookahead_sims=req.lookahead_sims,
-        lookahead_perfect_info=req.lookahead_perfect_info,
-        use_rust_engine=req.use_rust_engine,
-        warmup_games=req.warmup_games,
-        batch_concurrency=req.batch_concurrency,
-    )
-
-    async def on_metrics(metrics: TrainingMetrics):
-        global _latest_metrics
-        _latest_metrics = metrics
-
-    _trainer.add_metrics_callback(on_metrics)
-
-    async def run_training():
-        global _latest_metrics
-        try:
-            result = await _trainer.train(req.num_sessions)
-            _latest_metrics = result
-        except asyncio.CancelledError:
-            import logging
-            logging.getLogger(__name__).info("Training task cancelled")
-        except Exception:
-            import logging
-            logging.getLogger(__name__).exception("Training task failed")
-            # Preserve the last good metrics so the dashboard shows
-            # what happened before the crash instead of going blank.
-            if _latest_metrics is None:
-                _latest_metrics = _trainer.metrics if _trainer else None
-
-    _training_task = asyncio.create_task(run_training())
-    return {"status": "started", "num_sessions": req.num_sessions, "games_per_session": req.games_per_session,
-            "message": "Run ID will appear in metrics once training begins"}
+    del req
+    return {
+        "status": "disabled",
+        "message": "Training lab was removed; /api/training/start is no longer available.",
+    }
 
 
 @app.post("/api/training/stop")
 async def stop_training():
-    global _trainer, _training_task, _lab_runner, _lab_thread
-    if _trainer:
-        _trainer.stop()
-    if _lab_runner:
-        _lab_runner.stop()
+    global _training_task
+    if _training_task and not _training_task.done():
+        _training_task.cancel()
     return {"status": "stopped"}
 
 
 @app.get("/api/training/metrics")
 async def get_metrics() -> dict:
-    # Prefer lab metrics if lab mode is active
-    if _lab_sink is not None:
-        return _lab_sink.snapshot()
     if _latest_metrics:
-        return _latest_metrics.to_dict()
-    return TrainingMetrics().to_dict()
+        return _latest_metrics
+    return {"status": "disabled", "message": "Training lab removed"}
 
 
 @app.get("/api/training/status")
 async def training_status():
-    # Check both old and lab training
-    old_running = _training_task is not None and not _training_task.done()
-    lab_running = _lab_thread is not None and _lab_thread.is_alive()
-    return {"running": old_running or lab_running, "mode": "lab" if lab_running else ("legacy" if old_running else "idle")}
-
-
-# ---- Training Lab (GPU) endpoints ----
-
-@app.post("/api/training/lab/start")
-async def start_lab_training(req: LabTrainingRequest):
-    global _lab_runner, _lab_thread, _lab_sink, _trainer, _training_task
-
-    # Don't start if anything is already running
-    if _training_task and not _training_task.done():
-        return {"status": "already_running", "mode": "legacy"}
-    if _lab_thread and _lab_thread.is_alive():
-        return {"status": "already_running", "mode": "lab"}
-
-    # Stop old trainer if lingering
-    if _trainer:
-        _trainer.stop()
-        _trainer = None
-
-    from tarok.adapters.ai.lab_bridge import start_lab_training as _start_lab
-    import threading
-
-    # Resolve checkpoint path
-    checkpoint_path = None
-    if req.resume_from:
-        from pathlib import Path
-        cp = Path("checkpoints") / req.resume_from
-        if cp.exists():
-            checkpoint_path = str(cp)
-
-    runner, sink = _start_lab(
-        checkpoint_path=checkpoint_path,
-        config_overrides={
-            "num_sessions": req.num_sessions,
-            "games_per_session": req.games_per_session,
-            "learning_rate": req.learning_rate,
-            "hidden_size": req.hidden_size,
-            "concurrency": req.concurrency,
-            "buffer_capacity": req.buffer_capacity,
-            "min_experiences": req.min_experiences,
-            "ppo_epochs": req.ppo_epochs,
-            "batch_size": req.batch_size,
-            "explore_rate": req.explore_rate,
-            "checkpoint_interval": req.checkpoint_interval,
-            "device": req.device,
-        },
-    )
-
-    _lab_runner = runner
-    _lab_sink = sink
-
-    def _run():
-        import logging
-        try:
-            runner.run()
-        except Exception:
-            logging.getLogger(__name__).exception("Lab training failed")
-
-    _lab_thread = threading.Thread(target=_run, name="lab-training", daemon=True)
-    _lab_thread.start()
-
-    return {
-        "status": "started",
-        "mode": "lab",
-        "num_sessions": req.num_sessions,
-        "device": req.device,
-    }
+    running = _training_task is not None and not _training_task.done()
+    return {"running": running, "mode": "disabled"}
 
 
 # Checkpoint metadata cache: {filepath_str: (mtime, metadata_dict)}
@@ -333,12 +195,12 @@ async def list_checkpoints():
 def _load_opponent(choice: str, index: int):
     """Load a single AI opponent from a choice string.
 
-    Supports registry bots (random, stockskis_v1..v5, lookahead, etc.)
+    Supports registry bots (random, stockskis_v1..v5, etc.)
     and checkpoint filenames for RL agents.
     """
     registry = get_registry()
 
-    # Check registry first (stockskis_v1..v5, random, lookahead, etc.)
+    # Check registry first (stockskis_v1..v5, random, etc.)
     if registry.has(choice):
         return registry.create(choice, name=f"AI-{index + 1}")
 
@@ -540,7 +402,7 @@ def _build_spectate_agent(cfg: dict, idx: int):
 
     registry = get_registry()
 
-    # Check registry first (random, stockskis_v*, lookahead, etc.)
+    # Check registry first (random, stockskis_v*, etc.)
     if registry.has(agent_type):
         return registry.create(agent_type, name=agent_name)
 
@@ -605,8 +467,7 @@ async def new_spectate(req: SpectateRequest):
     agents = []
     for i, agent_cfg in enumerate(req.agents[:4]):
         agents.append(_build_spectate_agent(agent_cfg, i))
-        # Note: Lookahead is intentionally not supported here unless a concrete
-        # implementation exists in this codebase. Keep spectate robust.
+        # Keep spectate robust.
 
     # Fill remaining slots with RL agents
     while len(agents) < 4:
@@ -692,7 +553,7 @@ def _build_agent(cfg: dict, idx: int):
 
     registry = get_registry()
 
-    # Check registry first (random, stockskis_v*, lookahead, etc.)
+    # Check registry first (random, stockskis_v*, etc.)
     if registry.has(agent_type):
         return registry.create(agent_type, name=agent_name)
 
@@ -986,7 +847,7 @@ async def training_websocket(ws: WebSocket):
             if _latest_metrics:
                 await ws.send_json({
                     "event": "metrics",
-                    "data": _latest_metrics.to_dict(),
+                    "data": _latest_metrics,
                 })
             await asyncio.sleep(1)
     except WebSocketDisconnect:
@@ -1290,196 +1151,6 @@ async def analyze_king(req: AnalyzeKingRequest):
         "callable_kings": [_card_to_dict(k) for k in callable_kings],
         "has_trained_model": checkpoint_path.exists(),
     }
-
-
-# ---- Training Lab endpoints ----
-
-@app.post("/api/lab/create")
-async def lab_create(req: dict = {}):
-    """Create a fresh neural network for the training lab."""
-    from tarok.adapters.ai.training_lab import create_lab_network
-    hidden_size = req.get("hidden_size", 256) if isinstance(req, dict) else 256
-    create_lab_network(hidden_size)
-    return {"status": "created", "hidden_size": hidden_size}
-
-
-@app.post("/api/lab/load")
-async def lab_load(req: dict = {}):
-    """Load an existing checkpoint into the training lab."""
-    from tarok.adapters.ai.training_lab import _lab, load_lab_checkpoint
-
-    if _lab.running:
-        return {"status": "already_running"}
-
-    choice = req.get("checkpoint") if isinstance(req, dict) else None
-    if not choice:
-        return {"status": "missing_checkpoint"}
-
-    try:
-        info = load_lab_checkpoint(choice)
-    except FileNotFoundError:
-        return {"status": "not_found", "checkpoint": choice}
-    except ValueError as exc:
-        return {"status": "invalid", "error": str(exc)}
-
-    return {"status": "loaded", **info}
-
-
-@app.post("/api/lab/start")
-async def lab_start(req: dict = {}):
-    """Start the imitation learning pipeline."""
-    from tarok.adapters.ai.training_lab import start_lab_training, _lab
-
-    if _lab.running:
-        return {"status": "already_running"}
-
-    if _lab.network is None:
-        from tarok.adapters.ai.training_lab import create_lab_network
-        create_lab_network(req.get("hidden_size", 256))
-
-    await start_lab_training(
-        expert_games=req.get("expert_games", 500_000),
-        expert_source=req.get("expert_source", "v2v3v5"),
-        eval_bots=req.get("eval_bots", ["v1", "v2", "v3", "v5"]),
-        training_epochs=req.get("training_epochs", 3),
-        eval_games=req.get("eval_games", 500),
-        num_rounds=req.get("num_rounds", 10),
-        batch_size=req.get("batch_size", 2048),
-        learning_rate=req.get("learning_rate", 1e-3),
-        chunk_size=req.get("chunk_size", 50_000),
-    )
-    return {"status": "started"}
-
-
-@app.post("/api/lab/self-play")
-async def lab_self_play(req: dict = {}):
-    """Start self-play PPO training on the lab network."""
-    from tarok.adapters.ai.training_lab import start_self_play, _lab
-
-    if _lab.running:
-        return {"status": "already_running"}
-
-    if _lab.network is None:
-        from tarok.adapters.ai.training_lab import create_lab_network
-        create_lab_network(req.get("hidden_size", 256))
-
-    await start_self_play(
-        num_sessions=req.get("num_sessions", 50),
-        games_per_session=req.get("games_per_session", 20),
-        eval_games=req.get("eval_games", 100),
-        eval_bots=req.get("eval_bots", ["v1", "v2", "v3", "v5"]),
-        eval_interval=req.get("eval_interval", 5),
-        learning_rate=req.get("learning_rate", 3e-4),
-        stockskis_ratio=req.get("stockskis_ratio", 0.0),
-        fsp_ratio=req.get("fsp_ratio", 0.3),
-        hof_ratio=req.get("hof_ratio", 0.0),
-    )
-    return {"status": "started"}
-
-
-@app.post("/api/lab/stop")
-async def lab_stop():
-    """Stop the training lab."""
-    from tarok.adapters.ai.training_lab import stop_lab
-    stop_lab()
-    return {"status": "stopped"}
-
-
-@app.post("/api/lab/overnight")
-async def lab_overnight(req: dict = {}):
-    """Start a long-running overnight training session.
-
-    Auto-configures self-play for continuous training.
-    Evaluates periodically against V1/V2/V3 and saves snapshots.
-    Just hit Stop when you wake up.
-    """
-    from tarok.adapters.ai.training_lab import start_self_play, _lab
-
-    if _lab.running:
-        return {"status": "already_running"}
-
-    if _lab.network is None:
-        from tarok.adapters.ai.training_lab import create_lab_network
-        create_lab_network(req.get("hidden_size", 256))
-
-    await start_self_play(
-        num_sessions=req.get("num_sessions", 10000),
-        games_per_session=req.get("games_per_session", 20),
-        eval_games=req.get("eval_games", 200),
-        eval_interval=req.get("eval_interval", 10),
-        learning_rate=req.get("learning_rate", 3e-4),
-        stockskis_ratio=req.get("stockskis_ratio", 0.0),
-        fsp_ratio=req.get("fsp_ratio", 0.3),
-    )
-    return {"status": "started", "mode": "overnight", "num_sessions": req.get("num_sessions", 10000)}
-
-
-@app.post("/api/lab/reset")
-async def lab_reset():
-    """Reset the training lab to initial state."""
-    from tarok.adapters.ai.training_lab import reset_lab
-    reset_lab()
-    return {"status": "reset"}
-
-
-@app.get("/api/lab/state")
-async def lab_state():
-    """Get current training lab state."""
-    from tarok.adapters.ai.training_lab import get_lab_state
-    return get_lab_state()
-
-
-@app.get("/api/lab/hof")
-async def lab_hof():
-    """List all Hall of Fame models."""
-    from tarok.adapters.ai.training_lab import list_hof
-    return {"models": list_hof()}
-
-
-@app.delete("/api/lab/hof/{model_hash}")
-async def lab_hof_remove(model_hash: str):
-    """Remove a model from the Hall of Fame."""
-    from tarok.adapters.ai.training_lab import remove_from_hof
-    removed = remove_from_hof(model_hash)
-    if not removed:
-        from starlette.responses import JSONResponse
-        return JSONResponse({"error": "Model not found"}, status_code=404)
-    return {"ok": True}
-
-
-@app.post("/api/lab/hof/promote")
-async def lab_hof_promote(body: dict):
-    """Promote a checkpoint to the Hall of Fame."""
-    from tarok.adapters.ai.training_lab import promote_checkpoint_to_hof
-    filename = body.get("filename", "")
-    if not filename:
-        from starlette.responses import JSONResponse
-        return JSONResponse({"error": "filename required"}, status_code=400)
-    info = promote_checkpoint_to_hof(filename)
-    if info is None:
-        from starlette.responses import JSONResponse
-        return JSONResponse({"error": "Invalid or missing checkpoint"}, status_code=400)
-    return {"ok": True, **info}
-
-
-@app.post("/api/lab/hof/{model_hash}/pin")
-async def lab_hof_pin(model_hash: str):
-    """Pin a HoF model (exempt from auto-eviction)."""
-    from tarok.adapters.ai.training_lab import pin_hof
-    if not pin_hof(model_hash):
-        from starlette.responses import JSONResponse
-        return JSONResponse({"error": "Model not found"}, status_code=404)
-    return {"ok": True}
-
-
-@app.post("/api/lab/hof/{model_hash}/unpin")
-async def lab_hof_unpin(model_hash: str):
-    """Unpin a HoF model (subject to auto-eviction again)."""
-    from tarok.adapters.ai.training_lab import unpin_hof
-    if not unpin_hof(model_hash):
-        from starlette.responses import JSONResponse
-        return JSONResponse({"error": "Model not found"}, status_code=404)
-    return {"ok": True}
 
 
 # ---- Bot Arena: Mass analytics simulation ----

@@ -190,7 +190,7 @@ CONFIG ?= vs-3-bots
 EXTRA  ?=
 train-iterate:
 	source backend/.venv/bin/activate && \
-		PYTHONPATH=training-lab/src:backend/src python training-lab/train_and_evaluate.py \
+		PYTHONPATH=backend/src python training-lab/train_and_evaluate.py \
 		--config training-lab/configs/$(CONFIG).yaml \
 		--checkpoint $(MODEL) \
 		$(EXTRA)
@@ -200,7 +200,7 @@ train-iterate:
 #   make train-new CONFIG=self-play EXTRA="--iterations 20"
 train-new:
 	source backend/.venv/bin/activate && \
-		PYTHONPATH=training-lab/src:backend/src python training-lab/train_and_evaluate.py \
+		PYTHONPATH=backend/src python training-lab/train_and_evaluate.py \
 		--config training-lab/configs/$(CONFIG).yaml \
 		--new \
 		$(EXTRA)

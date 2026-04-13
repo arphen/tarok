@@ -1,8 +1,8 @@
 """Opponent Pool — modular self-play opponent selection with statistics.
 
 Provides a unified interface for mixing different opponent types during
-self-play training: neural network models (HoF, FSP bank), heuristic bots
-(StockSkis v5), and lookahead agents. Each opponent type implements
+self-play training: neural network models (HoF, FSP bank) and heuristic bots
+(StockSkis v5). Each opponent type implements
 the SelfPlayOpponent protocol and tracks per-game statistics.
 
 Usage in trainer:

@@ -5,16 +5,15 @@
 # because the opponents provide a stable difficulty baseline.
 #
 # Usage:
-#   make train CONFIG=vs-3-bots MODEL=backend/checkpoints/tarok_agent_latest.pt
+#   make train-iterate MODEL=backend/checkpoints/tarok_agent_latest.pt
 
 seats: "nn,bot_v5,bot_v5,bot_v5"
-bench_seats: "nn,bot_v5,bot_v5,bot_v5"   # benchmark uses same layout
+bench_seats: "nn,bot_v5,bot_v5,bot_v5"
 
 iterations: 10
-games: 10000          # self-play games per iteration
-bench_games: 10000    # benchmark games per evaluation
+games: 10000
+bench_games: 10000
 
-# PPO hyper-parameters
 ppo_epochs: 6
 batch_size: 8192
 lr: 0.0003

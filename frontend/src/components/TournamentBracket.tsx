@@ -13,7 +13,7 @@ interface TournamentBracketProps {
   onBack: () => void;
 }
 
-type AgentType = 'rl' | 'random' | 'lookahead';
+type AgentType = 'rl' | 'random';
 
 let entryCounter = 0;
 function makeEntry(name: string, type: AgentType, checkpoint: string): TournamentEntry {
@@ -47,7 +47,7 @@ export default function TournamentBracket({ checkpoints: initialCheckpoints, onB
   }, [refreshCheckpoints]);
 
   const addEntry = () => {
-    const name = newName.trim() || `${newType === 'rl' ? 'RL' : newType === 'random' ? 'Rnd' : 'LA'}-${tournament.entries.length}`;
+    const name = newName.trim() || `${newType === 'rl' ? 'RL' : 'Rnd'}-${tournament.entries.length}`;
     tournament.setEntries([...tournament.entries, makeEntry(name, newType, newCheckpoint)]);
     setNewName('');
   };
@@ -116,7 +116,6 @@ export default function TournamentBracket({ checkpoints: initialCheckpoints, onB
               <select value={newType} onChange={e => setNewType(e.target.value as AgentType)}>
                 <option value="rl">RL Agent</option>
                 <option value="random">Random</option>
-                <option value="lookahead">Lookahead</option>
               </select>
               {newType === 'rl' && (
                 <select value={newCheckpoint} onChange={e => setNewCheckpoint(e.target.value)}>
