@@ -27,7 +27,7 @@ class ResolveModel:
         self,
         hidden_size: int = 256,
         oracle: bool = True,
-        model_arch: str = "v2",
+        model_arch: str = "v4",
     ) -> tuple[ModelIdentity, dict]:
         name = random_slovenian_name()
         weights = self._model.create_new(hidden_size, oracle, model_arch)

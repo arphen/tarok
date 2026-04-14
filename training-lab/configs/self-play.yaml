@@ -8,7 +8,7 @@
 #   make train-iterate CONFIG=self-play MODEL=path/to/model.pt
 
 seats: "nn,nn,nn,nn"
-bench_seats: "nn,bot_v5,bot_v5,bot_v5"
+bench_seats: "nn,bot_m6,bot_m6,bot_m6"
 
 iterations: 10
 games: 10000
@@ -16,7 +16,7 @@ bench_games: 10000
 
 ppo_epochs: 6
 batch_size: 8192
-lr: 0.0003
+lr: 0.0001
 explore_rate: 0.10
 
 concurrency: 128

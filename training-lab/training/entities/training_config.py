@@ -23,7 +23,8 @@ class TrainingConfig:
     save_dir: str = "checkpoints/training_run"
     concurrency: int = 128
     imitation_coef: float = 0.3
-    model_arch: str = "v2"
+    model_arch: str = "v4"
+    human_data_dir: str | None = None
 
     @property
     def nn_seat_indices(self) -> list[int]:

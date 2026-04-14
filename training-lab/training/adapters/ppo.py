@@ -6,7 +6,10 @@ Extracted from the deleted PPOTrainer._ppo_update with zero behavioral changes.
 
 from __future__ import annotations
 
+import json
 import logging
+import math
+from pathlib import Path
 from typing import Any
 
 import numpy as np
@@ -15,8 +18,8 @@ import torch
 import torch.nn as nn
 import torch.optim as optim
 
-from tarok.core.compute import create_backend
-from tarok.core.encoding import (
+from tarok_model.compute import create_backend
+from tarok_model.encoding import (
     ANNOUNCE_ACTION_SIZE,
     BID_ACTION_SIZE,
     CARD_ACTION_SIZE,
@@ -25,7 +28,7 @@ from tarok.core.encoding import (
     KING_ACTION_SIZE,
     TALON_ACTION_SIZE,
 )
-from tarok.core.network import TarokNet, TarokNetV3
+from tarok_model.network import TarokNetV4
 
 from training.entities import TrainingConfig
 from training.ports import PPOPort
@@ -57,7 +60,7 @@ _MODE_ID_TO_ENUM = {
 
 class PPOAdapter(PPOPort):
     def __init__(self) -> None:
-        self._network: TarokNet | None = None
+        self._network: TarokNetV4 | None = None
         self._optimizer: optim.Adam | None = None
         self._compute: Any = None
         self._config: TrainingConfig | None = None
@@ -75,13 +78,11 @@ class PPOAdapter(PPOPort):
         hidden_size = weights["shared.0.weight"].shape[0]
         oracle = any(k.startswith("critic_backbone") for k in weights)
 
-        model_arch = config.model_arch
-        if any(k.startswith("card_heads.") for k in weights):
-            model_arch = "v3"
-        model_cls = TarokNetV3 if model_arch == "v3" else TarokNet
-        self._network = model_cls(hidden_size=hidden_size, oracle_critic=oracle)
-        if model_cls is TarokNetV3:
-            _validate_v3_contract_indices_with_rust()
+        if config.model_arch != "v4":
+            raise ValueError(f"Unsupported model_arch={config.model_arch}. Only 'v4' is supported.")
+
+        self._network = TarokNetV4(hidden_size=hidden_size, oracle_critic=oracle)
+        _validate_v4_contract_indices_with_rust()
         self._network.load_state_dict(weights)
         self._network = self._compute.prepare_network(self._network)
         self._optimizer = optim.Adam(self._network.parameters(), lr=config.lr)
@@ -115,7 +116,7 @@ class PPOAdapter(PPOPort):
         decision_types = data["decision_types"]
         legal_masks = data["legal_masks"]
         oracle_states = data.get("oracle_states")
-        game_modes = data.get("game_modes")
+        game_modes = data["game_modes"]
 
         if len(states) == 0:
             return {"policy_loss": 0, "value_loss": 0, "entropy": 0, "total_loss": 0}
@@ -124,14 +125,13 @@ class PPOAdapter(PPOPort):
         compute = self._compute
         optimizer = self._optimizer
 
-        is_v3 = isinstance(network, TarokNetV3)
         groups: dict[tuple[DecisionType, GameMode | None], np.ndarray] = {}
 
         for dt_int, dt_enum in _DT_MAP.items():
             dt_mask = decision_types == dt_int
             if not np.any(dt_mask):
                 continue
-            if is_v3 and dt_enum == DecisionType.CARD_PLAY and game_modes is not None:
+            if dt_enum == DecisionType.CARD_PLAY:
                 dt_indices = np.where(dt_mask)[0]
                 gm_vals = game_modes[dt_indices]
                 for gm_int in np.unique(gm_vals):
@@ -262,23 +262,7 @@ def _prepare_batched(raw: dict[str, Any]) -> dict[str, Any]:
     oracle_states_raw = raw.get("oracle_states")
     oracle_states_np = np.asarray(oracle_states_raw, dtype=np.float32) if oracle_states_raw is not None else None
 
-    # Precompute v3 card-head modes from the contract one-hot in state.
-    # This avoids expensive per-batch mode inference in TarokNetV3.
-    game_modes_np: np.ndarray | None
-    contract_offset = int(te.CONTRACT_OFFSET)
-    contract_size = int(te.CONTRACT_SIZE)
-    contract_end = contract_offset + contract_size
-    if states_np.shape[1] >= contract_end:
-        contract_slice = states_np[:, contract_offset:contract_end]
-        max_idx = np.argmax(contract_slice, axis=1)
-        max_vals = np.max(contract_slice, axis=1)
-        game_modes_np = np.full(len(states_np), 2, dtype=np.int8)  # partner_play default
-        game_modes_np[(max_idx >= 4) & (max_idx <= 7)] = 0          # solo
-        game_modes_np[(max_idx == 0) | (max_idx == 8)] = 1          # klop / berac
-        game_modes_np[max_idx == 9] = 3                             # color valat
-        game_modes_np[max_vals <= 0.0] = 2
-    else:
-        game_modes_np = None
+    game_modes_np = np.asarray(raw["game_modes"], dtype=np.int8)
 
     n_total = len(actions_np)
     gids = game_ids_np % scores_np.shape[0]
@@ -290,6 +274,14 @@ def _prepare_batched(raw: dict[str, Any]) -> dict[str, Any]:
     sorted_keys = np.asarray(traj_keys[sort_idx], dtype=np.int64)
     sorted_values = np.asarray(values_np[sort_idx], dtype=np.float32)
     sorted_rewards = np.asarray(rewards_np[sort_idx], dtype=np.float32)
+
+    # Zero out non-terminal rewards so the critic learns position value,
+    # not a countdown timer.  A step is terminal if it's the last element
+    # or if the next step belongs to a different (game, player) trajectory.
+    is_terminal = np.ones(n_total, dtype=bool)
+    if n_total > 0:
+        is_terminal[:-1] = sorted_keys[:-1] != sorted_keys[1:]
+    sorted_rewards[~is_terminal] = 0.0
 
     advantages_sorted, returns_sorted = te.compute_gae(
         sorted_values,
@@ -327,7 +319,174 @@ def _prepare_batched(raw: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-def _validate_v3_contract_indices_with_rust() -> None:
+_DT_NAME_MAP = {"BID": 0, "KING_CALL": 1, "TALON_PICK": 2, "CARD_PLAY": 3}
+
+
+def _mode_id_from_state(state: np.ndarray) -> int:
+    contract_offset = int(te.CONTRACT_OFFSET)
+    contract_size = int(te.CONTRACT_SIZE)
+    contract_end = contract_offset + contract_size
+    if state.shape[0] < contract_end:
+        return 2
+
+    contract_slice = state[contract_offset:contract_end]
+    max_idx = int(np.argmax(contract_slice))
+    max_val = float(np.max(contract_slice))
+    if max_val <= 0.0:
+        return 2
+    if 4 <= max_idx <= 7:
+        return 0
+    if max_idx == 0 or max_idx == 8:
+        return 1
+    if max_idx == 9:
+        return 3
+    return 2
+
+
+def load_human_experiences(data_dir: str | Path) -> dict[str, Any] | None:
+    """Load all JSONL human-game files and return a raw-experiences dict.
+
+    The format mirrors what the Rust self-play engine emits so it can be merged
+    directly into the self-play batch before the PPO update.  Human actions get
+    ``log_prob = log(1 / n_legal)`` (uniform prior), ``value = 0``.  GAE will
+    give them proper advantage estimates from the actual game outcomes.
+    """
+    data_dir = Path(data_dir)
+    files = sorted(data_dir.glob("*.jsonl"))
+    if not files:
+        log.warning("human_data_dir=%s has no .jsonl files — skipping", data_dir)
+        return None
+
+    states_list: list[np.ndarray] = []
+    actions_list: list[int] = []
+    log_probs_list: list[float] = []
+    values_list: list[float] = []
+    decision_types_list: list[int] = []
+    legal_masks_list: list[np.ndarray] = []
+    game_ids_list: list[int] = []
+    players_list: list[int] = []
+    game_modes_list: list[int] = []
+
+    # scores: game_id -> {player -> final_score}
+    game_scores: dict[int, dict[int, float]] = {}
+
+    # Assign synthetic integer game IDs sequentially
+    file_to_gid: dict[str, int] = {}
+    gid_counter = 0
+
+    for f in files:
+        rows = []
+        try:
+            with f.open(encoding="utf-8") as fh:
+                for line in fh:
+                    line = line.strip()
+                    if line:
+                        rows.append(json.loads(line))
+        except Exception as exc:
+            log.warning("Could not read %s: %s", f, exc)
+            continue
+
+        if not rows:
+            continue
+
+        # Use (game_id, round) as the unique game key
+        first = rows[0]
+        key = f"{first.get('game_id', f.stem)}_r{first.get('round', 0)}"
+        if key not in file_to_gid:
+            file_to_gid[key] = gid_counter
+            gid_counter += 1
+        gid = file_to_gid[key]
+
+        # Collect per-player final scores for this game
+        for row in rows:
+            p = int(row.get("player", 0))
+            score = float(row.get("final_score", 0))
+            game_scores.setdefault(gid, {})[p] = score
+
+        for row in rows:
+            state = row.get("state")
+            action = row.get("action")
+            legal_mask = row.get("legal_mask")
+            dt_str = row.get("decision_type", "CARD_PLAY")
+            player = int(row.get("player", 0))
+
+            if state is None or action is None or legal_mask is None:
+                continue
+
+            state_arr = np.asarray(state, dtype=np.float32)
+            mask_arr = np.asarray(legal_mask, dtype=np.float32)
+            n_legal = max(int(mask_arr.sum()), 1)
+            lp = -math.log(n_legal)  # uniform log-prob over legal actions
+
+            states_list.append(state_arr)
+            actions_list.append(int(action))
+            log_probs_list.append(lp)
+            values_list.append(0.0)
+            decision_types_list.append(_DT_NAME_MAP.get(str(dt_str), 3))
+            game_modes_list.append(_mode_id_from_state(state_arr))
+            legal_masks_list.append(mask_arr)
+            game_ids_list.append(gid)
+            players_list.append(player)
+
+    if not states_list:
+        return None
+
+    n_games = gid_counter
+    scores_arr = np.zeros((n_games, 4), dtype=np.float32)
+    for gid, player_scores in game_scores.items():
+        for p, s in player_scores.items():
+            if 0 <= p < 4:
+                scores_arr[gid, p] = s
+
+    log.info("Loaded %d human decisions from %d games in %s", len(states_list), n_games, data_dir)
+    return {
+        "states": np.stack(states_list),
+        "actions": np.asarray(actions_list, dtype=np.int64),
+        "log_probs": np.asarray(log_probs_list, dtype=np.float32),
+        "values": np.asarray(values_list, dtype=np.float32),
+        "decision_types": np.asarray(decision_types_list, dtype=np.int8),
+        "game_modes": np.asarray(game_modes_list, dtype=np.int8),
+        "legal_masks": np.stack(legal_masks_list),
+        "game_ids": np.asarray(game_ids_list, dtype=np.int64),
+        "players": np.asarray(players_list, dtype=np.int8),
+        "scores": scores_arr,
+        "oracle_states": None,
+    }
+
+
+def merge_experiences(primary: dict[str, Any], extra: dict[str, Any]) -> dict[str, Any]:
+    """Concatenate two raw-experience dicts along the sample axis.
+
+    ``extra`` game IDs are offset so they don't collide with ``primary``.
+    """
+    n_primary_games = int(primary["scores"].shape[0])
+    extra_game_ids = np.asarray(extra["game_ids"], dtype=np.int64) + n_primary_games
+    # Stack scores (primary rows first, then extra)
+    merged_scores = np.concatenate([primary["scores"], extra["scores"]], axis=0)
+
+    def _cat(k: str) -> np.ndarray:
+        a = primary[k]
+        b = extra[k] if k != "game_ids" else extra_game_ids
+        if a is None or b is None:
+            return None  # type: ignore[return-value]
+        return np.concatenate([np.asarray(a), np.asarray(b)], axis=0)
+
+    return {
+        "states": _cat("states"),
+        "actions": _cat("actions"),
+        "log_probs": _cat("log_probs"),
+        "values": _cat("values"),
+        "decision_types": _cat("decision_types"),
+        "game_modes": _cat("game_modes"),
+        "legal_masks": _cat("legal_masks"),
+        "game_ids": extra_game_ids if "game_ids" not in primary else _cat("game_ids"),
+        "players": _cat("players"),
+        "scores": merged_scores,
+        "oracle_states": primary.get("oracle_states"),
+    }
+
+
+def _validate_v4_contract_indices_with_rust() -> None:
     """Fail fast if Python and Rust contract indices diverge."""
     try:
         import tarok_engine as te
@@ -335,16 +494,16 @@ def _validate_v3_contract_indices_with_rust() -> None:
         return
 
     expected = {
-        "CONTRACT_KLOP": TarokNetV3._KLOP_IDX,
-        "CONTRACT_THREE": TarokNetV3._THREE_IDX,
-        "CONTRACT_TWO": TarokNetV3._TWO_IDX,
-        "CONTRACT_ONE": TarokNetV3._ONE_IDX,
-        "CONTRACT_SOLO_THREE": TarokNetV3._SOLO_THREE_IDX,
-        "CONTRACT_SOLO_TWO": TarokNetV3._SOLO_TWO_IDX,
-        "CONTRACT_SOLO_ONE": TarokNetV3._SOLO_ONE_IDX,
-        "CONTRACT_SOLO": TarokNetV3._SOLO_IDX,
-        "CONTRACT_BERAC": TarokNetV3._BERAC_IDX,
-        "CONTRACT_BARVNI_VALAT": TarokNetV3._BARVNI_VALAT_IDX,
+        "CONTRACT_KLOP": TarokNetV4._KLOP_IDX,
+        "CONTRACT_THREE": TarokNetV4._THREE_IDX,
+        "CONTRACT_TWO": TarokNetV4._TWO_IDX,
+        "CONTRACT_ONE": TarokNetV4._ONE_IDX,
+        "CONTRACT_SOLO_THREE": TarokNetV4._SOLO_THREE_IDX,
+        "CONTRACT_SOLO_TWO": TarokNetV4._SOLO_TWO_IDX,
+        "CONTRACT_SOLO_ONE": TarokNetV4._SOLO_ONE_IDX,
+        "CONTRACT_SOLO": TarokNetV4._SOLO_IDX,
+        "CONTRACT_BERAC": TarokNetV4._BERAC_IDX,
+        "CONTRACT_BARVNI_VALAT": TarokNetV4._BARVNI_VALAT_IDX,
     }
 
     mismatches: list[str] = []
@@ -357,5 +516,5 @@ def _validate_v3_contract_indices_with_rust() -> None:
         mismatch_text = "; ".join(mismatches)
         raise RuntimeError(
             "Rust/Python contract index mismatch detected. "
-            f"Refusing to train with ambiguous v3 mode routing: {mismatch_text}"
+            f"Refusing to train with ambiguous v4 mode routing: {mismatch_text}"
         )

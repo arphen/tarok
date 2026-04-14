@@ -29,6 +29,7 @@ _script_dir = Path(__file__).resolve().parent
 _orig_cwd = Path.cwd()
 _root = _script_dir.parent
 
+sys.path.insert(0, str(_root / "model" / "src"))
 sys.path.insert(0, str(_root / "backend" / "src"))
 sys.path.insert(0, str(_script_dir))
 os.chdir(str(_root))
@@ -105,19 +106,22 @@ Examples:
     parser.add_argument("--hidden-size", type=int, default=None,
                         help="Hidden layer size for new models (default: 256)")
     parser.add_argument("--model-arch", type=str, default=None,
-                        choices=["v2", "v3"],
-                        help="Model architecture: v2 (single card head) or v3 (mode-specific card heads)")
+                        choices=["v4"],
+                        help="Model architecture: v4")
     parser.add_argument("--lr-schedule", type=str, default="constant",
                         choices=["constant", "cosine", "linear"],
                         help="LR schedule across iterations: constant (default), cosine, or linear decay")
     parser.add_argument("--lr-min", type=float, default=None,
                         help="Minimum LR for cosine/linear schedules (default: lr / 10)")
+    parser.add_argument("--human-data", type=str, default=None,
+                        help="Directory of human-play JSONL files to mix into every PPO update")
     return parser.parse_args()
 
 
 def main() -> None:
     args = _parse_args()
     container = Container()
+    requested_model_arch = getattr(args, "model_arch", None)
 
     # ── Resolve config ──────────────────────────────────────────────
     cli_overrides = {
@@ -135,6 +139,7 @@ def main() -> None:
         "device": args.device,
         "concurrency": args.concurrency,
         "model_arch": getattr(args, "model_arch", None),
+        "human_data_dir": _resolve_path(getattr(args, "human_data", None)),
     }
     config_path = _resolve_path(args.config)
     config = container.resolve_config().resolve(cli_overrides, config_path)
@@ -151,10 +156,35 @@ def main() -> None:
         checkpoint_path = _resolve_path(args.checkpoint)
         print(f"Loading checkpoint: {args.checkpoint}")
         identity, weights = resolve.from_checkpoint(checkpoint_path)
-        if config.model_arch != identity.model_arch:
+        if requested_model_arch is None:
+            if config.model_arch != identity.model_arch:
+                print(
+                    f"Using checkpoint architecture {identity.model_arch} "
+                    f"(config requested {config.model_arch})."
+                )
+            config = TrainingConfig(
+                seats=config.seats,
+                bench_seats=config.bench_seats,
+                iterations=config.iterations,
+                games=config.games,
+                bench_games=config.bench_games,
+                ppo_epochs=config.ppo_epochs,
+                batch_size=config.batch_size,
+                lr=config.lr,
+                lr_schedule=config.lr_schedule,
+                lr_min=config.lr_min,
+                explore_rate=config.explore_rate,
+                device=config.device,
+                save_dir=config.save_dir,
+                concurrency=config.concurrency,
+                imitation_coef=config.imitation_coef,
+                model_arch=identity.model_arch,
+                human_data_dir=config.human_data_dir,
+            )
+        elif config.model_arch != identity.model_arch:
             print(
                 f"Promoting architecture {identity.model_arch} -> {config.model_arch} "
-                f"from config"
+                f"from explicit CLI override"
             )
             identity = ModelIdentity(
                 name=identity.name,
@@ -184,6 +214,7 @@ def main() -> None:
         concurrency=config.concurrency,
         imitation_coef=config.imitation_coef,
         model_arch=config.model_arch,
+        human_data_dir=config.human_data_dir,
     )
 
     device = _detect_device(config.device)

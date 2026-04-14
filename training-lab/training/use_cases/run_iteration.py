@@ -5,6 +5,7 @@ from __future__ import annotations
 import time
 from pathlib import Path
 
+from training.adapters.ppo import load_human_experiences, merge_experiences
 from training.entities.iteration_result import IterationResult
 from training.entities.model_identity import ModelIdentity
 from training.entities.training_config import TrainingConfig
@@ -50,6 +51,12 @@ class RunIteration:
         n_exps = len(raw["players"])
         sp_time = time.time() - t0
         self._presenter.on_selfplay_done(n_exps, sp_time)
+
+        # Merge human experiences (replay forever — every iteration)
+        if config.human_data_dir:
+            human_raw = load_human_experiences(config.human_data_dir)
+            if human_raw is not None:
+                raw = merge_experiences(raw, human_raw)
 
         # PPO update
         if iter_lr is not None:

@@ -10,7 +10,7 @@ import torch
 import torch.nn as nn
 
 from training.adapters.compute.backend import ComputeBackend
-from tarok.core.encoding import DecisionType
+from tarok_model.encoding import DecisionType
 
 
 class CpuBackend(ComputeBackend):

@@ -6,7 +6,7 @@ import shutil
 
 import torch
 
-from tarok.core.network import TarokNet, TarokNetV3
+from tarok_model.network import TarokNetV4
 
 from training.ports import ModelPort
 
@@ -18,18 +18,22 @@ class TorchModelAdapter(ModelPort):
         hidden_size = sd["shared.0.weight"].shape[0]
         oracle = any(k.startswith("critic_backbone") for k in sd)
         model_arch = cp.get("model_arch")
-        if model_arch is None:
-            model_arch = "v3" if any(k.startswith("card_heads.") for k in sd) else "v2"
+        if model_arch != "v4":
+            raise ValueError(
+                f"Unsupported checkpoint architecture '{model_arch}'. Only 'v4' checkpoints are supported."
+            )
         return sd, hidden_size, oracle, model_arch
 
     def create_new(self, hidden_size: int, oracle: bool, model_arch: str) -> dict:
-        model_cls = TarokNetV3 if model_arch == "v3" else TarokNet
-        model = model_cls(hidden_size=hidden_size, oracle_critic=oracle)
+        if model_arch != "v4":
+            raise ValueError(f"Unsupported model_arch={model_arch}. Only 'v4' is supported.")
+        model = TarokNetV4(hidden_size=hidden_size, oracle_critic=oracle)
         return model.state_dict()
 
     def export_for_inference(self, weights: dict, hidden_size: int, oracle: bool, model_arch: str, path: str) -> None:
-        model_cls = TarokNetV3 if model_arch == "v3" else TarokNet
-        model = model_cls(hidden_size=hidden_size, oracle_critic=oracle)
+        if model_arch != "v4":
+            raise ValueError(f"Unsupported model_arch={model_arch}. Only 'v4' is supported.")
+        model = TarokNetV4(hidden_size=hidden_size, oracle_critic=oracle)
         model.load_state_dict(weights)
         model.eval()
         _export_torchscript(model, path)
@@ -52,9 +56,9 @@ class TorchModelAdapter(ModelPort):
         shutil.copy2(src, dst)
 
 
-def _export_torchscript(model: TarokNet, path: str) -> None:
+def _export_torchscript(model: TarokNetV4, path: str) -> None:
     class _Wrapper(torch.nn.Module):
-        def __init__(self, base: TarokNet):
+        def __init__(self, base: TarokNetV4):
             super().__init__()
             self.base = base
 
