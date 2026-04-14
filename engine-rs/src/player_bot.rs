@@ -7,6 +7,7 @@
 use crate::card::*;
 use crate::game_state::*;
 use crate::player::*;
+use crate::stockskis_v3;
 use crate::stockskis_v5;
 use crate::stockskis_v6;
 use crate::stockskis_m6;
@@ -17,6 +18,7 @@ use crate::stockskis_m6;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum BotVersion {
+    V3,
     V5,
     V6,
     M6,
@@ -33,6 +35,10 @@ pub struct StockSkisPlayer {
 impl StockSkisPlayer {
     pub fn new(version: BotVersion) -> Self {
         StockSkisPlayer { version }
+    }
+
+    pub fn v3() -> Self {
+        Self::new(BotVersion::V3)
     }
 
     pub fn v5() -> Self {
@@ -77,6 +83,7 @@ impl BatchPlayer for StockSkisPlayer {
         let hand = gs.hands[player as usize];
         let called_king = gs.called_king;
         let discards = match self.version {
+            BotVersion::V3 => stockskis_v3::choose_discards_v3(hand, must_discard, called_king),
             BotVersion::V5 => stockskis_v5::choose_discards_v5(hand, must_discard, called_king),
             BotVersion::V6 => stockskis_v6::choose_discards_v6(hand, must_discard, called_king),
             BotVersion::M6 => stockskis_m6::choose_discards_m6(hand, must_discard, called_king),
@@ -86,6 +93,7 @@ impl BatchPlayer for StockSkisPlayer {
 
     fn name(&self) -> &str {
         match self.version {
+            BotVersion::V3 => "stockskis_v3",
             BotVersion::V5 => "stockskis_v5",
             BotVersion::V6 => "stockskis_v6",
             BotVersion::M6 => "stockskis_m6",
@@ -108,6 +116,7 @@ impl StockSkisPlayer {
             .max_by_key(|c| c.strength());
 
         let chosen = match self.version {
+            BotVersion::V3 => stockskis_v3::evaluate_bid_v3(hand, highest),
             BotVersion::V5 => stockskis_v5::evaluate_bid_v5(hand, highest),
             BotVersion::V6 => stockskis_v6::evaluate_bid_v6(hand, highest),
             BotVersion::M6 => stockskis_m6::evaluate_bid_m6(hand, highest),
@@ -125,6 +134,7 @@ impl StockSkisPlayer {
     fn decide_king(&self, ctx: &DecisionContext) -> usize {
         let hand = ctx.gs.hands[ctx.player as usize];
         let chosen = match self.version {
+            BotVersion::V3 => stockskis_v3::choose_king_v3(hand),
             BotVersion::V5 => stockskis_v5::choose_king_v5(hand),
             BotVersion::V6 => stockskis_v6::choose_king_v6(hand),
             BotVersion::M6 => stockskis_m6::choose_king_m6(hand),
@@ -142,6 +152,7 @@ impl StockSkisPlayer {
         let groups = &ctx.gs.talon_revealed;
 
         let chosen = match self.version {
+            BotVersion::V3 => stockskis_v3::choose_talon_group_v3(groups, hand, called_king),
             BotVersion::V5 => stockskis_v5::choose_talon_group_v5(groups, hand, called_king),
             BotVersion::V6 => stockskis_v6::choose_talon_group_v6(groups, hand, called_king),
             BotVersion::M6 => stockskis_m6::choose_talon_group_m6(groups, hand, called_king),
@@ -157,6 +168,7 @@ impl StockSkisPlayer {
     fn decide_card(&self, ctx: &DecisionContext) -> usize {
         let hand = ctx.gs.hands[ctx.player as usize];
         let card = match self.version {
+            BotVersion::V3 => stockskis_v3::choose_card_v3(hand, &ctx.gs, ctx.player),
             BotVersion::V5 => stockskis_v5::choose_card_v5(hand, &ctx.gs, ctx.player),
             BotVersion::V6 => stockskis_v6::choose_card_v6(hand, &ctx.gs, ctx.player),
             BotVersion::M6 => stockskis_m6::choose_card_m6(hand, &ctx.gs, ctx.player),

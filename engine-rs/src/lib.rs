@@ -11,6 +11,7 @@ pub mod player_bot;
 pub mod player_nn;
 pub mod scoring;
 pub mod self_play;
+pub mod stockskis_v3;
 pub mod stockskis_v5;
 pub mod stockskis_v6;
 pub mod stockskis_m6;

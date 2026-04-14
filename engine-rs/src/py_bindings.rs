@@ -769,6 +769,7 @@ fn run_self_play(
         None
     };
 
+    let mut bot_v3: Option<Arc<dyn BatchPlayer>> = None;
     let mut bot_v5: Option<Arc<dyn BatchPlayer>> = None;
     let mut bot_v6: Option<Arc<dyn BatchPlayer>> = None;
     let mut bot_m6: Option<Arc<dyn BatchPlayer>> = None;
@@ -777,6 +778,12 @@ fn run_self_play(
     for &label in &seat_labels {
         let player: Arc<dyn BatchPlayer> = match label {
             "nn" => nn_player.as_ref().unwrap().clone(),
+            "bot_v3" => {
+                if bot_v3.is_none() {
+                    bot_v3 = Some(Arc::new(StockSkisPlayer::v3()));
+                }
+                bot_v3.as_ref().unwrap().clone()
+            }
             "bot_v5" => {
                 if bot_v5.is_none() {
                     bot_v5 = Some(Arc::new(StockSkisPlayer::v5()));
@@ -797,7 +804,7 @@ fn run_self_play(
             }
             other => {
                 return Err(pyo3::exceptions::PyValueError::new_err(
-                    format!("Unknown seat type '{}'. Use 'nn', 'bot_v5', 'bot_v6', or 'bot_m6'.", other)
+                    format!("Unknown seat type '{}'. Use 'nn', 'bot_v3', 'bot_v5', 'bot_v6', or 'bot_m6'.", other)
                 ));
             }
         };
@@ -828,6 +835,7 @@ fn run_self_play(
     let mut all_log_probs = Vec::with_capacity(total_exp);
     let mut all_values = Vec::with_capacity(total_exp);
     let mut all_dt = Vec::with_capacity(total_exp);
+    let mut all_game_modes = Vec::with_capacity(total_exp);
     let mut all_rewards = Vec::with_capacity(total_exp);
     let mut all_game_ids = Vec::with_capacity(total_exp);
     let mut all_players = Vec::with_capacity(total_exp);
@@ -868,6 +876,7 @@ fn run_self_play(
             all_log_probs.push(exp.log_prob);
             all_values.push(exp.value);
             all_dt.push(exp.decision_type);
+            all_game_modes.push(exp.game_mode);
             all_masks.extend_from_slice(&exp.legal_mask);
             all_game_ids.push(exp.game_id);
             all_players.push(exp.player);
@@ -885,6 +894,7 @@ fn run_self_play(
     dict.set_item("log_probs", numpy::PyArray1::<f32>::from_vec(py, all_log_probs))?;
     dict.set_item("values", numpy::PyArray1::<f32>::from_vec(py, all_values))?;
     dict.set_item("decision_types", numpy::PyArray1::<u8>::from_vec(py, all_dt))?;
+    dict.set_item("game_modes", numpy::PyArray1::<u8>::from_vec(py, all_game_modes))?;
     dict.set_item("rewards", numpy::PyArray1::<f32>::from_vec(py, all_rewards))?;
     dict.set_item("game_ids", numpy::PyArray1::<u32>::from_vec(py, all_game_ids))?;
     dict.set_item("players", numpy::PyArray1::<u8>::from_vec(py, all_players))?;

@@ -165,6 +165,8 @@ def _print_next_steps(run: TrainingRun) -> None:
     # Try to infer config name from save_dir
     if cfg.seats == "nn,bot_v5,bot_v5,bot_v5":
         config_name = "vs-3-bots"
+    elif cfg.seats == "nn,bot_v3,bot_v3,bot_v3":
+        config_name = "vs-3-v3"
     elif cfg.seats == "nn,bot_v6,bot_v6,bot_v6":
         config_name = "vs-3-v6"
     elif cfg.seats == "nn,nn,nn,nn":
