@@ -427,7 +427,27 @@ class TarokNetV3(TarokNet):
     """
 
     _CONTRACT_FEATURE_OFFSET = 220
-    _NO_CONTRACT_IDX = 0
+    _KLOP_IDX = 0
+    _THREE_IDX = 1
+    _TWO_IDX = 2
+    _ONE_IDX = 3
+    _SOLO_THREE_IDX = 4
+    _SOLO_TWO_IDX = 5
+    _SOLO_ONE_IDX = 6
+    _SOLO_IDX = 7
+    _BERAC_IDX = 8
+    _BARVNI_VALAT_IDX = 9
+
+    _SOLO_CONTRACT_INDICES = {
+        _SOLO_THREE_IDX,
+        _SOLO_TWO_IDX,
+        _SOLO_ONE_IDX,
+        _SOLO_IDX,
+    }
+    _KLOP_BERAC_CONTRACT_INDICES = {
+        _KLOP_IDX,
+        _BERAC_IDX,
+    }
 
     def __init__(self, hidden_size: int = 256, oracle_critic: bool = False):
         super().__init__(hidden_size=hidden_size, oracle_critic=oracle_critic)
@@ -470,11 +490,11 @@ class TarokNetV3(TarokNet):
 
     @staticmethod
     def _mode_from_contract_idx(contract_idx: int) -> GameMode:
-        if contract_idx in (4, 5, 6, 7):
+        if contract_idx in TarokNetV3._SOLO_CONTRACT_INDICES:
             return GameMode.SOLO
-        if contract_idx in (1, 8):
+        if contract_idx in TarokNetV3._KLOP_BERAC_CONTRACT_INDICES:
             return GameMode.KLOP_BERAC
-        if contract_idx == 9:
+        if contract_idx == TarokNetV3._BARVNI_VALAT_IDX:
             return GameMode.COLOR_VALAT
         return GameMode.PARTNER_PLAY
 
@@ -494,10 +514,7 @@ class TarokNetV3(TarokNet):
                 modes.append(GameMode.PARTNER_PLAY)
                 continue
             idx = int(max_idx[i].item())
-            if idx == self._NO_CONTRACT_IDX:
-                modes.append(GameMode.PARTNER_PLAY)
-            else:
-                modes.append(self._mode_from_contract_idx(idx))
+            modes.append(self._mode_from_contract_idx(idx))
         return modes
 
     def _resolve_modes(
@@ -543,9 +560,14 @@ class TarokNetV3(TarokNet):
 
         # mode ids: 0=solo, 1=klop_berac, 2=partner_play, 3=color_valat
         mode_ids = torch.full_like(max_idx, 2)
-        solo_mask = (max_idx >= 4) & (max_idx <= 7)
-        klop_mask = (max_idx == 1) | (max_idx == 8)
-        color_mask = max_idx == 9
+        solo_mask = (
+            (max_idx == self._SOLO_THREE_IDX)
+            | (max_idx == self._SOLO_TWO_IDX)
+            | (max_idx == self._SOLO_ONE_IDX)
+            | (max_idx == self._SOLO_IDX)
+        )
+        klop_mask = (max_idx == self._KLOP_IDX) | (max_idx == self._BERAC_IDX)
+        color_mask = max_idx == self._BARVNI_VALAT_IDX
 
         mode_ids = torch.where(klop_mask, torch.ones_like(mode_ids), mode_ids)
         mode_ids = torch.where(color_mask, torch.full_like(mode_ids, 3), mode_ids)

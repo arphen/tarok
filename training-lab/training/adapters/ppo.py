@@ -79,6 +79,8 @@ class PPOAdapter(PPOPort):
             model_arch = "v3"
         model_cls = TarokNetV3 if model_arch == "v3" else TarokNet
         self._network = model_cls(hidden_size=hidden_size, oracle_critic=oracle)
+        if model_cls is TarokNetV3:
+            _validate_v3_contract_indices_with_rust()
         self._network.load_state_dict(weights)
         self._network = self._compute.prepare_network(self._network)
         self._optimizer = optim.Adam(self._network.parameters(), lr=config.lr)
@@ -232,7 +234,7 @@ def _prepare_batched(raw: dict[str, Any]) -> dict[str, Any]:
         max_vals = np.max(contract_slice, axis=1)
         game_modes_np = np.full(len(states_np), 2, dtype=np.int8)  # partner_play default
         game_modes_np[(max_idx >= 4) & (max_idx <= 7)] = 0          # solo
-        game_modes_np[(max_idx == 1) | (max_idx == 8)] = 1          # klop / berac
+        game_modes_np[(max_idx == 0) | (max_idx == 8)] = 1          # klop / berac
         game_modes_np[max_idx == 9] = 3                             # color valat
         game_modes_np[max_vals <= 0.0] = 2
     else:
@@ -284,3 +286,37 @@ def _prepare_batched(raw: dict[str, Any]) -> dict[str, Any]:
         "legal_masks": torch.from_numpy(legal_masks_np),
         "game_modes": game_modes_np,
     }
+
+
+def _validate_v3_contract_indices_with_rust() -> None:
+    """Fail fast if Python and Rust contract indices diverge."""
+    try:
+        import tarok_engine as te
+    except Exception:
+        return
+
+    expected = {
+        "CONTRACT_KLOP": TarokNetV3._KLOP_IDX,
+        "CONTRACT_THREE": TarokNetV3._THREE_IDX,
+        "CONTRACT_TWO": TarokNetV3._TWO_IDX,
+        "CONTRACT_ONE": TarokNetV3._ONE_IDX,
+        "CONTRACT_SOLO_THREE": TarokNetV3._SOLO_THREE_IDX,
+        "CONTRACT_SOLO_TWO": TarokNetV3._SOLO_TWO_IDX,
+        "CONTRACT_SOLO_ONE": TarokNetV3._SOLO_ONE_IDX,
+        "CONTRACT_SOLO": TarokNetV3._SOLO_IDX,
+        "CONTRACT_BERAC": TarokNetV3._BERAC_IDX,
+        "CONTRACT_BARVNI_VALAT": TarokNetV3._BARVNI_VALAT_IDX,
+    }
+
+    mismatches: list[str] = []
+    for name, py_value in expected.items():
+        rust_value = getattr(te, name, None)
+        if rust_value is None or int(rust_value) != int(py_value):
+            mismatches.append(f"{name}: rust={rust_value} python={py_value}")
+
+    if mismatches:
+        mismatch_text = "; ".join(mismatches)
+        raise RuntimeError(
+            "Rust/Python contract index mismatch detected. "
+            f"Refusing to train with ambiguous v3 mode routing: {mismatch_text}"
+        )
