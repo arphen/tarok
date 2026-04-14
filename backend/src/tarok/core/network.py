@@ -27,6 +27,9 @@ import torch.nn as nn
 from tarok.core.encoding import (
     STATE_SIZE,
     ORACLE_STATE_SIZE,
+    BELIEF_OFFSET,
+    CONTRACT_OFFSET,
+    CONTRACT_SIZE,
     BID_ACTION_SIZE,
     KING_ACTION_SIZE,
     TALON_ACTION_SIZE,
@@ -67,6 +70,9 @@ class CardAttention(nn.Module):
         self.card_dim = card_dim
         # Project each card's features into attention space
         self.card_proj = nn.Linear(card_dim, hidden_dim)
+        self.cls_token = nn.Parameter(torch.zeros(1, 1, hidden_dim))
+        # Learned card-identity embeddings: [CLS] + 54 card slots
+        self.pos_embedding = nn.Parameter(torch.randn(1, num_cards + 1, hidden_dim) * 0.02)
         self.attn = nn.MultiheadAttention(
             embed_dim=hidden_dim, num_heads=num_heads, batch_first=True,
         )
@@ -76,10 +82,12 @@ class CardAttention(nn.Module):
     def forward(self, card_features: torch.Tensor) -> torch.Tensor:
         """card_features: (batch, num_cards, card_dim) → (batch, hidden_dim)"""
         tokens = self.card_proj(card_features)  # (B, 54, hidden_dim)
+        cls = self.cls_token.expand(tokens.shape[0], -1, -1)  # (B, 1, hidden_dim)
+        tokens = torch.cat([cls, tokens], dim=1)  # (B, 55, hidden_dim)
+        tokens = tokens + self.pos_embedding
         attn_out, _ = self.attn(tokens, tokens, tokens)
         attn_out = self.norm(attn_out)
-        # Global average pooling over card tokens
-        pooled = attn_out.mean(dim=1)  # (B, hidden_dim)
+        pooled = attn_out[:, 0, :]  # CLS token output
         return self.out_proj(pooled)
 
 
@@ -203,10 +211,10 @@ class TarokNet(nn.Module):
         hand = state[:, 0:54]           # own hand
         played = state[:, 54:108]       # played cards
         trick = state[:, 108:162]       # current trick
-        # Belief vectors start at offset 270 (after v1 features + role)
-        # v1 features = 270, beliefs at 270:270+162
-        belief_start = 270  # _OLD_STATE_SIZE_V1
-        if state.shape[1] > belief_start + 162:
+        # Belief vectors start at the canonical belief offset.
+        belief_start = BELIEF_OFFSET
+        belief_span = 54 * 3
+        if state.shape[1] > belief_start + belief_span:
             b1 = state[:, belief_start:belief_start + 54]
             b2 = state[:, belief_start + 54:belief_start + 108]
             b3 = state[:, belief_start + 108:belief_start + 162]
@@ -254,7 +262,11 @@ class TarokNet(nn.Module):
 
         # --- Allow missing keys for new v2 modules (res_blocks, card_attention, fuse, critic_res_blocks) ---
         has_new_modules = any(k.startswith("res_blocks.") for k in state_dict)
-        if not has_new_modules:
+        if (
+            not has_new_modules
+            or "card_attention.cls_token" not in state_dict
+            or "card_attention.pos_embedding" not in state_dict
+        ):
             strict = False
 
         return super().load_state_dict(state_dict, strict=strict, assign=assign)
@@ -426,7 +438,7 @@ class TarokNetV3(TarokNet):
       - color_valat
     """
 
-    _CONTRACT_FEATURE_OFFSET = 220
+    _CONTRACT_FEATURE_OFFSET = CONTRACT_OFFSET
     _KLOP_IDX = 0
     _THREE_IDX = 1
     _TWO_IDX = 2
@@ -502,7 +514,7 @@ class TarokNetV3(TarokNet):
         if state.dim() == 1:
             state = state.unsqueeze(0)
         c0 = self._CONTRACT_FEATURE_OFFSET
-        c1 = c0 + 10
+        c1 = c0 + CONTRACT_SIZE
         if state.shape[1] < c1:
             return [GameMode.PARTNER_PLAY for _ in range(state.shape[0])]
 
@@ -554,7 +566,7 @@ class TarokNetV3(TarokNet):
         if state.dim() == 1:
             state = state.unsqueeze(0)
         c0 = self._CONTRACT_FEATURE_OFFSET
-        c1 = c0 + 10
+        c1 = c0 + CONTRACT_SIZE
         contract_slice = state[:, c0:c1]
         max_vals, max_idx = torch.max(contract_slice, dim=1)
 
