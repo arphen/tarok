@@ -14,7 +14,7 @@ translated back to Rust indices.
 from __future__ import annotations
 
 import random
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any, Callable
 
 import torch
 
@@ -26,7 +26,7 @@ try:
 except ImportError:
     te = None  # type: ignore[assignment]
 
-from tarok.core.encoding import (
+from tarok_model.encoding import (
     DecisionType,
     contract_to_game_mode,
     BID_ACTIONS,
@@ -167,6 +167,7 @@ class RustGameLoop:
         observer: GameObserverPort | None = None,
         rng: random.Random | None = None,
         allow_berac: bool = True,
+        decision_recorder: Callable[[dict[str, Any]], None] | None = None,
     ):
         assert te is not None, "tarok_engine Rust extension not installed"
         assert len(players) == 4
@@ -174,10 +175,36 @@ class RustGameLoop:
         self._observer: GameObserverPort = observer or NullObserver()  # type: ignore
         self._rng = rng or random.Random()
         self._allow_berac = allow_berac
+        self._decision_recorder = decision_recorder
+        self._decision_step = 0
+
+    def _record_decision(
+        self,
+        *,
+        player: int,
+        actor_kind: str,
+        decision_type: DecisionType,
+        state,
+        legal_mask,
+        action: int,
+    ) -> None:
+        if self._decision_recorder is None:
+            return
+        self._decision_recorder({
+            "step": self._decision_step,
+            "player": player,
+            "actor_kind": actor_kind,
+            "decision_type": decision_type.name,
+            "state": state.tolist() if hasattr(state, "tolist") else list(state),
+            "legal_mask": legal_mask.tolist() if hasattr(legal_mask, "tolist") else list(legal_mask),
+            "action": int(action),
+        })
+        self._decision_step += 1
 
     async def run(self, dealer: int = 0, preset_hands: list[list[int]] | None = None, preset_talon: list[int] | None = None) -> tuple[GameState, dict[int, int]]:
         """Play one full game, returning (final_state, {player: score})."""
         gs = te.RustGameState(dealer)
+        self._decision_step = 0
         if preset_hands is not None and preset_talon is not None:
             gs.deal_hands(preset_hands, preset_talon)
         else:
@@ -228,6 +255,7 @@ class RustGameLoop:
         # === TALON EXCHANGE ===
         talon_cards = _talon_cards(contract)
         if declarer is not None and talon_cards > 0 and not _is_klop(contract) and not _is_berac(contract):
+            gs.phase = te.PHASE_TALON_EXCHANGE  # Transition from king_calling so frontend shows talon UI
             talon_groups = _build_talon_groups(gs.talon(), talon_cards)
             await self._observer.on_talon_revealed(
                 [[DECK[idx] for idx in g] for g in talon_groups],
@@ -272,15 +300,18 @@ class RustGameLoop:
                 gs.current_player = player
 
                 agent = self._players[player]
+                actor_kind = "human" if hasattr(agent, "submit_action") else "ai"
                 legal_cards = gs.legal_plays(player)  # list of u8 card indices
+                card_state_np = gs.encode_state(player, te.DT_CARD_PLAY)
+                card_mask_np = gs.legal_plays_mask(player)
 
                 if hasattr(agent, '_decide_from_tensors'):
                     # Fast tensor path
                     state_t = torch.from_numpy(
-                        gs.encode_state(player, te.DT_CARD_PLAY)
+                        card_state_np
                     ).float()
                     legal_mask = torch.from_numpy(
-                        gs.legal_plays_mask(player)
+                        card_mask_np
                     ).float()
 
                     oracle_t = None
@@ -314,6 +345,15 @@ class RustGameLoop:
                     if action_idx not in legal_cards:
                         action_idx = legal_cards[0]
 
+                self._record_decision(
+                    player=player,
+                    actor_kind=actor_kind,
+                    decision_type=DecisionType.CARD_PLAY,
+                    state=card_state_np,
+                    legal_mask=card_mask_np,
+                    action=int(action_idx),
+                )
+
                 gs.play_card(player, action_idx)
                 trick_cards.append((player, DECK[action_idx]))
                 # Broadcast next player so UI can surface legal actions immediately.
@@ -334,6 +374,10 @@ class RustGameLoop:
                 points=points,
             )
             completed_tricks.append(trick_snapshot)
+            # Assign per-trick card-point reward to the winning agent
+            winner_agent = self._players[winner]
+            if hasattr(winner_agent, "award_trick_reward"):
+                winner_agent.award_trick_reward(points)
             await self._observer.on_trick_won(
                 trick_snapshot,
                 winner,
@@ -411,6 +455,7 @@ class RustGameLoop:
 
             gs.current_player = bidder
             agent = self._players[bidder]
+            actor_kind = "human" if hasattr(agent, "submit_action") else "ai"
 
             # Build legal bid list (Python Contract objects)
             rust_legal = gs.legal_bids(bidder)  # list of Option<u8>
@@ -424,12 +469,15 @@ class RustGameLoop:
                     if py_c is not None:
                         py_legal_bids.append(py_c)
 
+            bid_state_np = gs.encode_state(bidder, te.DT_BID)
+            bid_mask = encode_bid_mask(py_legal_bids)
+
             if hasattr(agent, '_decide_from_tensors'):
                 # Fast tensor path (RLAgent)
                 state_t = torch.from_numpy(
-                    gs.encode_state(bidder, te.DT_BID)
+                    bid_state_np
                 ).float()
-                mask = encode_bid_mask(py_legal_bids)
+                mask = bid_mask
 
                 oracle_t = None
                 if (
@@ -454,17 +502,29 @@ class RustGameLoop:
                 passed[bidder] = True
                 gs.add_bid(bidder, None)
                 bid_history.append(_PyBid(bidder, None))
+                bid_action = 0
             else:
                 rust_u8 = _PY_CONTRACT_TO_RUST_U8.get(bid_contract)
                 if rust_u8 not in rust_legal:
                     passed[bidder] = True
                     gs.add_bid(bidder, None)
                     bid_history.append(_PyBid(bidder, None))
+                    bid_action = 0
                 else:
                     gs.add_bid(bidder, rust_u8)
                     bid_history.append(_PyBid(bidder, bid_contract))
                     highest = rust_u8
                     winning_player = bidder
+                    bid_action = int(BID_TO_IDX.get(bid_contract, 0))
+
+            self._record_decision(
+                player=bidder,
+                actor_kind=actor_kind,
+                decision_type=DecisionType.BID,
+                state=bid_state_np,
+                legal_mask=bid_mask,
+                action=bid_action,
+            )
 
             # Determine whether bidding is over *before* advertising next bidder.
             active_after = [i for i in range(4) if not passed[i]]
@@ -535,13 +595,16 @@ class RustGameLoop:
 
         py_callable = [DECK[idx] for idx in callable_idxs]
         agent = self._players[declarer]
+        actor_kind = "human" if hasattr(agent, "submit_action") else "ai"
+        king_state_np = gs.encode_state(declarer, te.DT_KING_CALL)
+        king_mask = encode_king_mask(py_callable)
 
         if hasattr(agent, '_decide_from_tensors'):
             # Fast tensor path
             state_t = torch.from_numpy(
-                gs.encode_state(declarer, te.DT_KING_CALL)
+                king_state_np
             ).float()
-            mask = encode_king_mask(py_callable)
+            mask = king_mask
 
             oracle_t = None
             if (
@@ -574,6 +637,16 @@ class RustGameLoop:
             if chosen_card_idx not in callable_idxs:
                 chosen_card_idx = callable_idxs[0]
 
+        action_king = SUIT_TO_IDX.get(DECK[chosen_card_idx].suit, 0)
+        self._record_decision(
+            player=declarer,
+            actor_kind=actor_kind,
+            decision_type=DecisionType.KING_CALL,
+            state=king_state_np,
+            legal_mask=king_mask,
+            action=action_king,
+        )
+
         gs.set_called_king(chosen_card_idx)
 
         # Identify partner (who has the called king)
@@ -603,13 +676,16 @@ class RustGameLoop:
         gs.set_talon_revealed(groups)
 
         agent = self._players[declarer]
+        actor_kind = "human" if hasattr(agent, "submit_action") else "ai"
+        talon_state_np = gs.encode_state(declarer, te.DT_TALON_PICK)
+        talon_mask = encode_talon_mask(num_groups)
 
         if hasattr(agent, '_decide_from_tensors'):
             # Fast tensor path
             state_t = torch.from_numpy(
-                gs.encode_state(declarer, te.DT_TALON_PICK)
+                talon_state_np
             ).float()
-            mask = encode_talon_mask(num_groups)
+            mask = talon_mask
 
             oracle_t = None
             if (
@@ -658,6 +734,7 @@ class RustGameLoop:
             for idx in discarded_idxs:
                 gs.remove_card(declarer, idx)
                 gs.add_put_down(idx)
+            chosen_group_idx = action_idx
         else:
             # PlayerPort path
             py_groups = [[DECK[idx] for idx in g] for g in groups]
@@ -689,6 +766,16 @@ class RustGameLoop:
                 gs.remove_card(declarer, card_idx)
                 gs.add_put_down(card_idx)
                 discarded_idxs.append(card_idx)
+            chosen_group_idx = group_idx
+
+        self._record_decision(
+            player=declarer,
+            actor_kind=actor_kind,
+            decision_type=DecisionType.TALON_PICK,
+            state=talon_state_np,
+            legal_mask=talon_mask,
+            action=int(chosen_group_idx),
+        )
 
         gs.phase = te.PHASE_TRICK_PLAY
         gs.current_player = (gs.dealer + 1) % 4

@@ -1,4 +1,4 @@
 """Backward-compat re-exports — use tarok.core.compute instead."""
-from tarok.core.compute import ComputeBackend, create_backend
+from tarok_model.compute import ComputeBackend, create_backend
 
 __all__ = ["ComputeBackend", "create_backend"]

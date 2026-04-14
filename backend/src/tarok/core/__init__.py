@@ -4,7 +4,7 @@ Contains the neural network, state encoding, compute backends, and
 experience types. No game logic (that's in Rust).
 """
 
-from tarok.core.encoding import (
+from tarok_model.encoding import (
     DecisionType,
     GameMode,
     contract_to_game_mode,
@@ -30,6 +30,6 @@ from tarok.core.encoding import (
     ANNOUNCE_IDX_TO_ANN,
     KONTRA_IDX_TO_KEY,
 )
-from tarok.core.network import TarokNet, TarokNetV3
+from tarok_model.network import TarokNet, TarokNetV4
 from tarok.core.experience import Experience
-from tarok.core.compute import ComputeBackend, create_backend
+from tarok_model.compute import ComputeBackend, create_backend

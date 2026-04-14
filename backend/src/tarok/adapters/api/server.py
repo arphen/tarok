@@ -14,6 +14,7 @@ from pydantic import BaseModel
 from tarok.adapters.ai.agent import RLAgent
 from tarok.adapters.ai.bot_registry import get_registry
 from tarok.adapters.api.human_player import HumanPlayer
+from tarok.adapters.api.experience_logger import HumanPlayExperienceLogger
 from tarok.adapters.api.spectator_observer import SpectatorObserver, list_replays, load_replay
 from tarok.adapters.api.ws_observer import WebSocketObserver
 from tarok.adapters.api.schemas import (
@@ -283,6 +284,7 @@ async def game_websocket(ws: WebSocket, game_id: str):
     player_names = [a.name for a in agents]
 
     observer = WebSocketObserver(ws, player_idx=0, player_names=player_names)
+    experience_logger = HumanPlayExperienceLogger()
 
     # Match-level state
     cumulative_scores = {i: 0 for i in range(4)}
@@ -294,7 +296,12 @@ async def game_websocket(ws: WebSocket, game_id: str):
         nonlocal cumulative_scores
         for round_num in range(num_rounds):
             dealer = round_num % 4
-            game_loop = GameLoop(agents, observer=observer)
+            round_decisions: list[dict] = []
+            game_loop = GameLoop(
+                agents,
+                observer=observer,
+                decision_recorder=round_decisions.append,
+            )
 
             # Send round_start event
             observer.set_match_info(
@@ -323,6 +330,25 @@ async def game_websocket(ws: WebSocket, game_id: str):
                 "declarer": state.declarer,
                 "partner": state.partner,
             })
+
+            # Persist supervised data from all seats (human and bots).
+            try:
+                output_path = experience_logger.write_round(
+                    game_id=game_id,
+                    round_num=round_num + 1,
+                    player_names=player_names,
+                    decisions=round_decisions,
+                    scores=scores,
+                    contract=state.contract.value if state.contract else None,
+                    declarer=state.declarer,
+                    partner=state.partner,
+                )
+                round_history[-1]["experience_file"] = str(output_path)
+                round_history[-1]["experience_steps"] = len(round_decisions)
+            except Exception:
+                # Never fail gameplay if experience persistence has an issue.
+                round_history[-1]["experience_file"] = None
+                round_history[-1]["experience_steps"] = 0
 
             # Send match progress after each round
             if round_num < num_rounds - 1:

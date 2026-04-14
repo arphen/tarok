@@ -216,15 +216,20 @@ def _export_checkpoint_to_torchscript(checkpoint_path: str) -> str:
     """Load a regular PyTorch checkpoint and export a TorchScript model."""
     import tempfile
     import torch
-    from tarok.core.network import TarokNet
+    from tarok_model.network import TarokNetV4
 
     ckpt = torch.load(checkpoint_path, map_location="cpu", weights_only=True)
     sd = ckpt.get("model_state_dict", ckpt)
+    model_arch = ckpt.get("model_arch")
+    if model_arch != "v4":
+        raise ValueError(
+            f"Unsupported checkpoint architecture '{model_arch}'. Only 'v4' checkpoints are supported."
+        )
     hidden_size = sd["shared.0.weight"].shape[0]
     has_oracle = any(k.startswith("critic_backbone.") for k in sd)
 
-    net = TarokNet(hidden_size, oracle_critic=has_oracle)
-    net.load_state_dict(sd, strict=False)
+    net = TarokNetV4(hidden_size, oracle_critic=has_oracle)
+    net.load_state_dict(sd, strict=True)
     net.eval()
 
     class _AllHeads(torch.nn.Module):

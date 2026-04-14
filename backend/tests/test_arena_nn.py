@@ -15,7 +15,7 @@ async def test_arena_runs_with_nn_agent(tmp_path, monkeypatch):
 
     # Create a real checkpoint file (TorchScript export needs valid weights)
     import torch
-    from tarok.core.network import TarokNet
+    from tarok_model.network import TarokNet
     ckpt_path = tmp_path / "dummy.pt"
     torch.save(TarokNet().state_dict(), str(ckpt_path))
 

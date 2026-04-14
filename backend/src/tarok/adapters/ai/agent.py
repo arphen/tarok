@@ -11,9 +11,9 @@ import random
 import torch
 
 from tarok.entities import Card, CardType, Suit, Announcement, Contract, GameState, KontraLevel
-from tarok.core.network import TarokNet, TarokNetV3
+from tarok_model.network import TarokNetV4
 from tarok.core.experience import Experience
-from tarok.core.encoding import (
+from tarok_model.encoding import (
     DecisionType,
     GameMode,
     contract_to_game_mode,
@@ -52,14 +52,12 @@ class RLAgent:
         device: str = "cpu",
         explore_rate: float = 0.1,
         oracle_critic: bool = False,
-        mode_heads: bool = False,
+        mode_heads: bool = True,
     ):
         self._name = name
         self.device = torch.device(device)
-        if mode_heads:
-            self.network = TarokNetV3(hidden_size, oracle_critic=oracle_critic).to(self.device)
-        else:
-            self.network = TarokNet(hidden_size, oracle_critic=oracle_critic).to(self.device)
+        del mode_heads
+        self.network = TarokNetV4(hidden_size, oracle_critic=oracle_critic).to(self.device)
         self.explore_rate = explore_rate
         self._rng = random.Random()
 
@@ -87,20 +85,23 @@ class RLAgent:
     ) -> "RLAgent":
         """Create an RLAgent with hidden_size inferred from checkpoint weights."""
         ckpt = torch.load(path, map_location=device, weights_only=True)
+        model_arch = ckpt.get("model_arch")
+        if model_arch != "v4":
+            raise ValueError(
+                f"Unsupported checkpoint architecture '{model_arch}'. Only 'v4' checkpoints are supported."
+            )
         state_dict = ckpt["model_state_dict"]
         # Infer hidden_size from the first layer of the shared backbone
         hidden_size = state_dict["shared.0.weight"].shape[0]
         # Detect oracle critic from checkpoint keys
         has_oracle = any(k.startswith("critic_backbone.") for k in state_dict)
-        # Detect v3 mode heads from checkpoint keys
-        has_mode_heads = any(k.startswith("card_heads.") for k in state_dict)
         agent = RLAgent(
             name=name,
             hidden_size=hidden_size,
             device=device,
             explore_rate=explore_rate,
             oracle_critic=has_oracle or oracle_critic,
-            mode_heads=has_mode_heads,
+            mode_heads=True,
         )
         agent.network.load_state_dict(state_dict)
         return agent
@@ -297,6 +298,13 @@ class RLAgent:
     # ------------------------------------------------------------------
     # Experience management
     # ------------------------------------------------------------------
+
+    def award_trick_reward(self, trick_points: int) -> None:
+        """Add card-point value of a won trick to the most recent CARD_PLAY experience."""
+        for exp in reversed(self.experiences):
+            if exp.decision_type == DecisionType.CARD_PLAY:
+                exp.reward += trick_points / 100.0
+                break
 
     def finalize_game(self, reward: float) -> None:
         """Set the terminal reward on only the last experience; others get 0."""

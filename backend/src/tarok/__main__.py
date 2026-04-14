@@ -80,7 +80,7 @@ async def run_dd_pretrain():
     import torch
     import torch.nn.functional as F
 
-    from tarok.core.network import TarokNet
+    from tarok_model.network import TarokNet
 
     num_games = 10_000
     num_epochs = 20

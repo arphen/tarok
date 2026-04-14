@@ -4,6 +4,7 @@ version = "0.1.0"
 description = "Slovenian Tarok game engine with self-play RL agents"
 requires-python = ">=3.12"
 dependencies = [
+    "tarok-model",
     "fastapi>=0.115",
     "uvicorn[standard]>=0.30",
     "websockets>=13",
@@ -49,3 +50,6 @@ asyncio_mode = "auto"
 dev = [
     "httpx>=0.28.1",
 ]
+
+[tool.uv.sources]
+tarok-model = { path = "../model", editable = true }

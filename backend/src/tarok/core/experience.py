@@ -6,7 +6,7 @@ from dataclasses import dataclass
 
 import torch
 
-from tarok.core.encoding import DecisionType, GameMode
+from tarok_model.encoding import DecisionType, GameMode
 
 
 @dataclass

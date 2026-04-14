@@ -141,7 +141,7 @@ async def analyze_hand(req: AnalyzeRequest):
     recommended = await agent.choose_card(state, 0)
 
     # Also rank all legal plays by the agent's policy
-    from tarok.core.encoding import encode_state, encode_legal_mask, CARD_TO_IDX
+    from tarok_model.encoding import encode_state, encode_legal_mask, CARD_TO_IDX
     import torch
 
     state_tensor = torch.tensor(encode_state(state, 0), dtype=torch.float32).unsqueeze(0)
@@ -180,7 +180,7 @@ async def analyze_hand(req: AnalyzeRequest):
 @router.post("/api/analyze-bid")
 async def analyze_bid(req: AnalyzeBidRequest):
     """Given a hand and bidding history, return the AI's recommended bid."""
-    from tarok.core.encoding import (
+    from tarok_model.encoding import (
         encode_state, encode_bid_mask, BID_ACTIONS, BID_TO_IDX, DecisionType,
     )
     import torch
@@ -251,7 +251,7 @@ async def analyze_bid(req: AnalyzeBidRequest):
 @router.post("/api/analyze-king")
 async def analyze_king(req: AnalyzeKingRequest):
     """Given a hand and contract, recommend which king to call."""
-    from tarok.core.encoding import (
+    from tarok_model.encoding import (
         encode_state, encode_king_mask, KING_ACTIONS, SUIT_TO_IDX, DecisionType,
     )
     import torch

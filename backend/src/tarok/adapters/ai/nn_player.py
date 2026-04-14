@@ -11,8 +11,8 @@ from __future__ import annotations
 import torch
 
 from tarok.entities import Card, CardType, Suit, Announcement, Contract, GameState, KontraLevel
-from tarok.core.network import TarokNet, TarokNetV3
-from tarok.core.encoding import (
+from tarok_model.network import TarokNetV4
+from tarok_model.encoding import (
     DecisionType,
     GameMode,
     contract_to_game_mode,
@@ -47,14 +47,12 @@ class RLAgent:
         hidden_size: int = 256,
         device: str = "cpu",
         oracle_critic: bool = False,
-        mode_heads: bool = False,
+        mode_heads: bool = True,
     ):
         self._name = name
         self.device = torch.device(device)
-        if mode_heads:
-            self.network = TarokNetV3(hidden_size, oracle_critic=oracle_critic).to(self.device)
-        else:
-            self.network = TarokNet(hidden_size, oracle_critic=oracle_critic).to(self.device)
+        del mode_heads
+        self.network = TarokNetV4(hidden_size, oracle_critic=oracle_critic).to(self.device)
         self.network.eval()
 
     @property
@@ -74,19 +72,22 @@ class RLAgent:
     ) -> "RLAgent":
         """Create an RLAgent with hidden_size inferred from checkpoint weights."""
         ckpt = torch.load(path, map_location=device, weights_only=True)
+        model_arch = ckpt.get("model_arch")
+        if model_arch != "v4":
+            raise ValueError(
+                f"Unsupported checkpoint architecture '{model_arch}'. Only 'v4' checkpoints are supported."
+            )
         state_dict = ckpt["model_state_dict"]
         # Infer hidden_size from the first layer of the shared backbone
         hidden_size = state_dict["shared.0.weight"].shape[0]
         # Detect oracle critic from checkpoint keys
         has_oracle = any(k.startswith("critic_backbone.") for k in state_dict)
-        # Detect v3 mode heads from checkpoint keys
-        has_mode_heads = any(k.startswith("card_heads.") for k in state_dict)
         agent = RLAgent(
             name=name,
             hidden_size=hidden_size,
             device=device,
             oracle_critic=has_oracle or oracle_critic,
-            mode_heads=has_mode_heads,
+            mode_heads=True,
         )
         agent.network.load_state_dict(state_dict)
         return agent

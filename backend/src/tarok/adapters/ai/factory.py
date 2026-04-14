@@ -38,7 +38,7 @@ class BotInfo:
     """Metadata for a registered bot plugin."""
 
     id: str  # e.g. "stockskis_v3", "random", "nn"
-    name: str  # human-readable, e.g. "StockŠkis v3"
+    name: str  # human-readable, e.g. "StockŠkis"
     description: str
     category: str  # "heuristic", "neural", "baseline", "search"
     version: int | None = None  # numeric version for sorting (StockŠkis only)
