@@ -6,37 +6,43 @@ import shutil
 
 import torch
 
-from tarok.core.network import TarokNet
+from tarok.core.network import TarokNet, TarokNetV3
 
 from training.ports import ModelPort
 
 
 class TorchModelAdapter(ModelPort):
-    def load_weights(self, checkpoint_path: str) -> tuple[dict, int, bool]:
+    def load_weights(self, checkpoint_path: str) -> tuple[dict, int, bool, str]:
         cp = torch.load(checkpoint_path, map_location="cpu", weights_only=False)
         sd = cp.get("model_state_dict", cp)
         hidden_size = sd["shared.0.weight"].shape[0]
         oracle = any(k.startswith("critic_backbone") for k in sd)
-        return sd, hidden_size, oracle
+        model_arch = cp.get("model_arch")
+        if model_arch is None:
+            model_arch = "v3" if any(k.startswith("card_heads.") for k in sd) else "v2"
+        return sd, hidden_size, oracle, model_arch
 
-    def create_new(self, hidden_size: int, oracle: bool) -> dict:
-        model = TarokNet(hidden_size=hidden_size, oracle_critic=oracle)
+    def create_new(self, hidden_size: int, oracle: bool, model_arch: str) -> dict:
+        model_cls = TarokNetV3 if model_arch == "v3" else TarokNet
+        model = model_cls(hidden_size=hidden_size, oracle_critic=oracle)
         return model.state_dict()
 
-    def export_for_inference(self, weights: dict, hidden_size: int, oracle: bool, path: str) -> None:
-        model = TarokNet(hidden_size=hidden_size, oracle_critic=oracle)
+    def export_for_inference(self, weights: dict, hidden_size: int, oracle: bool, model_arch: str, path: str) -> None:
+        model_cls = TarokNetV3 if model_arch == "v3" else TarokNet
+        model = model_cls(hidden_size=hidden_size, oracle_critic=oracle)
         model.load_state_dict(weights)
         model.eval()
         _export_torchscript(model, path)
 
     def save_checkpoint(
-        self, weights: dict, hidden_size: int, oracle: bool,
+        self, weights: dict, hidden_size: int, oracle: bool, model_arch: str,
         iteration: int, loss: float, placement: float, path: str,
     ) -> None:
         torch.save({
             "model_state_dict": weights,
             "hidden_size": hidden_size,
             "oracle_critic": oracle,
+            "model_arch": model_arch,
             "iteration": iteration,
             "loss": loss,
             "placement": placement,
@@ -62,7 +68,7 @@ def _export_torchscript(model: TarokNet, path: str) -> None:
                 self.base.bid_head(f),
                 self.base.king_head(f),
                 self.base.talon_head(f),
-                self.base.card_head(f),
+                self.base.card_logits_for_export(f, x),
                 self.base.critic(f).squeeze(-1),
             )
 

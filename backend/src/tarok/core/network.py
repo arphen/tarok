@@ -33,6 +33,7 @@ from tarok.core.encoding import (
     CARD_ACTION_SIZE,
     ANNOUNCE_ACTION_SIZE,
     DecisionType,
+    GameMode,
 )
 
 
@@ -263,6 +264,7 @@ class TarokNet(nn.Module):
         state: torch.Tensor,
         decision_type: DecisionType = DecisionType.CARD_PLAY,
         oracle_state: torch.Tensor | None = None,
+        game_mode: GameMode | None = None,
     ) -> tuple[torch.Tensor, torch.Tensor]:
         # Backbone + residual blocks
         shared = self.shared(state)
@@ -275,7 +277,10 @@ class TarokNet(nn.Module):
         # Fuse backbone + attention
         fused = self.fuse(torch.cat([shared, attn_out], dim=-1))
 
-        logits = self._heads[decision_type](fused)
+        if decision_type == DecisionType.CARD_PLAY and hasattr(self, "_card_logits_for_mode"):
+            logits = self._card_logits_for_mode(fused, state, game_mode)
+        else:
+            logits = self._heads[decision_type](fused)
 
         # Critic: use oracle backbone if available and oracle_state provided
         if self.oracle_critic_enabled and oracle_state is not None:
@@ -315,9 +320,10 @@ class TarokNet(nn.Module):
         legal_mask: torch.Tensor,
         decision_type: DecisionType = DecisionType.CARD_PLAY,
         oracle_state: torch.Tensor | None = None,
+        game_mode: GameMode | None = None,
     ) -> tuple[int, torch.Tensor, torch.Tensor]:
         """Select an action from legal moves. Returns (action_idx, log_prob, value)."""
-        logits, value = self(state, decision_type, oracle_state)
+        logits, value = self(state, decision_type, oracle_state, game_mode)
         # Mask illegal actions with -inf
         masked_logits = logits.clone()
         masked_logits[legal_mask == 0] = float("-inf")
@@ -335,9 +341,10 @@ class TarokNet(nn.Module):
         legal_mask: torch.Tensor,
         decision_type: DecisionType = DecisionType.CARD_PLAY,
         oracle_state: torch.Tensor | None = None,
+        game_mode: GameMode | None = None,
     ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
         """Evaluate a batch of actions. Returns (log_probs, values, entropy)."""
-        logits, values = self(state, decision_type, oracle_state)
+        logits, values = self(state, decision_type, oracle_state, game_mode)
         masked_logits = logits.clone()
         masked_logits[legal_mask == 0] = float("-inf")
 
@@ -354,6 +361,7 @@ class TarokNet(nn.Module):
         states: torch.Tensor,
         decision_types: list[DecisionType],
         oracle_states: torch.Tensor | None = None,
+        game_modes: list[GameMode] | None = None,
     ) -> tuple[torch.Tensor, torch.Tensor]:
         """Batched forward for mixed decision types.
 
@@ -393,8 +401,162 @@ class TarokNet(nn.Module):
         for dt, idxs in type_indices.items():
             idx_t = torch.tensor(idxs, device=states.device)
             head_input = fused[idx_t]
-            head_logits = self._heads[dt](head_input)  # (n, head_action_size)
+            if dt == DecisionType.CARD_PLAY and hasattr(self, "_card_logits_for_mode"):
+                mode_subset = [game_modes[i] for i in idxs] if game_modes is not None else None
+                head_logits = self._card_logits_for_mode(head_input, states[idx_t], mode_subset)
+            else:
+                head_logits = self._heads[dt](head_input)  # (n, head_action_size)
             # Write into the correct rows, left-aligned
             all_logits[idx_t, :head_logits.shape[1]] = head_logits
 
         return all_logits, values
+
+    def card_logits_for_export(self, fused: torch.Tensor, state: torch.Tensor) -> torch.Tensor:
+        """Card logits used by TorchScript export wrappers."""
+        return self.card_head(fused)
+
+
+class TarokNetV3(TarokNet):
+    """v3 actor-critic: card-play head split by game mode family.
+
+    Heads:
+      - solo
+      - klop_berac
+      - partner_play
+      - color_valat
+    """
+
+    _CONTRACT_FEATURE_OFFSET = 220
+    _NO_CONTRACT_IDX = 0
+
+    def __init__(self, hidden_size: int = 256, oracle_critic: bool = False):
+        super().__init__(hidden_size=hidden_size, oracle_critic=oracle_critic)
+        half = hidden_size // 2
+        self.card_heads = nn.ModuleDict({
+            GameMode.SOLO.value: nn.Sequential(
+                nn.Linear(hidden_size, half),
+                nn.ReLU(),
+                nn.Linear(half, CARD_ACTION_SIZE),
+            ),
+            GameMode.KLOP_BERAC.value: nn.Sequential(
+                nn.Linear(hidden_size, half),
+                nn.ReLU(),
+                nn.Linear(half, CARD_ACTION_SIZE),
+            ),
+            GameMode.PARTNER_PLAY.value: nn.Sequential(
+                nn.Linear(hidden_size, half),
+                nn.ReLU(),
+                nn.Linear(half, CARD_ACTION_SIZE),
+            ),
+            GameMode.COLOR_VALAT.value: nn.Sequential(
+                nn.Linear(hidden_size, half),
+                nn.ReLU(),
+                nn.Linear(half, CARD_ACTION_SIZE),
+            ),
+        })
+
+    def load_state_dict(self, state_dict, strict=True, assign=False):
+        has_mode_heads = any(k.startswith("card_heads.") for k in state_dict)
+        if not has_mode_heads and "card_head.0.weight" in state_dict:
+            state_dict = dict(state_dict)
+            for mode_key in self.card_heads.keys():
+                for suffix in ("0.weight", "0.bias", "2.weight", "2.bias"):
+                    src = f"card_head.{suffix}"
+                    dst = f"card_heads.{mode_key}.{suffix}"
+                    if src in state_dict and dst not in state_dict:
+                        state_dict[dst] = state_dict[src].clone()
+            strict = False
+        return super().load_state_dict(state_dict, strict=strict, assign=assign)
+
+    @staticmethod
+    def _mode_from_contract_idx(contract_idx: int) -> GameMode:
+        if contract_idx in (4, 5, 6, 7):
+            return GameMode.SOLO
+        if contract_idx in (1, 8):
+            return GameMode.KLOP_BERAC
+        if contract_idx == 9:
+            return GameMode.COLOR_VALAT
+        return GameMode.PARTNER_PLAY
+
+    def _infer_modes_from_state(self, state: torch.Tensor) -> list[GameMode]:
+        if state.dim() == 1:
+            state = state.unsqueeze(0)
+        c0 = self._CONTRACT_FEATURE_OFFSET
+        c1 = c0 + 10
+        if state.shape[1] < c1:
+            return [GameMode.PARTNER_PLAY for _ in range(state.shape[0])]
+
+        contract_slice = state[:, c0:c1]
+        max_vals, max_idx = torch.max(contract_slice, dim=1)
+        modes: list[GameMode] = []
+        for i in range(state.shape[0]):
+            if float(max_vals[i].item()) <= 0.0:
+                modes.append(GameMode.PARTNER_PLAY)
+                continue
+            idx = int(max_idx[i].item())
+            if idx == self._NO_CONTRACT_IDX:
+                modes.append(GameMode.PARTNER_PLAY)
+            else:
+                modes.append(self._mode_from_contract_idx(idx))
+        return modes
+
+    def _resolve_modes(
+        self,
+        state: torch.Tensor,
+        game_mode: GameMode | list[GameMode] | tuple[GameMode, ...] | None,
+    ) -> list[GameMode]:
+        if game_mode is None:
+            return self._infer_modes_from_state(state)
+        if isinstance(game_mode, GameMode):
+            n = state.shape[0] if state.dim() > 1 else 1
+            return [game_mode for _ in range(n)]
+        return list(game_mode)
+
+    def _card_logits_for_mode(
+        self,
+        fused: torch.Tensor,
+        state: torch.Tensor,
+        game_mode: GameMode | list[GameMode] | tuple[GameMode, ...] | None,
+    ) -> torch.Tensor:
+        if fused.dim() == 1:
+            fused = fused.unsqueeze(0)
+        modes = self._resolve_modes(state, game_mode)
+        logits = torch.empty((fused.shape[0], CARD_ACTION_SIZE), dtype=fused.dtype, device=fused.device)
+
+        groups: dict[GameMode, list[int]] = {}
+        for i, gm in enumerate(modes):
+            groups.setdefault(gm, []).append(i)
+
+        for gm, idxs in groups.items():
+            idx_t = torch.tensor(idxs, device=fused.device)
+            logits[idx_t] = self.card_heads[gm.value](fused[idx_t])
+        return logits
+
+    def card_logits_for_export(self, fused: torch.Tensor, state: torch.Tensor) -> torch.Tensor:
+        # Trace-safe path for TorchScript export: tensor-only mode routing.
+        if state.dim() == 1:
+            state = state.unsqueeze(0)
+        c0 = self._CONTRACT_FEATURE_OFFSET
+        c1 = c0 + 10
+        contract_slice = state[:, c0:c1]
+        max_vals, max_idx = torch.max(contract_slice, dim=1)
+
+        # mode ids: 0=solo, 1=klop_berac, 2=partner_play, 3=color_valat
+        mode_ids = torch.full_like(max_idx, 2)
+        solo_mask = (max_idx >= 4) & (max_idx <= 7)
+        klop_mask = (max_idx == 1) | (max_idx == 8)
+        color_mask = max_idx == 9
+
+        mode_ids = torch.where(klop_mask, torch.ones_like(mode_ids), mode_ids)
+        mode_ids = torch.where(color_mask, torch.full_like(mode_ids, 3), mode_ids)
+        mode_ids = torch.where(solo_mask, torch.zeros_like(mode_ids), mode_ids)
+        mode_ids = torch.where(max_vals <= 0.0, torch.full_like(mode_ids, 2), mode_ids)
+
+        solo_logits = self.card_heads[GameMode.SOLO.value](fused)
+        klop_logits = self.card_heads[GameMode.KLOP_BERAC.value](fused)
+        partner_logits = self.card_heads[GameMode.PARTNER_PLAY.value](fused)
+        color_logits = self.card_heads[GameMode.COLOR_VALAT.value](fused)
+
+        stacked = torch.stack([solo_logits, klop_logits, partner_logits, color_logits], dim=1)
+        gather_idx = mode_ids.view(-1, 1, 1).expand(-1, 1, CARD_ACTION_SIZE)
+        return stacked.gather(1, gather_idx).squeeze(1)

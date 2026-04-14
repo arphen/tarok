@@ -45,7 +45,9 @@ class RunIteration:
         raw = self._selfplay.run(
             ts_path, config.games, config.seats, config.explore_rate, config.concurrency,
         )
-        n_exps = sum(1 for p in raw["players"] if int(p) == 0)
+        nn_seats = config.nn_seat_indices
+        bot_seats = config.bot_seat_indices
+        n_exps = len(raw["players"])
         sp_time = time.time() - t0
         self._presenter.on_selfplay_done(n_exps, sp_time)
 
@@ -54,13 +56,13 @@ class RunIteration:
             self._ppo.set_lr(iter_lr)
         self._presenter.on_ppo_start(config, iter_lr=iter_lr)
         t0 = time.time()
-        metrics, new_weights = self._ppo.update(raw)
+        metrics, new_weights = self._ppo.update(raw, nn_seats, bot_seats)
         ppo_time = time.time() - t0
         self._presenter.on_ppo_done(metrics, ppo_time)
 
         # Export updated model
         self._model.export_for_inference(
-            new_weights, identity.hidden_size, identity.oracle_critic, ts_path,
+            new_weights, identity.hidden_size, identity.oracle_critic, identity.model_arch, ts_path,
         )
 
         # Benchmark
@@ -76,7 +78,7 @@ class RunIteration:
         # Save checkpoint
         ckpt_path = str(save_dir / f"iter_{iteration:03d}.pt")
         self._model.save_checkpoint(
-            new_weights, identity.hidden_size, identity.oracle_critic,
+            new_weights, identity.hidden_size, identity.oracle_critic, identity.model_arch,
             iteration, metrics["total_loss"], placement, ckpt_path,
         )
 

@@ -70,7 +70,7 @@
 
 .table-top    { grid-area: top;    display: flex; justify-content: center; overflow: visible; }
 .table-left   { grid-area: left;   display: flex; align-items: center; justify-content: center; }
-.table-center { grid-area: center; display: flex; align-items: center; justify-content: center; min-height: 200px; }
+.table-center { grid-area: center; display: flex; align-items: flex-start; justify-content: center; min-height: 200px; overflow: visible; }
 .table-right  { grid-area: right;  display: flex; align-items: center; justify-content: center; }
 .table-bottom { grid-area: bottom; display: flex; justify-content: center; overflow: visible; }
 
@@ -179,6 +179,10 @@
 .score-value {
   font-weight: 700;
   font-size: 18px;
+}
+
+.score-play-again {
+  margin-top: 14px;
 }
 
 .score-entry.team-declarer {

@@ -11,10 +11,12 @@ import random
 import torch
 
 from tarok.entities import Card, CardType, Suit, Announcement, Contract, GameState, KontraLevel
-from tarok.core.network import TarokNet
+from tarok.core.network import TarokNet, TarokNetV3
 from tarok.core.experience import Experience
 from tarok.core.encoding import (
     DecisionType,
+    GameMode,
+    contract_to_game_mode,
     encode_state,
     encode_oracle_state,
     encode_legal_mask,
@@ -50,10 +52,14 @@ class RLAgent:
         device: str = "cpu",
         explore_rate: float = 0.1,
         oracle_critic: bool = False,
+        mode_heads: bool = False,
     ):
         self._name = name
         self.device = torch.device(device)
-        self.network = TarokNet(hidden_size, oracle_critic=oracle_critic).to(self.device)
+        if mode_heads:
+            self.network = TarokNetV3(hidden_size, oracle_critic=oracle_critic).to(self.device)
+        else:
+            self.network = TarokNet(hidden_size, oracle_critic=oracle_critic).to(self.device)
         self.explore_rate = explore_rate
         self._rng = random.Random()
 
@@ -86,12 +92,15 @@ class RLAgent:
         hidden_size = state_dict["shared.0.weight"].shape[0]
         # Detect oracle critic from checkpoint keys
         has_oracle = any(k.startswith("critic_backbone.") for k in state_dict)
+        # Detect v3 mode heads from checkpoint keys
+        has_mode_heads = any(k.startswith("card_heads.") for k in state_dict)
         agent = RLAgent(
             name=name,
             hidden_size=hidden_size,
             device=device,
             explore_rate=explore_rate,
             oracle_critic=has_oracle or oracle_critic,
+            mode_heads=has_mode_heads,
         )
         agent.network.load_state_dict(state_dict)
         return agent
@@ -106,6 +115,7 @@ class RLAgent:
         legal_mask: torch.Tensor,
         decision_type: DecisionType,
         oracle_tensor: torch.Tensor | None = None,
+        game_mode: GameMode | None = None,
     ) -> int:
         """Same as _decide but with pre-encoded tensors (for Rust engine)."""
         state_tensor = state_tensor.to(self.device)
@@ -113,7 +123,7 @@ class RLAgent:
         if oracle_tensor is not None:
             oracle_tensor = oracle_tensor.to(self.device)
 
-        return self._decide_core(state_tensor, mask, decision_type, oracle_tensor, is_defender=False)
+        return self._decide_core(state_tensor, mask, decision_type, oracle_tensor, is_defender=False, game_mode=game_mode)
 
     def _decide(
         self,
@@ -137,7 +147,10 @@ class RLAgent:
             and not (state.partner is not None and state.partner == player_idx)
         )
 
-        return self._decide_core(state_tensor, mask, decision_type, oracle_tensor, is_defender=is_defender)
+        # Derive game mode from contract for mode-specific card heads
+        game_mode = contract_to_game_mode(state.contract) if decision_type == DecisionType.CARD_PLAY else None
+
+        return self._decide_core(state_tensor, mask, decision_type, oracle_tensor, is_defender=is_defender, game_mode=game_mode)
 
     def _decide_core(
         self,
@@ -146,6 +159,7 @@ class RLAgent:
         decision_type: DecisionType,
         oracle_tensor: torch.Tensor | None,
         is_defender: bool = False,
+        game_mode: GameMode | None = None,
     ) -> int:
         """Core decision logic shared by _decide and _decide_from_tensors."""
         # Epsilon-greedy exploration during training
@@ -156,6 +170,7 @@ class RLAgent:
                 _, value = self.network(
                     state_tensor.unsqueeze(0), decision_type,
                     oracle_state=oracle_tensor.unsqueeze(0) if oracle_tensor is not None else None,
+                    game_mode=game_mode,
                 )
             self.experiences.append(Experience(
                 state=state_tensor,
@@ -167,6 +182,7 @@ class RLAgent:
                 legal_mask=mask.detach(),
                 game_id=self._game_id,
                 step_in_game=self._step_counter,
+                game_mode=game_mode,
             ))
             self._step_counter += 1
             return action_idx
@@ -176,6 +192,7 @@ class RLAgent:
             action_idx, log_prob, value = self.network.get_action(
                 state_tensor.unsqueeze(0), mask.unsqueeze(0), decision_type,
                 oracle_state=oracle_tensor.unsqueeze(0) if oracle_tensor is not None else None,
+                game_mode=game_mode,
             )
 
         if self._training:
@@ -189,6 +206,7 @@ class RLAgent:
                 legal_mask=mask.detach(),
                 game_id=self._game_id,
                 step_in_game=self._step_counter,
+                game_mode=game_mode,
             ))
             self._step_counter += 1
 

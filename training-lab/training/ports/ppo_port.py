@@ -18,5 +18,5 @@ class PPOPort(ABC):
         """Update the optimizer learning rate for the next update."""
 
     @abstractmethod
-    def update(self, raw_experiences: dict[str, Any]) -> tuple[dict[str, float], dict]:
-        """Run PPO update, return (metrics_dict, new_weights)."""
+    def update(self, raw_experiences: dict[str, Any], nn_seats: list[int], bot_seats: list[int]) -> tuple[dict[str, float], dict]:
+        """Run PPO update on nn_seats + imitation on bot_seats. Return (metrics_dict, new_weights)."""

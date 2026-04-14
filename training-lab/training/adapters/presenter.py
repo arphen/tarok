@@ -26,11 +26,17 @@ def _progress_bar(fraction: float, width: int = 40) -> str:
 class TerminalPresenter(PresenterPort):
     def on_model_loaded(self, identity: ModelIdentity, save_dir: str) -> None:
         if identity.is_new:
-            print(f"Creating new model: {identity.name}  (hidden={identity.hidden_size}, oracle={identity.oracle_critic})")
+            print(
+                f"Creating new model: {identity.name}  "
+                f"(arch={identity.model_arch}, hidden={identity.hidden_size}, oracle={identity.oracle_critic})"
+            )
             print(f"  Model '{identity.name}' initialized with random weights")
             print(f"  Checkpoints → {save_dir}/")
         else:
-            print(f"  hidden_size={identity.hidden_size}, oracle={identity.oracle_critic}")
+            print(
+                f"  arch={identity.model_arch}, "
+                f"hidden_size={identity.hidden_size}, oracle={identity.oracle_critic}"
+            )
 
     def on_device_selected(self, device: str) -> None:
         print(f"Training device: {device}")
@@ -86,7 +92,9 @@ class TerminalPresenter(PresenterPort):
         p = metrics["policy_loss"]
         v = metrics["value_loss"]
         e = metrics["entropy"]
-        print(f" loss={loss:.4f} (p={p:.4f} v={v:.4f} ent={e:.4f}) in {_format_time(elapsed)}")
+        il = metrics.get("il_loss", 0.0)
+        il_str = f" il={il:.4f}" if il > 0.0 else ""
+        print(f" loss={loss:.4f} (p={p:.4f} v={v:.4f} ent={e:.4f}{il_str}) in {_format_time(elapsed)}")
 
     def on_benchmark_start(self, config: TrainingConfig) -> None:
         print(f"  [3/3] Benchmark: {config.bench_games} games (greedy, {config.effective_bench_seats})...", end="", flush=True)

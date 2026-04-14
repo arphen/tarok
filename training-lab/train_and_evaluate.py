@@ -34,7 +34,7 @@ sys.path.insert(0, str(_script_dir))
 os.chdir(str(_root))
 
 from training.container import Container
-from training.entities import TrainingConfig
+from training.entities import ModelIdentity, TrainingConfig
 
 
 def _detect_device(requested: str) -> str:
@@ -104,6 +104,9 @@ Examples:
     parser.add_argument("--concurrency", type=int, default=None)
     parser.add_argument("--hidden-size", type=int, default=None,
                         help="Hidden layer size for new models (default: 256)")
+    parser.add_argument("--model-arch", type=str, default=None,
+                        choices=["v2", "v3"],
+                        help="Model architecture: v2 (single card head) or v3 (mode-specific card heads)")
     parser.add_argument("--lr-schedule", type=str, default="constant",
                         choices=["constant", "cosine", "linear"],
                         help="LR schedule across iterations: constant (default), cosine, or linear decay")
@@ -131,6 +134,7 @@ def main() -> None:
         "explore_rate": getattr(args, "explore_rate", None),
         "device": args.device,
         "concurrency": args.concurrency,
+        "model_arch": getattr(args, "model_arch", None),
     }
     config_path = _resolve_path(args.config)
     config = container.resolve_config().resolve(cli_overrides, config_path)
@@ -139,11 +143,26 @@ def main() -> None:
     resolve = container.resolve_model()
     if args.new:
         hidden_size = getattr(args, "hidden_size", None) or 256
-        identity, weights = resolve.from_scratch(hidden_size=hidden_size)
+        identity, weights = resolve.from_scratch(
+            hidden_size=hidden_size,
+            model_arch=config.model_arch,
+        )
     else:
         checkpoint_path = _resolve_path(args.checkpoint)
         print(f"Loading checkpoint: {args.checkpoint}")
         identity, weights = resolve.from_checkpoint(checkpoint_path)
+        if config.model_arch != identity.model_arch:
+            print(
+                f"Promoting architecture {identity.model_arch} -> {config.model_arch} "
+                f"from config"
+            )
+            identity = ModelIdentity(
+                name=identity.name,
+                hidden_size=identity.hidden_size,
+                oracle_critic=identity.oracle_critic,
+                model_arch=config.model_arch,
+                is_new=identity.is_new,
+            )
 
     # ── Resolve save directory ──────────────────────────────────────
     save_dir = args.save_dir if args.save_dir is not None else f"checkpoints/{identity.name}"
@@ -163,6 +182,8 @@ def main() -> None:
         device=config.device,
         save_dir=save_dir,
         concurrency=config.concurrency,
+        imitation_coef=config.imitation_coef,
+        model_arch=config.model_arch,
     )
 
     device = _detect_device(config.device)

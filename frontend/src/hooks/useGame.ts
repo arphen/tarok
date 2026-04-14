@@ -181,6 +181,10 @@ export function useGame() {
 
   const startNewGame = useCallback(async (opponents?: string[], numRounds?: number) => {
     try {
+      if (wsRef.current) {
+        wsRef.current.close();
+        wsRef.current = null;
+      }
       const body: Record<string, unknown> = {};
       if (opponents) body.opponents = opponents;
       if (numRounds && numRounds > 1) body.num_rounds = numRounds;

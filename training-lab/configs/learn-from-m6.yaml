@@ -1,0 +1,25 @@
+# Learn from 4 StockŠkis m6 bots playing against each other
+#
+# All four seats are heuristic m6 bots.  The neural network learns
+# from ALL players' experiences — essentially imitation learning via
+# PPO on expert demonstrations.  This gives 4× more training data
+# per game since every seat's decisions are used.
+#
+# Usage:
+#   make train-new CONFIG=learn-from-m6
+#   make train-iterate CONFIG=learn-from-m6 MODEL=checkpoints/model.pt
+
+seats: "bot_m6,bot_m6,bot_m6,bot_m6"
+bench_seats: "nn,bot_m6,bot_m6,bot_m6"
+
+iterations: 10
+games: 10000
+bench_games: 10000
+
+ppo_epochs: 6
+batch_size: 8192
+lr: 0.0003
+explore_rate: 0.10
+
+concurrency: 128
+device: auto

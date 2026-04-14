@@ -9,6 +9,7 @@ from pydantic import BaseModel
 
 from tarok.adapters.ai.agent import RLAgent
 from tarok.entities import Card, CardType, Suit, SuitRank, DECK, Contract, GameState, Phase, PlayerRole, Trick
+from tarok.entities.game_types import suit_card
 
 router = APIRouter(tags=["analyze"])
 
@@ -268,7 +269,7 @@ async def analyze_king(req: AnalyzeKingRequest):
     # Find callable kings (kings NOT in hand)
     callable_kings = []
     for suit in [Suit.HEARTS, Suit.DIAMONDS, Suit.CLUBS, Suit.SPADES]:
-        king = Card(CardType.SUIT, SuitRank.KING.value, suit)
+        king = suit_card(suit, SuitRank.KING)
         if king not in hand:
             callable_kings.append(king)
 

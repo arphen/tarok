@@ -28,6 +28,7 @@ except ImportError:
 
 from tarok.core.encoding import (
     DecisionType,
+    contract_to_game_mode,
     BID_ACTIONS,
     BID_TO_IDX,
     KING_ACTIONS,
@@ -91,6 +92,8 @@ for c in [Contract.THREE, Contract.TWO, Contract.ONE,
           Contract.SOLO_THREE, Contract.SOLO_TWO, Contract.SOLO_ONE,
           Contract.SOLO, Contract.BERAC]:
     _BID_IDX_TO_RUST.append(_PY_CONTRACT_TO_RUST_U8[c])
+
+_CURRENT_BIDDER_UNSET = object()
 
 
 class NullObserver:
@@ -230,9 +233,13 @@ class RustGameLoop:
                 [[DECK[idx] for idx in g] for g in talon_groups],
                 _build_py_state_from_rust(gs, completed_tricks, bids=bid_history, talon_revealed=talon_groups),
             )
-            picked_idxs, discarded_idxs = await self._run_talon_exchange(gs, declarer, talon_cards, talon_groups)
-            await self._observer.on_talon_group_picked(
-                _build_py_state_from_rust(gs, completed_tricks, bids=bid_history),
+            picked_idxs, discarded_idxs = await self._run_talon_exchange(
+                gs,
+                declarer,
+                talon_cards,
+                talon_groups,
+                completed_tricks=completed_tricks,
+                bid_history=bid_history,
             )
             await self._observer.on_talon_exchanged(
                 _build_py_state_from_rust(gs, completed_tricks, bids=bid_history),
@@ -249,12 +256,13 @@ class RustGameLoop:
 
         # === TRICK PLAY ===
         gs.phase = te.PHASE_TRICK_PLAY
-        lead_player = (dealer + 1) % 4
+        lead_player = declarer if (_is_berac(contract) and declarer is not None) else (dealer + 1) % 4
         berac_early = False
         for trick_num in range(12):
             lead = lead_player
             trick_cards: list[tuple[int, Card]] = []
             gs.start_trick(lead_player)
+            gs.current_player = lead_player
             await self._observer.on_trick_start(
                 _build_py_state_from_rust(gs, completed_tricks, bids=bid_history, current_trick=(lead, trick_cards)),
             )
@@ -287,6 +295,7 @@ class RustGameLoop:
 
                     action_idx = agent._decide_from_tensors(
                         state_t, legal_mask, DecisionType.CARD_PLAY, oracle_t,
+                        game_mode=contract_to_game_mode(py_contract),
                     )
 
                     if action_idx not in legal_cards:
@@ -457,20 +466,35 @@ class RustGameLoop:
                     highest = rust_u8
                     winning_player = bidder
 
-            # Next bidder
+            # Determine whether bidding is over *before* advertising next bidder.
+            active_after = [i for i in range(4) if not passed[i]]
+            bidding_done = (
+                (len(active_after) <= 1 and winning_player is not None)
+                or len(active_after) == 0
+            )
+
             next_bidder = bidder
-            for _ in range(4):
-                next_bidder = (next_bidder + 1) % 4
-                if not passed[next_bidder]:
-                    break
-            bidder = next_bidder
-            gs.current_player = bidder
+            if not bidding_done:
+                for _ in range(4):
+                    next_bidder = (next_bidder + 1) % 4
+                    if not passed[next_bidder]:
+                        break
+                bidder = next_bidder
+                gs.current_player = bidder
 
             await self._observer.on_bid(
                 bid_history[-1].player,
                 bid_history[-1].contract,
-                _build_py_state_from_rust(gs, completed_tricks, bids=bid_history),
+                _build_py_state_from_rust(
+                    gs,
+                    completed_tricks,
+                    bids=bid_history,
+                    current_bidder=(None if bidding_done else bidder),
+                ),
             )
+
+            if bidding_done:
+                break
 
         # Resolve bidding
         if winning_player is not None and highest is not None:
@@ -483,11 +507,13 @@ class RustGameLoop:
 
             if _is_berac(highest):
                 gs.phase = te.PHASE_TRICK_PLAY
-                gs.current_player = (gs.dealer + 1) % 4
+                gs.current_player = winning_player
             elif _is_solo(highest):
                 gs.phase = te.PHASE_TALON_EXCHANGE
+                gs.current_player = winning_player
             else:
                 gs.phase = te.PHASE_KING_CALLING
+                gs.current_player = winning_player
 
             return highest, winning_player
         else:
@@ -567,6 +593,9 @@ class RustGameLoop:
         declarer: int,
         talon_cards: int,
         groups: list[list[int]],
+        *,
+        completed_tricks: list[_RustTrickSnapshot] | None = None,
+        bid_history: list[_PyBid] | None = None,
     ) -> tuple[list[int], list[int]]:
         """Reveal talon, let declarer pick a group and discard."""
         num_groups = len(groups)
@@ -604,6 +633,15 @@ class RustGameLoop:
                 gs.add_to_hand(declarer, card_idx)
                 gs.remove_from_talon(card_idx)
 
+            # Emit immediately so UI can switch from talon picking to discard selection.
+            await self._observer.on_talon_group_picked(
+                _build_py_state_from_rust(
+                    gs,
+                    completed_tricks or [],
+                    bids=bid_history or [],
+                ),
+            )
+
             # Heuristic discard (cheapest non-king non-tarok)
             hand = gs.hand(declarer)
             hand_cards = [(idx, DECK[idx]) for idx in hand]
@@ -633,6 +671,15 @@ class RustGameLoop:
                 gs.add_to_hand(declarer, card_idx)
                 gs.remove_from_talon(card_idx)
 
+            # Emit immediately so UI can switch from talon picking to discard selection.
+            await self._observer.on_talon_group_picked(
+                _build_py_state_from_rust(
+                    gs,
+                    completed_tricks or [],
+                    bids=bid_history or [],
+                ),
+            )
+
             # Let player choose discards
             py_state = _build_py_state_from_rust(gs)
             discards = await agent.choose_discard(py_state, declarer, talon_cards)
@@ -661,6 +708,60 @@ def _talon_cards(contract_u8: int) -> int:
     return {1: 3, 2: 2, 3: 1, 4: 3, 5: 2, 6: 1}.get(contract_u8, 0)
 
 
+def _fallback_legal_bids_from_history(
+    *,
+    player_idx: int,
+    dealer: int,
+    bid_history: list[_PyBid],
+) -> list[int | None]:
+    """Compute legal rust bid ids from snapshot history.
+
+    Defensive fallback for websocket snapshots when Rust legal_bids is temporarily
+    unavailable or returns an invalid pass-only result.
+    """
+    forehand = (dealer + 1) % 4
+    is_forehand = player_idx == forehand
+
+    strength = {
+        1: 1,  # Three
+        2: 2,  # Two
+        3: 3,  # One
+        4: 4,  # Solo Three
+        5: 5,  # Solo Two
+        6: 6,  # Solo One
+        7: 8,  # Solo
+        8: 7,  # Berac
+    }
+
+    highest: int | None = None
+    highest_strength = -1
+    for b in bid_history:
+        if b.contract is None:
+            continue
+        rust = _PY_CONTRACT_TO_RUST_U8.get(b.contract)
+        if rust is None:
+            continue
+        s = strength.get(rust, -1)
+        if s > highest_strength:
+            highest_strength = s
+            highest = rust
+
+    result: list[int | None] = [None]
+    for c in (1, 2, 3, 4, 5, 6, 7, 8):
+        if c == 1 and not is_forehand:
+            continue
+        if highest is None:
+            result.append(c)
+            continue
+        if is_forehand:
+            legal = strength[c] >= strength.get(highest, -1)
+        else:
+            legal = strength[c] > strength.get(highest, -1)
+        if legal:
+            result.append(c)
+    return result
+
+
 def _build_talon_groups(talon_idxs: list[int], talon_cards: int) -> list[list[int]]:
     group_size = 6 // (6 // talon_cards) if talon_cards in (1, 2, 3) else talon_cards
     groups: list[list[int]] = []
@@ -674,6 +775,7 @@ def _build_py_state_from_rust(
     completed_tricks: list[_RustTrickSnapshot] | None = None,
     *,
     bids: list[_PyBid] | None = None,
+    current_bidder: int | None | object = _CURRENT_BIDDER_UNSET,
     current_trick: tuple[int, list[tuple[int, Card]]] | None = None,
     talon_revealed: list[list[int]] | None = None,
 ) -> GameState:
@@ -731,6 +833,71 @@ def _build_py_state_from_rust(
             state.roles[p] = PlayerRole.OPPONENT
     state.scores = {}
     state.current_player = getattr(gs, 'current_player', 0)
+    # Preserve explicit None to signal that bidding is complete and no one should act.
+    if current_bidder is _CURRENT_BIDDER_UNSET:
+        state.current_bidder = state.current_player
+    else:
+        state.current_bidder = current_bidder
+
+    # Snapshot legal actions at build time so observer payloads are immutable.
+    if hasattr(gs, 'legal_bids') and callable(getattr(gs, 'legal_bids', None)):
+        legal_bids_cache: dict[int, list[int | None]] = {}
+        snapshot_bids = list(bids or [])
+        snapshot_dealer = int(getattr(gs, 'dealer', 0))
+
+        def _legal_bids(player_idx: int, _cache=legal_bids_cache, _gs=gs) -> list[int | None]:
+            if player_idx not in _cache:
+                try:
+                    computed = list(_gs.legal_bids(player_idx))
+                    if computed == [None]:
+                        computed = _fallback_legal_bids_from_history(
+                            player_idx=player_idx,
+                            dealer=snapshot_dealer,
+                            bid_history=snapshot_bids,
+                        )
+                    _cache[player_idx] = computed
+                except Exception:
+                    _cache[player_idx] = _fallback_legal_bids_from_history(
+                        player_idx=player_idx,
+                        dealer=snapshot_dealer,
+                        bid_history=snapshot_bids,
+                    )
+            return list(_cache[player_idx])
+
+        state.legal_bids = _legal_bids
+    if hasattr(gs, 'legal_plays') and callable(getattr(gs, 'legal_plays', None)):
+        legal_plays_cache: dict[int, list[Card]] = {}
+
+        def _legal_plays(player_idx: int, _cache=legal_plays_cache, _gs=gs) -> list[Card]:
+            if player_idx not in _cache:
+                try:
+                    plays = [DECK[idx] for idx in _gs.legal_plays(player_idx)]
+                    if not plays:
+                        hand_cards = [DECK[idx] for idx in _gs.hand(player_idx)]
+                        _cache[player_idx] = hand_cards if hand_cards else []
+                    else:
+                        _cache[player_idx] = plays
+                except Exception:
+                    try:
+                        _cache[player_idx] = [DECK[idx] for idx in _gs.hand(player_idx)]
+                    except Exception:
+                        _cache[player_idx] = []
+            return list(_cache[player_idx])
+
+        state.legal_plays = _legal_plays
+    if hasattr(gs, 'callable_kings') and callable(getattr(gs, 'callable_kings', None)):
+        callable_kings_cache: list[Card] | None = None
+
+        def _callable_kings(_gs=gs) -> list[Card]:
+            nonlocal callable_kings_cache
+            if callable_kings_cache is None:
+                try:
+                    callable_kings_cache = [DECK[idx] for idx in _gs.callable_kings()]
+                except Exception:
+                    callable_kings_cache = []
+            return list(callable_kings_cache)
+
+        state.callable_kings = _callable_kings
 
     # Attach the raw Rust state so adapters (e.g. RustStockskisPlayer)
     # can call Rust-side heuristic methods directly.

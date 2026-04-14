@@ -21,11 +21,24 @@ from tarok.adapters.api.schemas import (
     TrainingRequest,
 )
 from tarok.entities import Card, CardType, Suit, SuitRank, DECK, Contract
+from tarok.entities.game_types import suit_card
 from tarok.adapters.ai.rust_game_loop import RustGameLoop as GameLoop
+from tarok.adapters.ai.rust_game_loop import _RUST_U8_TO_PY_CONTRACT
 
 from tarok.adapters.api.routers.analyze_router import router as analyze_router
 from tarok.adapters.api.routers.tournament_router import router as tournament_router
 from tarok.adapters.api.routers.arena_router import router as arena_router
+
+def _card_from_dict(c: dict) -> Card:
+    """Reconstruct a Card from a frontend card dict using the Rust index."""
+    if c.get("card_type") == "tarok" or c.get("card_type") == 0:
+        # tarok: value is 1-22, idx is value-1
+        return Card(int(c["value"]) - 1)
+    else:
+        suit = Suit(c["suit"])
+        rank = SuitRank(int(c["value"]))
+        return suit_card(suit, rank)
+
 
 # --- Globals managed by lifespan ---
 _training_task: asyncio.Task | None = None
@@ -334,37 +347,31 @@ async def game_websocket(ws: WebSocket, game_id: str):
             if action_type == "bid":
                 contract_val = data.get("contract")
                 if contract_val is None:
-                    human.submit_action(None)
+                    human.submit_action(None, action_type="bid")
                 else:
-                    human.submit_action(Contract(contract_val))
+                    rust_mapped = None
+                    if isinstance(contract_val, int):
+                        rust_mapped = _RUST_U8_TO_PY_CONTRACT.get(contract_val)
+                    if rust_mapped is not None:
+                        human.submit_action(rust_mapped, action_type="bid")
+                    else:
+                        human.submit_action(Contract(contract_val), action_type="bid")
 
             elif action_type == "call_king":
                 suit = Suit(data["suit"])
-                king = Card(CardType.SUIT, SuitRank.KING.value, suit)
-                human.submit_action(king)
+                king = suit_card(suit, SuitRank.KING)
+                human.submit_action(king, action_type="king")
 
             elif action_type == "choose_talon":
-                human.submit_action(data["group_index"])
+                human.submit_action(data["group_index"], action_type="talon")
 
             elif action_type == "discard":
-                cards = []
-                for c in data["cards"]:
-                    card = Card(
-                        CardType(c["card_type"]),
-                        c["value"],
-                        Suit(c["suit"]) if c.get("suit") else None,
-                    )
-                    cards.append(card)
-                human.submit_action(cards)
+                cards = [_card_from_dict(c) for c in data["cards"]]
+                human.submit_action(cards, action_type="discard")
 
             elif action_type == "play_card":
-                c = data["card"]
-                card = Card(
-                    CardType(c["card_type"]),
-                    c["value"],
-                    Suit(c["suit"]) if c.get("suit") else None,
-                )
-                human.submit_action(card)
+                card = _card_from_dict(data["card"])
+                human.submit_action(card, action_type="card")
 
             elif action_type == "set_delay":
                 delay = data.get("delay", 1.0)
@@ -727,6 +734,7 @@ async def _replay_from_trace(
         lead = lead_player
         trick_cards: list[tuple[int, Card]] = []
         gs.start_trick(lead_player)
+        gs.current_player = lead_player
         await observer.on_trick_start(
             _build_py_state_from_rust(gs, completed_tricks, bids=bid_history, current_trick=(lead, trick_cards)),
         )

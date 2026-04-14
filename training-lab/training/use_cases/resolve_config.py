@@ -34,4 +34,6 @@ class ResolveConfig:
             device=merged.get("device", "auto"),
             save_dir=merged.get("save_dir", "checkpoints/training_run"),
             concurrency=merged.get("concurrency", 128),
+            imitation_coef=merged.get("imitation_coef", 0.3),
+            model_arch=merged.get("model_arch", "v2"),
         )

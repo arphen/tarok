@@ -31,6 +31,24 @@ class DecisionType(Enum):
     ANNOUNCE = 4
 
 
+class GameMode(Enum):
+    SOLO = "solo"
+    KLOP_BERAC = "klop_berac"
+    PARTNER_PLAY = "partner_play"
+    COLOR_VALAT = "color_valat"
+
+
+def contract_to_game_mode(contract: Contract | None) -> GameMode:
+    """Map contract to the card-play head family used by v3 models."""
+    if contract in (Contract.SOLO_THREE, Contract.SOLO_TWO, Contract.SOLO_ONE, Contract.SOLO):
+        return GameMode.SOLO
+    if contract in (Contract.KLOP, Contract.BERAC):
+        return GameMode.KLOP_BERAC
+    if contract == Contract.BARVNI_VALAT:
+        return GameMode.COLOR_VALAT
+    return GameMode.PARTNER_PLAY
+
+
 # Action space sizes per decision type
 BID_ACTION_SIZE = 9       # pass + 8 biddable contracts (including berac)
 KING_ACTION_SIZE = 4      # one per suit

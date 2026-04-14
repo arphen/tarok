@@ -10,9 +10,11 @@ use rand::prelude::*;
 use rand::rng;
 
 use crate::card::*;
+// use crate::double_dummy;
 use crate::encoding;
 use crate::game_state::*;
 use crate::legal_moves;
+// use crate::pimc;
 use crate::scoring;
 use crate::trick_eval;
 use crate::warmup;
@@ -186,36 +188,10 @@ impl PyGameState {
     }
 
     fn legal_bids(&self, player: u8) -> Vec<Option<u8>> {
-        let mut result: Vec<Option<u8>> = vec![None]; // can always pass
-        let forehand = (self.state.dealer + 1) % NUM_PLAYERS as u8;
-        let is_forehand = player == forehand;
-        let highest = self
-            .state
-            .bids
-            .iter()
-            .filter_map(|b| b.contract)
-            .max_by_key(|c| c.strength());
-
-        for c in Contract::BIDDABLE {
-            // THREE is forehand-only
-            if c == Contract::Three && !is_forehand {
-                continue;
-            }
-            if let Some(h) = highest {
-                if is_forehand {
-                    // Forehand can match (>=) the current highest
-                    if c.strength() >= h.strength() {
-                        result.push(Some(c as u8));
-                    }
-                } else {
-                    // Others must strictly outbid (>)
-                    if c.strength() > h.strength() {
-                        result.push(Some(c as u8));
-                    }
-                }
-            } else {
-                result.push(Some(c as u8));
-            }
+        // Keep a single source of truth for legality in GameState (training + live).
+        let mut result: Vec<Option<u8>> = vec![None]; // pass always legal
+        for c in self.state.legal_bids(player) {
+            result.push(Some(c as u8));
         }
         result
     }
@@ -763,7 +739,7 @@ fn run_self_play(
 ) -> PyResult<PyObject> {
     use std::sync::Arc;
     use crate::self_play::{SelfPlayRunner, GameResult};
-    use crate::player::BatchPlayer;
+    use crate::player::{BatchPlayer, CARD_ACTION_SIZE};
     use crate::player_nn::NeuralNetPlayer;
     use crate::player_bot::{StockSkisPlayer, BotVersion};
 
@@ -855,7 +831,7 @@ fn run_self_play(
     let mut all_rewards = Vec::with_capacity(total_exp);
     let mut all_game_ids = Vec::with_capacity(total_exp);
     let mut all_players = Vec::with_capacity(total_exp);
-    let mut all_masks: Vec<Vec<f32>> = Vec::with_capacity(total_exp);
+    let mut all_masks: Vec<f32> = Vec::with_capacity(total_exp * CARD_ACTION_SIZE);
     let mut all_scores: Vec<[i32; 4]> = Vec::with_capacity(total_games);
     let mut all_contracts: Vec<u8> = Vec::with_capacity(total_games);
     let mut all_declarers: Vec<i8> = Vec::with_capacity(total_games);
@@ -892,7 +868,7 @@ fn run_self_play(
             all_log_probs.push(exp.log_prob);
             all_values.push(exp.value);
             all_dt.push(exp.decision_type);
-            all_masks.push(exp.legal_mask.clone());
+            all_masks.extend_from_slice(&exp.legal_mask);
             all_game_ids.push(exp.game_id);
             all_players.push(exp.player);
             all_rewards.push(0.0f32);
@@ -913,11 +889,10 @@ fn run_self_play(
     dict.set_item("game_ids", numpy::PyArray1::<u32>::from_vec(py, all_game_ids))?;
     dict.set_item("players", numpy::PyArray1::<u8>::from_vec(py, all_players))?;
 
-    let masks_list = pyo3::types::PyList::new(
-        py,
-        all_masks.iter().map(|m| numpy::PyArray1::<f32>::from_slice(py, m)),
-    )?;
-    dict.set_item("legal_masks", masks_list)?;
+    let masks_arr = PyArray1::<f32>::from_vec(py, all_masks)
+        .reshape([total_exp, CARD_ACTION_SIZE])
+        .map_err(|e| pyo3::exceptions::PyValueError::new_err(format!("legal_masks: {e}")))?;
+    dict.set_item("legal_masks", masks_arr)?;
 
     let scores_flat: Vec<i32> = all_scores.iter().flat_map(|s| s.iter().copied()).collect();
     let scores_arr = numpy::PyArray1::<i32>::from_vec(py, scores_flat)
@@ -1089,6 +1064,362 @@ fn run_arena_games(
     Ok(dict.into())
 }
 
+// -----------------------------------------------------------------------
+// Double-dummy solver bindings
+// -----------------------------------------------------------------------
+
+/// Solve a position from a RustGameState, returning optimal card points.
+///
+// Commented out: dd_solve depends on double_dummy module which is not available
+// /// Returns a dict with:
+// ///   - decl_points: optimal declarer team card points
+// ///   - opp_points:  optimal opponent team card points
+// ///   - best_move:   optimal card index (u8) or None
+// ///   - nodes:       search nodes explored
+// #[pyfunction]
+// fn dd_solve(py: Python<'_>, gs: &PyGameState) -> PyResult<PyObject> {
+//     let result = py.allow_threads(|| {
+//         double_dummy::solve(&gs.state)
+//     });
+//
+//     let dict = pyo3::types::PyDict::new(py);
+//     dict.set_item("decl_points", result.decl_points)?;
+//     dict.set_item("opp_points", result.opp_points)?;
+//     dict.set_item("best_move", result.best_move.map(|c| c.0))?;
+//     dict.set_item("nodes", result.nodes)?;
+//
+//     Ok(dict.into())
+// }
+
+// Commented out: dd_solve_all_moves depends on double_dummy module which is not available
+// /// Solve all legal moves from a position, returning DD value per move.
+// ///
+// /// Returns a list of dicts, each with:
+// ///   - card: card index (u8)
+// ///   - decl_points: declarer team card points if this card is played
+// ///   - opp_points:  opponent team card points if this card is played
+// ///   - nodes:       search nodes for this subtree
+// #[pyfunction]
+// fn dd_solve_all_moves(py: Python<'_>, gs: &PyGameState) -> PyResult<PyObject> {
+//     let results = py.allow_threads(|| {
+//         double_dummy::solve_all_moves(&gs.state)
+//     });
+//
+//     let list = pyo3::types::PyList::empty(py);
+//     for (card, result) in results {
+//         let dict = pyo3::types::PyDict::new(py);
+//         dict.set_item("card", card.0)?;
+//         dict.set_item("card_label", card.label())?;
+//         dict.set_item("decl_points", result.decl_points)?;
+//         dict.set_item("opp_points", result.opp_points)?;
+//         dict.set_item("nodes", result.nodes)?;
+//         list.append(dict)?;
+//     }
+//
+//     Ok(list.into())
+// }
+
+// Commented out: pimc_solve depends on pimc module which is not available
+// /// PIMC (Perfect Information Monte Carlo) solver.
+// ///
+// /// Samples `num_worlds` consistent deals from the viewer's perspective,
+// /// DD-solves each, and returns aggregated results per legal move.
+// ///
+// /// Returns a dict with:
+// ///   - best_move: card index (u8) or None
+// ///   - worlds_sampled: number of worlds
+// ///   - moves: list of dicts, each with:
+// ///       - card: card index (u8)
+// ///       - card_label: human-readable label
+// ///       - avg_decl_points: average declarer points across worlds
+// ///       - win_count: worlds where this was the best move
+// ///       - sample_count: total worlds sampled for this move
+// #[pyfunction]
+// #[pyo3(signature = (gs, viewer, num_worlds=100))]
+// fn pimc_solve(py: Python<'_>, gs: &PyGameState, viewer: u8, num_worlds: u32) -> PyResult<PyObject> {
+//     let result = py.allow_threads(|| {
+//         pimc::pimc_solve(&gs.state, viewer, num_worlds)
+//     });
+//
+//     let dict = pyo3::types::PyDict::new(py);
+//     dict.set_item("best_move", result.best_move.map(|c| c.0))?;
+//     dict.set_item("worlds_sampled", result.worlds_sampled)?;
+//
+//     let moves_list = pyo3::types::PyList::empty(py);
+//     for m in &result.moves {
+//         let mdict = pyo3::types::PyDict::new(py);
+//         mdict.set_item("card", m.card.0)?;
+//         mdict.set_item("card_label", m.card.label())?;
+//         mdict.set_item("avg_decl_points", m.avg_decl_points)?;
+//         mdict.set_item("win_count", m.win_count)?;
+//         mdict.set_item("sample_count", m.sample_count)?;
+//         moves_list.append(mdict)?;
+//     }
+//     dict.set_item("moves", moves_list)?;
+//
+//     Ok(dict.into())
+// }
+
+// Commented out: generate_dd_training_data and related functions depend on double_dummy module
+// /// Generate DD-labeled training data from random games.
+// ///
+// /// Plays `num_games` random games. At each trick-play decision point,
+// /// runs the DD solver to produce perfect value labels and per-move
+// /// policy targets.
+// ///
+// /// Returns a dict with numpy arrays:
+// ///   - states:         (N, STATE_SIZE) float32 — encoded game states
+// ///   - oracle_states:  (N, ORACLE_STATE_SIZE) float32 — oracle-encoded states
+// ///   - dd_values:      (N,) float32 — DD declarer card points (normalized)
+// ///   - dd_best_moves:  (N,) u8 — DD optimal card index
+// ///   - dd_move_values: (N, 54) float32 — per-move DD values (0 for illegal)
+// ///   - decision_types: (N,) u8
+// ///   - legal_masks:    (N, 54) u8
+// ///   - num_experiences: int
+// #[pyfunction]
+// #[pyo3(signature = (num_games, include_oracle=true))]
+// fn generate_dd_training_data(
+//     py: Python<'_>,
+//     num_games: usize,
+//     include_oracle: bool,
+// ) -> PyResult<PyObject> {
+//     let batch = py.allow_threads(|| {
+//         generate_dd_batch(num_games, include_oracle)
+//     });
+//
+//     let n_exp = batch.dd_values.len();
+//     let dict = pyo3::types::PyDict::new(py);
+//
+//     // States
+//     let states = PyArray1::<f32>::from_vec(py, batch.states)
+//         .reshape([n_exp, encoding::STATE_SIZE])
+//         .map_err(|e| pyo3::exceptions::PyValueError::new_err(format!("states reshape: {e}")))?;
+//     dict.set_item("states", states)?;
+//
+//     // Oracle states
+//     if include_oracle && !batch.oracle_states.is_empty() {
+//         let oracle = PyArray1::<f32>::from_vec(py, batch.oracle_states)
+//             .reshape([n_exp, encoding::ORACLE_STATE_SIZE])
+//             .map_err(|e| pyo3::exceptions::PyValueError::new_err(format!("oracle reshape: {e}")))?;
+//         dict.set_item("oracle_states", oracle)?;
+//     } else {
+//         dict.set_item("oracle_states", py.None())?;
+//     }
+//
+//     // DD labels
+//     dict.set_item("dd_values", numpy::PyArray1::<f32>::from_vec(py, batch.dd_values))?;
+//     dict.set_item("dd_best_moves", numpy::PyArray1::<u8>::from_vec(py, batch.dd_best_moves))?;
+//
+//     let move_values = PyArray1::<f32>::from_vec(py, batch.dd_move_values)
+//         .reshape([n_exp, DECK_SIZE])
+//         .map_err(|e| pyo3::exceptions::PyValueError::new_err(format!("move_values reshape: {e}")))?;
+//     dict.set_item("dd_move_values", move_values)?;
+//
+//     dict.set_item("decision_types", numpy::PyArray1::<u8>::from_vec(py, batch.decision_types))?;
+//
+//     let masks = PyArray1::<u8>::from_vec(py, batch.legal_masks)
+//         .reshape([n_exp, DECK_SIZE])
+//         .map_err(|e| pyo3::exceptions::PyValueError::new_err(format!("legal_masks reshape: {e}")))?;
+//     dict.set_item("legal_masks", masks)?;
+//
+//     dict.set_item("num_experiences", n_exp)?;
+//
+//     Ok(dict.into())
+// }
+//
+// /// Internal batch data structure for DD training data.
+// struct DDBatch {
+//     states: Vec<f32>,
+//     oracle_states: Vec<f32>,
+//     dd_values: Vec<f32>,
+//     dd_best_moves: Vec<u8>,
+//     dd_move_values: Vec<f32>,  // flat: N * 54
+//     decision_types: Vec<u8>,
+//     legal_masks: Vec<u8>,      // flat: N * 54
+// }
+//
+// /// Generate a batch of DD-labeled experiences from random games.
+// fn generate_dd_batch(num_games: usize, include_oracle: bool) -> DDBatch {
+//     use rayon::prelude::*;
+//
+//     let per_game: Vec<DDBatch> = (0..num_games)
+//         .into_par_iter()
+//         .map(|_| generate_dd_single_game(include_oracle))
+//         .collect();
+//
+//     // Merge all batches
+//     let total: usize = per_game.iter().map(|b| b.dd_values.len()).sum();
+//     let mut merged = DDBatch {
+//         states: Vec::with_capacity(total * encoding::STATE_SIZE),
+//         oracle_states: if include_oracle {
+//             Vec::with_capacity(total * encoding::ORACLE_STATE_SIZE)
+//         } else {
+//             Vec::new()
+//         },
+//         dd_values: Vec::with_capacity(total),
+//         dd_best_moves: Vec::with_capacity(total),
+//         dd_move_values: Vec::with_capacity(total * DECK_SIZE),
+//         decision_types: Vec::with_capacity(total),
+//         legal_masks: Vec::with_capacity(total * DECK_SIZE),
+//     };
+//
+//     for batch in per_game {
+//         merged.states.extend(batch.states);
+//         merged.oracle_states.extend(batch.oracle_states);
+//         merged.dd_values.extend(batch.dd_values);
+//         merged.dd_best_moves.extend(batch.dd_best_moves);
+//         merged.dd_move_values.extend(batch.dd_move_values);
+//         merged.decision_types.extend(batch.decision_types);
+//         merged.legal_masks.extend(batch.legal_masks);
+//     }
+//
+//     merged
+// }
+//
+// /// Generate DD-labeled experiences from a single random game.
+// fn generate_dd_single_game(include_oracle: bool) -> DDBatch {
+//     use rand::prelude::*;
+//
+//     let mut batch = DDBatch {
+//         states: Vec::new(),
+//         oracle_states: Vec::new(),
+//         dd_values: Vec::new(),
+//         dd_best_moves: Vec::new(),
+//         dd_move_values: Vec::new(),
+//         decision_types: Vec::new(),
+//         legal_masks: Vec::new(),
+//     };
+//
+//     let mut r = rand::rng();
+//     let mut gs = GameState::new(r.random_range(0..NUM_PLAYERS as u8));
+//
+//     // Deal randomly
+//     let mut deck = build_deck();
+//     deck.shuffle(&mut r);
+//     for (i, &card) in deck.iter().enumerate() {
+//         if i < 48 {
+//             gs.hands[i / 12].insert(card);
+//         } else {
+//             gs.talon.insert(card);
+//         }
+//     }
+//
+//     // Quick random bidding to get to trick play
+//     gs.phase = Phase::TrickPlay;
+//     gs.contract = Some(Contract::Three); // Default to Three for training
+//     gs.declarer = Some(0);
+//     gs.roles[0] = PlayerRole::Declarer;
+//     gs.roles[1] = PlayerRole::Opponent;
+//     gs.roles[2] = PlayerRole::Partner; // simplified: P2 is always partner
+//     gs.roles[3] = PlayerRole::Opponent;
+//
+//     // Simple talon exchange: give first 3 talon cards to declarer, rest to opponents
+//     let talon_cards: Vec<Card> = gs.talon.iter().collect();
+//     if talon_cards.len() >= 3 {
+//         for &c in &talon_cards[0..3] {
+//             gs.hands[0].insert(c);
+//             gs.talon.remove(c);
+//         }
+//         // Put down 3 cards from declarer's hand (lowest value)
+//         let mut hand_cards: Vec<Card> = gs.hands[0].iter().collect();
+//         hand_cards.sort_by_key(|c| c.points());
+//         for &c in hand_cards.iter().take(3) {
+//             gs.hands[0].remove(c);
+//             gs.put_down.insert(c);
+//         }
+//     }
+//
+//     // Now play tricks with DD guidance
+//     let mut lead_player = gs.forehand();
+//     gs.current_player = lead_player;
+//
+//     for trick_num in 0..TRICKS_PER_GAME {
+//         gs.current_trick = Some(Trick::new(lead_player));
+//
+//         for offset in 0..4u8 {
+//             let player = (lead_player + offset) % NUM_PLAYERS as u8;
+//             gs.current_player = player;
+//
+//             // Encode state for this decision
+//             let mut state_buf = [0.0f32; encoding::STATE_SIZE];
+//             encoding::encode_state(&mut state_buf, &gs, player, encoding::DT_CARD_PLAY);
+//             batch.states.extend_from_slice(&state_buf);
+//
+//             if include_oracle {
+//                 let mut oracle_buf = [0.0f32; encoding::ORACLE_STATE_SIZE];
+//                 encoding::encode_oracle_state(&mut oracle_buf, &gs, player, encoding::DT_CARD_PLAY);
+//                 batch.oracle_states.extend_from_slice(&oracle_buf);
+//             }
+//
+//             batch.decision_types.push(encoding::DT_CARD_PLAY);
+//
+//             // Legal mask
+//             let ctx = crate::legal_moves::MoveCtx::from_state(&gs, player);
+//             let legal_set = crate::legal_moves::generate_legal_moves(&ctx);
+//             let mut mask = [0u8; DECK_SIZE];
+//             for c in legal_set.iter() {
+//                 mask[c.0 as usize] = 1;
+//             }
+//             batch.legal_masks.extend_from_slice(&mask);
+//
+//             // DD solve all moves
+//             let dd_results = double_dummy::solve_all_moves(&gs);
+//
+//             // Find best move and build move value vector
+//             let mut move_values = [0.0f32; DECK_SIZE];
+//             let mut best_card = Card(0);
+//             let is_declarer_team = matches!(
+//                 gs.roles[player as usize],
+//                 PlayerRole::Declarer | PlayerRole::Partner
+//             );
+//             let mut best_val = if is_declarer_team {
+//                 i32::MIN
+//             } else {
+//                 i32::MAX
+//             };
+//
+//             for (card, result) in &dd_results {
+//                 // Normalize DD value to [0, 1] range (0-70 card points)
+//                 move_values[card.0 as usize] = result.decl_points as f32 / 70.0;
+//
+//                 if is_declarer_team {
+//                     if result.decl_points > best_val {
+//                         best_val = result.decl_points;
+//                         best_card = *card;
+//                     }
+//                 } else if result.decl_points < best_val {
+//                     best_val = result.decl_points;
+//                     best_card = *card;
+//                 }
+//             }
+//
+//             batch.dd_values.push(best_val as f32 / 70.0);
+//             batch.dd_best_moves.push(best_card.0);
+//             batch.dd_move_values.extend_from_slice(&move_values);
+//
+//             // Play the DD-optimal move (so subsequent positions are from optimal play)
+//             gs.hands[player as usize].remove(best_card);
+//             if let Some(ref mut trick) = gs.current_trick {
+//                 trick.play(player, best_card);
+//             }
+//             gs.played_cards.insert(best_card);
+//         }
+//
+//         let trick = gs.current_trick.take().unwrap();
+//         let is_last = trick_num == TRICKS_PER_GAME - 1;
+//         let result = crate::trick_eval::evaluate_trick(&trick, is_last, gs.contract);
+//         lead_player = result.winner;
+//         gs.tricks.push(trick);
+//     }
+//
+//     batch
+// }
+
+/// Build the full 54-card deck as a Vec.
+fn build_deck() -> Vec<Card> {
+    crate::card::build_deck().to_vec()
+}
+
 pub fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<PyGameState>()?;
     m.add_function(wrap_pyfunction!(generate_warmup_data, m)?)?;
@@ -1097,6 +1428,11 @@ pub fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(compute_legal_plays, m)?)?;
     m.add_function(wrap_pyfunction!(run_self_play, m)?)?;
     m.add_function(wrap_pyfunction!(run_arena_games, m)?)?;
+    // Commented out: DD and PIMC functions depend on unavailable modules
+    // m.add_function(wrap_pyfunction!(dd_solve, m)?)?;
+    // m.add_function(wrap_pyfunction!(dd_solve_all_moves, m)?)?;
+    // m.add_function(wrap_pyfunction!(generate_dd_training_data, m)?)?;
+    // m.add_function(wrap_pyfunction!(pimc_solve, m)?)?;
 
     // Expose constants
     m.add("STATE_SIZE", encoding::STATE_SIZE)?;

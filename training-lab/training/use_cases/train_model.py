@@ -43,7 +43,7 @@ class TrainModel:
         ts_path = str(save_dir / "_current.pt")
 
         self._model.export_for_inference(
-            weights, identity.hidden_size, identity.oracle_critic, ts_path,
+            weights, identity.hidden_size, identity.oracle_critic, identity.model_arch, ts_path,
         )
         self._presenter.on_model_loaded(identity, str(save_dir))
         self._presenter.on_device_selected(device)

@@ -10,4 +10,5 @@ class ModelIdentity:
     name: str
     hidden_size: int
     oracle_critic: bool
+    model_arch: str
     is_new: bool

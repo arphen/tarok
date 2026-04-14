@@ -6,6 +6,8 @@ experience types. No game logic (that's in Rust).
 
 from tarok.core.encoding import (
     DecisionType,
+    GameMode,
+    contract_to_game_mode,
     encode_state,
     encode_oracle_state,
     encode_legal_mask,
@@ -28,6 +30,6 @@ from tarok.core.encoding import (
     ANNOUNCE_IDX_TO_ANN,
     KONTRA_IDX_TO_KEY,
 )
-from tarok.core.network import TarokNet
+from tarok.core.network import TarokNet, TarokNetV3
 from tarok.core.experience import Experience
 from tarok.core.compute import ComputeBackend, create_backend

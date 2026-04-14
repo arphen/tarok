@@ -227,6 +227,7 @@ export default function App() {
               onCallKing={(suit) => game.callKing(suit)}
               onChooseTalon={(idx) => game.chooseTalon(idx)}
               onDiscard={(cards: CardData[]) => game.discard(cards)}
+              onPlayAgain={() => game.startNewGame(opponents, numRounds)}
               trickWinner={game.trickWinner}
               trickWinCards={game.trickWinCards}
             />

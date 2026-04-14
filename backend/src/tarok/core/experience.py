@@ -6,7 +6,7 @@ from dataclasses import dataclass
 
 import torch
 
-from tarok.core.encoding import DecisionType
+from tarok.core.encoding import DecisionType, GameMode
 
 
 @dataclass
@@ -23,3 +23,5 @@ class Experience:
     legal_mask: torch.Tensor | None = None
     game_id: int = 0
     step_in_game: int = 0
+    player: int = 0
+    game_mode: GameMode | None = None

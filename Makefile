@@ -154,6 +154,14 @@ generate-expert-data:
 imitation-pretrain:
 	$(UV_RUN) python -m tarok imitation-pretrain --games 1000000
 
+# Generate DD-solved training data (slow: ~1-5ms per position)
+generate-dd-data:
+	$(UV_RUN) python -m tarok generate-dd-data --games 1000
+
+# DD pre-training: supervised learning from perfect-play labels
+dd-pretrain:
+	$(UV_RUN) python -m tarok dd-pretrain --games 10000 --epochs 20 --oracle
+
 # Full 3-phase pipeline: imitation → StockŠkis PPO → self-play
 # Phase 1: Supervised pre-training from 1M StockŠkis expert games
 # Phase 2: PPO fine-tuning vs StockŠkis bots (auto plateau detection)

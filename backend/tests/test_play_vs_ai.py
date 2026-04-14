@@ -227,27 +227,36 @@ async def test_legal_bids_absent_when_not_our_turn():
 @pytest.mark.asyncio
 async def test_legal_bids_match_backend_legality():
     """The legal_bids sent to the frontend should match what the backend considers legal."""
-    # Build a state where BERAC has been bid
+    import tarok_engine as te
+
+    # Build a state where BERAC has been bid.
+    rust = te.RustGameState(0)
+    rust.phase = te.PHASE_BIDDING
+    rust.add_bid(1, 8)  # Rust contract code for BERAC
+
     state = GameState(dealer=0)
     state.phase = Phase.BIDDING
     state.hands = [[] for _ in range(4)]  # dummy
-    state.bids = [
-        Bid(player=1, contract=Contract.BERAC),
-    ]
+    state.bids = [Bid(player=1, contract=Contract.BERAC)]
     state.current_player = 0
     state.current_bidder = 0
+    state.legal_bids = lambda _player_idx: rust.legal_bids(0)
 
     sd = _state_for_player(state, 0, NAMES)
     legal = sd["legal_bids"]
 
-    # After BERAC (strength 8), only pass and BARVNI_VALAT (strength 9) should be legal
+    # After BERAC, only SOLO should remain legal as an overcall.
+    # legal_bids contains Rust u8 contract ids: THREE=1, TWO=2, ONE=3,
+    # SOLO_THREE=4, SOLO_TWO=5, SOLO_ONE=6, SOLO=7, BERAC=8.
     assert legal is not None
     assert None in legal  # pass
-    # THREE, TWO, ONE, SOLO should NOT be in legal
-    assert 3 not in legal, "THREE should not be legal after BERAC"
+    assert 1 not in legal, "THREE should not be legal after BERAC"
     assert 2 not in legal, "TWO should not be legal after BERAC"
-    assert 1 not in legal, "ONE should not be legal after BERAC"
-    assert 0 not in legal, "SOLO should not be legal after BERAC"
+    assert 3 not in legal, "ONE should not be legal after BERAC"
+    assert 6 not in legal  # SOLO_ONE
+    assert 4 not in legal  # SOLO_THREE
+    assert 5 not in legal  # SOLO_TWO
+    assert 7 in legal      # SOLO
 
 
 @pytest.mark.asyncio
@@ -263,6 +272,8 @@ async def test_callable_kings_sent_during_king_calling():
         [tarok(v) for v in range(1, 13)],
         [], [], [],
     ]
+    # Inject callable_kings: all kings not in player 0's hand (all 4, since hand is only taroks)
+    state.callable_kings = lambda: [c for c in DECK if c.is_king]
 
     sd = _state_for_player(state, 0, NAMES)
 

@@ -112,11 +112,34 @@ def _build_card_tracker(state: GameState) -> dict:
     }
 
 
+def _normalize_legal_bids(values: list[int | None]) -> list[int | None]:
+    """Return legal bids unchanged.
+
+    Bidding now uses Rust contract ids directly across the websocket path.
+    """
+    return values
+
+
 def _state_for_player(state: GameState, player_idx: int, player_names: list[str],
                       match_info: dict | None = None, reveal_hands: bool = False,
                       card_tracker: dict | None = None) -> dict:
 
-    is_current = state.current_player == player_idx
+    raw_current_player = state.current_player
+    has_bidding_current = hasattr(state, "current_bidder")
+    bidding_current = getattr(state, "current_bidder", None)
+    current_player = raw_current_player
+    if state.phase == Phase.BIDDING:
+        # During the terminal bid event we deliberately set current_bidder=None
+        # so clients don't render another clickable pass for the winner.
+        if has_bidding_current and bidding_current is not None:
+            current_player = bidding_current
+            is_current = current_player == player_idx
+        elif has_bidding_current and bidding_current is None:
+            is_current = False
+        else:
+            is_current = current_player == player_idx
+    else:
+        is_current = current_player == player_idx
 
     # Phase-appropriate legal actions
     # Note: legal_bids/legal_plays/callable_kings are game logic that now
@@ -129,10 +152,28 @@ def _state_for_player(state: GameState, player_idx: int, player_names: list[str]
 
     if state.phase == Phase.BIDDING and is_current:
         if hasattr(state, 'legal_bids') and callable(getattr(state, 'legal_bids', None)):
-            legal_bids = [
-                b.value if b is not None else None
-                for b in state.legal_bids(player_idx)
-            ]
+            legal_bids = _normalize_legal_bids(list(state.legal_bids(player_idx)))
+            if legal_bids == [None]:
+                active_contracts: list[int] = []
+                has_active_solo = False
+                for bid in state.bids:
+                    contract = getattr(bid, "contract", None)
+                    if contract is None:
+                        continue
+                    value = contract.value if hasattr(contract, "value") else int(contract)
+                    active_contracts.append(value)
+                    # Accept both representations:
+                    # - Python Contract.SOLO.value == 0
+                    # - Rust bid id SOLO == 7
+                    if value in (Contract.SOLO.value, 7):
+                        has_active_solo = True
+                if not has_active_solo:
+                    raise RuntimeError(
+                        "Invalid bidding snapshot: pass-only legal_bids without active solo bid "
+                        f"(player_idx={player_idx}, current_player={current_player}, "
+                        f"current_bidder={bidding_current if has_bidding_current else 'missing'}, "
+                        f"active_contracts={active_contracts}, legal_bids={legal_bids})"
+                    )
     elif state.phase == Phase.KING_CALLING and is_current:
         if hasattr(state, 'callable_kings') and callable(getattr(state, 'callable_kings', None)):
             callable_kings = [_card_to_dict(k) for k in state.callable_kings()]
@@ -157,7 +198,7 @@ def _state_for_player(state: GameState, player_idx: int, player_names: list[str]
             {"player": b.player, "contract": b.contract.value if b.contract else None}
             for b in state.bids
         ],
-        "contract": state.contract.value if state.contract else None,
+        "contract": state.contract.value if state.contract is not None else None,
         "declarer": state.declarer,
         "called_king": _card_to_dict(state.called_king) if state.called_king else None,
         "partner_revealed": state.is_partner_revealed,
@@ -168,7 +209,7 @@ def _state_for_player(state: GameState, player_idx: int, player_names: list[str]
             else []
         ),
         "tricks_played": state.tricks_played,
-        "current_player": state.current_player,
+        "current_player": current_player,
         "scores": state.scores if state.scores else None,
         "legal_plays": legal_plays,
         "legal_bids": legal_bids,

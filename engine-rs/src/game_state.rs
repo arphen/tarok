@@ -43,7 +43,20 @@ impl Contract {
     pub const NUM: usize = 10;
 
     pub fn strength(self) -> u8 {
-        self as u8
+        // Bidding order intentionally differs from enum discriminants.
+        // Barvni Valat is not an active bid here; it is handled separately.
+        match self {
+            Contract::Klop => 0,
+            Contract::Three => 1,
+            Contract::Two => 2,
+            Contract::One => 3,
+            Contract::SoloThree => 4,
+            Contract::SoloTwo => 5,
+            Contract::SoloOne => 6,
+            Contract::Berac => 7,
+            Contract::Solo => 8,
+            Contract::BarvniValat => 9,
+        }
     }
 
     pub fn is_solo(self) -> bool {

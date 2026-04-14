@@ -22,6 +22,18 @@ class TrainingConfig:
     device: str = "auto"
     save_dir: str = "checkpoints/training_run"
     concurrency: int = 128
+    imitation_coef: float = 0.3
+    model_arch: str = "v2"
+
+    @property
+    def nn_seat_indices(self) -> list[int]:
+        """Indices of seats occupied by the NN player."""
+        return [i for i, s in enumerate(self.seats.split(",")) if s.strip() == "nn"]
+
+    @property
+    def bot_seat_indices(self) -> list[int]:
+        """Indices of seats occupied by any bot (for imitation learning)."""
+        return [i for i, s in enumerate(self.seats.split(",")) if s.strip() != "nn"]
 
     @property
     def effective_bench_seats(self) -> str:

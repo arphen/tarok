@@ -31,12 +31,13 @@ interface GameBoardProps {
   onCallKing: (suit: string) => void;
   onChooseTalon: (groupIndex: number) => void;
   onDiscard: (cards: CardData[]) => void;
+  onPlayAgain?: () => void;
   trickWinner?: number | null;
   trickWinCards?: TrickCard[];
 }
 
 export default function GameBoard({
-  state, onPlayCard, onBid, onCallKing, onChooseTalon, onDiscard, trickWinner, trickWinCards,
+  state, onPlayCard, onBid, onCallKing, onChooseTalon, onDiscard, onPlayAgain, trickWinner, trickWinCards,
 }: GameBoardProps) {
   const isMyTurn = state.current_player === 0;
   const names = state.player_names.length > 0 ? state.player_names : ['You', 'AI-1', 'AI-2', 'AI-3'];
@@ -219,6 +220,11 @@ export default function GameBoard({
                   );
                 })}
               </div>
+              {onPlayAgain && (
+                <button className="btn-gold score-play-again" onClick={onPlayAgain}>
+                  Play Again
+                </button>
+              )}
             </div>
           )}
         </div>

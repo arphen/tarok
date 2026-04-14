@@ -37,7 +37,7 @@ describe('BiddingPanel', () => {
       <BiddingPanel
         phase="bidding"
         bids={[]}
-        legalBids={[null, 3, 2]}
+        legalBids={[null, 1, 2]}
         onBid={onBid}
         playerNames={playerNames}
       />
@@ -50,7 +50,7 @@ describe('BiddingPanel', () => {
   it('calls onBid with null when pass is clicked', () => {
     const onBid = vi.fn();
     render(
-      <BiddingPanel phase="bidding" bids={[]} legalBids={[null, 3]} onBid={onBid} playerNames={playerNames} />
+      <BiddingPanel phase="bidding" bids={[]} legalBids={[null, 1]} onBid={onBid} playerNames={playerNames} />
     );
     fireEvent.click(screen.getByTestId('bid-pass'));
     expect(onBid).toHaveBeenCalledWith(null);
@@ -59,10 +59,10 @@ describe('BiddingPanel', () => {
   it('calls onBid with contract value when bid button clicked', () => {
     const onBid = vi.fn();
     render(
-      <BiddingPanel phase="bidding" bids={[]} legalBids={[null, 3]} onBid={onBid} playerNames={playerNames} />
+      <BiddingPanel phase="bidding" bids={[]} legalBids={[null, 1]} onBid={onBid} playerNames={playerNames} />
     );
     fireEvent.click(screen.getByText('Three'));
-    expect(onBid).toHaveBeenCalledWith(3);
+    expect(onBid).toHaveBeenCalledWith(1);
   });
 
   it('shows king calling UI during king_calling phase', () => {
