@@ -10,6 +10,7 @@ import logging
 from typing import Any
 
 import numpy as np
+import tarok_engine as te
 import torch
 import torch.nn as nn
 import torch.optim as optim
@@ -100,7 +101,6 @@ class PPOAdapter(PPOPort):
         del nn_seats, bot_seats
         prepped = _prepare_batched(raw_experiences)
         metrics = self._ppo_update_batched(prepped)
-        metrics["il_loss"] = 0.0
 
         new_weights = {k: v.cpu() for k, v in self._network.state_dict().items()}
         return metrics, new_weights
@@ -109,10 +109,12 @@ class PPOAdapter(PPOPort):
         states = data["states"]
         actions = data["actions"]
         old_log_probs = data["log_probs"]
+        old_values = data["values"]
         advantages = data["advantages"]
         returns = data["returns"]
         decision_types = data["decision_types"]
         legal_masks = data["legal_masks"]
+        oracle_states = data.get("oracle_states")
         game_modes = data.get("game_modes")
 
         if len(states) == 0:
@@ -139,8 +141,16 @@ class PPOAdapter(PPOPort):
 
         total_policy_loss = 0.0
         total_value_loss = 0.0
+        total_il_loss = 0.0
         total_entropy = 0.0
+        total_loss = 0.0
         num_updates = 0
+
+        use_oracle_distill = (
+            getattr(network, "oracle_critic_enabled", False)
+            and oracle_states is not None
+            and float(getattr(self._config, "imitation_coef", 0.0)) > 0.0
+        )
 
         for (dt, gm), idx in groups.items():
             n = len(idx)
@@ -148,12 +158,11 @@ class PPOAdapter(PPOPort):
             g_states = compute.to_device(states[idx])
             g_actions = compute.to_device(actions[idx])
             g_old_log_probs = compute.to_device(old_log_probs[idx])
-            g_advantages = advantages[idx].clone()
-            if g_advantages.numel() > 1:
-                g_advantages = (g_advantages - g_advantages.mean()) / (g_advantages.std() + 1e-8)
-            g_advantages = compute.to_device(g_advantages)
+            g_old_values = compute.to_device(old_values[idx])
+            g_advantages = compute.to_device(advantages[idx])
             g_returns = compute.to_device(returns[idx])
             g_masks = compute.to_device(legal_masks[idx, :action_size])
+            g_oracle_states = compute.to_device(oracle_states[idx]) if oracle_states is not None else None
 
             for _ in range(self._config.ppo_epochs):
                 indices = torch.randperm(n, device=g_states.device)
@@ -165,13 +174,15 @@ class PPOAdapter(PPOPort):
                     b_states = g_states[batch_idx]
                     b_actions = g_actions[batch_idx]
                     b_old_log_probs = g_old_log_probs[batch_idx]
+                    b_old_values = g_old_values[batch_idx]
                     b_advantages = g_advantages[batch_idx]
                     b_returns = g_returns[batch_idx]
                     b_masks = g_masks[batch_idx]
+                    b_oracle_states = g_oracle_states[batch_idx] if g_oracle_states is not None else None
 
                     new_log_probs, new_values, entropy = network.evaluate_action(
                         b_states, b_actions, b_masks, dt,
-                        oracle_state=None,
+                        oracle_state=b_oracle_states,
                         game_mode=gm,
                     )
 
@@ -182,11 +193,32 @@ class PPOAdapter(PPOPort):
                     ) * b_advantages
                     policy_loss = -torch.min(surr1, surr2).mean()
 
-                    value_loss = nn.functional.mse_loss(new_values, b_returns)
+                    v_pred_clipped = b_old_values + torch.clamp(
+                        new_values - b_old_values,
+                        -self._clip_epsilon,
+                        self._clip_epsilon,
+                    )
+                    v_loss_unclipped = nn.functional.mse_loss(new_values, b_returns, reduction="none")
+                    v_loss_clipped = nn.functional.mse_loss(v_pred_clipped, b_returns, reduction="none")
+                    value_loss = 0.5 * torch.max(v_loss_unclipped, v_loss_clipped).mean()
+                    il_loss = torch.zeros((), device=b_states.device, dtype=b_states.dtype)
+                    if use_oracle_distill and b_oracle_states is not None:
+                        actor_features = network.get_actor_features(b_states)
+                        with torch.no_grad():
+                            critic_target = network.get_critic_features(b_oracle_states)
+                        actor_features = nn.functional.normalize(actor_features, p=2, dim=-1, eps=1e-8)
+                        critic_target = nn.functional.normalize(critic_target, p=2, dim=-1, eps=1e-8)
+                        il_loss = 1.0 - nn.functional.cosine_similarity(
+                            actor_features,
+                            critic_target,
+                            dim=-1,
+                            eps=1e-8,
+                        ).mean()
 
                     loss = (
                         policy_loss
                         + self._value_coef * value_loss
+                        + self._config.imitation_coef * il_loss
                         - self._entropy_coef * entropy.mean()
                     )
 
@@ -201,15 +233,18 @@ class PPOAdapter(PPOPort):
 
                     total_policy_loss += policy_loss.item()
                     total_value_loss += value_loss.item()
+                    total_il_loss += il_loss.item()
                     total_entropy += entropy.mean().item()
+                    total_loss += loss.item()
                     num_updates += 1
 
         n = max(num_updates, 1)
         return {
             "policy_loss": total_policy_loss / n,
             "value_loss": total_value_loss / n,
+            "il_loss": total_il_loss / n,
             "entropy": total_entropy / n,
-            "total_loss": (total_policy_loss + total_value_loss) / n,
+            "total_loss": total_loss / n,
         }
 
 def _prepare_batched(raw: dict[str, Any]) -> dict[str, Any]:
@@ -224,12 +259,17 @@ def _prepare_batched(raw: dict[str, Any]) -> dict[str, Any]:
     players_np = np.asarray(raw["players"])
     scores_np = np.asarray(raw["scores"])
     legal_masks_np = np.asarray(raw["legal_masks"])
+    oracle_states_raw = raw.get("oracle_states")
+    oracle_states_np = np.asarray(oracle_states_raw, dtype=np.float32) if oracle_states_raw is not None else None
 
     # Precompute v3 card-head modes from the contract one-hot in state.
     # This avoids expensive per-batch mode inference in TarokNetV3.
     game_modes_np: np.ndarray | None
-    if states_np.shape[1] >= 230:
-        contract_slice = states_np[:, 220:230]
+    contract_offset = int(te.CONTRACT_OFFSET)
+    contract_size = int(te.CONTRACT_SIZE)
+    contract_end = contract_offset + contract_size
+    if states_np.shape[1] >= contract_end:
+        contract_slice = states_np[:, contract_offset:contract_end]
         max_idx = np.argmax(contract_slice, axis=1)
         max_vals = np.max(contract_slice, axis=1)
         game_modes_np = np.full(len(states_np), 2, dtype=np.int8)  # partner_play default
@@ -247,43 +287,42 @@ def _prepare_batched(raw: dict[str, Any]) -> dict[str, Any]:
     traj_keys = game_ids_np.astype(np.int64) * 4 + players_np.astype(np.int64)
     sort_idx = np.lexsort((np.arange(n_total), traj_keys))
 
-    sorted_keys = traj_keys[sort_idx]
-    sorted_values = values_np[sort_idx]
-    sorted_rewards = rewards_np[sort_idx]
+    sorted_keys = np.asarray(traj_keys[sort_idx], dtype=np.int64)
+    sorted_values = np.asarray(values_np[sort_idx], dtype=np.float32)
+    sorted_rewards = np.asarray(rewards_np[sort_idx], dtype=np.float32)
 
-    boundaries = np.where(np.diff(sorted_keys) != 0)[0] + 1
-    traj_starts = np.concatenate([[0], boundaries])
-    traj_ends = np.concatenate([boundaries, [n_total]])
-
-    gamma = 0.99
-    gae_lambda = 0.95
-    advantages_sorted = np.zeros(n_total, dtype=np.float32)
-    returns_sorted = np.zeros(n_total, dtype=np.float32)
-
-    for start, end in zip(traj_starts, traj_ends):
-        traj_len = end - start
-        last_gae = 0.0
-        for offset in reversed(range(traj_len)):
-            idx = start + offset
-            next_val = 0.0 if offset == traj_len - 1 else sorted_values[idx + 1]
-            delta = sorted_rewards[idx] + gamma * next_val - sorted_values[idx]
-            last_gae = delta + gamma * gae_lambda * last_gae
-            advantages_sorted[idx] = last_gae
-            returns_sorted[idx] = last_gae + sorted_values[idx]
+    advantages_sorted, returns_sorted = te.compute_gae(
+        sorted_values,
+        sorted_rewards,
+        sorted_keys,
+        gamma=0.99,
+        gae_lambda=0.95,
+    )
+    advantages_sorted = np.asarray(advantages_sorted, dtype=np.float32)
+    returns_sorted = np.asarray(returns_sorted, dtype=np.float32)
 
     advantages_np = np.empty(n_total, dtype=np.float32)
     returns_np = np.empty(n_total, dtype=np.float32)
     advantages_np[sort_idx] = advantages_sorted
     returns_np[sort_idx] = returns_sorted
 
+    # Normalize advantages once globally to avoid over-scaling rare
+    # decision-type / game-mode subgroups during PPO updates.
+    if advantages_np.size > 1:
+        adv_mean = float(advantages_np.mean())
+        adv_std = float(advantages_np.std())
+        advantages_np = (advantages_np - adv_mean) / (adv_std + 1e-8)
+
     return {
         "states": torch.from_numpy(states_np),
         "actions": torch.from_numpy(actions_np.astype(np.int64)),
         "log_probs": torch.from_numpy(log_probs_np),
+        "values": torch.from_numpy(values_np.astype(np.float32)),
         "advantages": torch.from_numpy(advantages_np),
         "returns": torch.from_numpy(returns_np),
         "decision_types": decision_types_np,
         "legal_masks": torch.from_numpy(legal_masks_np),
+        "oracle_states": torch.from_numpy(oracle_states_np) if oracle_states_np is not None else None,
         "game_modes": game_modes_np,
     }
 
