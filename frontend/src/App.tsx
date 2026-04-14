@@ -237,11 +237,32 @@ export default function App() {
               {playSidebarOpen ? '▶' : '◀'} Log
             </button>
             <div className="drawer-panel">
-              {game.gameState.match_info && game.gameState.match_info.total_rounds > 1 && (
+              {game.gameState.match_info && (
                 <Scoreboard
                   matchInfo={game.gameState.match_info}
                   playerNames={game.gameState.player_names.length > 0 ? game.gameState.player_names : ['You', 'AI-1', 'AI-2', 'AI-3']}
                 />
+              )}
+              {game.completedTricks.length > 0 && (
+                <div className="trick-history">
+                  <div className="trick-history-header">
+                    <h4>Trick History</h4>
+                  </div>
+                  <div className="trick-history-list">
+                    {game.completedTricks.map((trick, i) => {
+                      const playerNames = game.gameState.player_names.length > 0 ? game.gameState.player_names : ['You', 'AI-1', 'AI-2', 'AI-3'];
+                      return (
+                        <div key={i} className="trick-history-item">
+                          <span className="trick-num">#{i + 1}</span>
+                          <span className="trick-cards-mini">
+                            {trick.cards.map(([, c]) => c.label).join(', ')}
+                          </span>
+                          <span className="trick-winner-badge">{playerNames[trick.winner]}</span>
+                        </div>
+                      );
+                    })}
+                  </div>
+                </div>
               )}
               <GameLog entries={game.logEntries} />
             </div>

@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
-import type { GameState, GameEvent, CardData } from '../types/game';
+import type { GameState, GameEvent, CardData, CompletedTrick } from '../types/game';
 import { CONTRACT_NAMES, SUIT_SYMBOLS } from '../types/game';
 
 export interface LogEntry {
@@ -116,6 +116,7 @@ export function useGame() {
   const [logEntries, setLogEntries] = useState<LogEntry[]>([]);
   const [trickWinner, setTrickWinner] = useState<number | null>(null);
   const [trickWinCards, setTrickWinCards] = useState<GameState['current_trick']>([]);
+  const [completedTricks, setCompletedTricks] = useState<CompletedTrick[]>([]);
   const wsRef = useRef<WebSocket | null>(null);
   const trickTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
@@ -152,12 +153,18 @@ export function useGame() {
       // Always apply state immediately to avoid stale-state rollback
       setGameState(data.state);
 
+      if (data.event === 'game_start' || data.event === 'match_update') {
+        setCompletedTricks([]);
+      }
+
       if (data.event === 'trick_won') {
         // Show sweep animation with the trick cards from the event
         const winner = data.data.winner as number;
         const cards = data.data.cards as GameState['current_trick'];
         setTrickWinCards(cards);
         setTrickWinner(winner);
+        // Accumulate for trick history
+        setCompletedTricks(prev => [...prev, { lead_player: cards[0]?.[0] ?? 0, cards, winner }]);
         // Clear after animation completes
         if (trickTimerRef.current) clearTimeout(trickTimerRef.current);
         trickTimerRef.current = setTimeout(() => {
@@ -250,6 +257,7 @@ export function useGame() {
     logEntries,
     trickWinner,
     trickWinCards,
+    completedTricks,
     startNewGame,
     playCard,
     bid,

@@ -1,8 +1,9 @@
 .PHONY: run backend frontend test train clean install test-e2e setup setup-hooks \
 	test-backend test-frontend test-frontend-unit test-coverage check-coverage test-lookahead \
-	pipeline imitation-pretrain generate-expert-data build-engine ensure-engine kill stop
+	pipeline imitation-pretrain generate-expert-data build-engine ensure-engine kill stop \
+	train-with-humans
 
-UV_RUN = cd backend && PYTHONPATH=src uv run --default-index https://pypi.org/simple
+UV_RUN = cd backend && PYTHONPATH=src:../model/src uv run --default-index https://pypi.org/simple
 
 # ──────────────────────────────────────────────
 # Bootstrap — run this once on a fresh Mac
@@ -55,7 +56,7 @@ setup-hooks:
 run: ensure-engine backend frontend
 
 backend:
-	cd backend && PYTHONPATH=src uv run --default-index https://pypi.org/simple uvicorn tarok.adapters.api.server:app --reload --host 0.0.0.0 --port 8000 &
+	cd backend && PYTHONPATH=src:../model/src uv run --default-index https://pypi.org/simple uvicorn tarok.adapters.api.server:app --reload --host 0.0.0.0 --port 8000 &
 
 frontend:
 	cd frontend && npm run dev &
@@ -192,6 +193,7 @@ pipeline-large:
 #   vs-1-bot    — 3 NNs vs 1 bot
 #   self-play   — 4 NNs, no bots
 #   vs-3-v6     — NN vs 3 stronger v6 bots
+##   with-human-data — NN vs bots plus all saved human-vs-AI decisions every iteration
 #
 # All settings live in the YAML file. CLI overrides still work:
 #   make train-iterate CONFIG=vs-3-bots EXTRA="--iterations 20 --games 5000"
@@ -202,8 +204,24 @@ train-iterate: ensure-engine
 	source backend/.venv/bin/activate && \
 		TORCH_LIB_DIR=$$(python -c 'import pathlib, torch; print(pathlib.Path(torch.__file__).resolve().parent / "lib")') && \
 		export DYLD_FALLBACK_LIBRARY_PATH="$$TORCH_LIB_DIR:$$DYLD_FALLBACK_LIBRARY_PATH" && \
-		PYTHONPATH=backend/src python training-lab/train_and_evaluate.py \
+		PYTHONPATH=backend/src:model/src python training-lab/train_and_evaluate.py \
 		--config training-lab/configs/$(CONFIG).yaml \
+		--checkpoint $(MODEL) \
+		$(EXTRA)
+
+# Fine-tune a model with all accumulated human-vs-AI game experiences.
+# Human games from backend/data/human_experiences/ are replayed every iteration —
+# they are never discarded, so the model keeps learning from every human game ever played.
+#
+# Usage:
+#   make train-with-humans MODEL=checkpoints/YourModel/best.pt
+#   make train-with-humans MODEL=checkpoints/YourModel/best.pt EXTRA="--iterations 20"
+train-with-humans: ensure-engine
+	source backend/.venv/bin/activate && \
+		TORCH_LIB_DIR=$$(python -c 'import pathlib, torch; print(pathlib.Path(torch.__file__).resolve().parent / "lib")') && \
+		export DYLD_FALLBACK_LIBRARY_PATH="$$TORCH_LIB_DIR:$$DYLD_FALLBACK_LIBRARY_PATH" && \
+		PYTHONPATH=backend/src:model/src python training-lab/train_and_evaluate.py \
+		--config training-lab/configs/with-human-data.yaml \
 		--checkpoint $(MODEL) \
 		$(EXTRA)
 
@@ -214,10 +232,10 @@ train-new: ensure-engine
 	source backend/.venv/bin/activate && \
 		TORCH_LIB_DIR=$$(python -c 'import pathlib, torch; print(pathlib.Path(torch.__file__).resolve().parent / "lib")') && \
 		export DYLD_FALLBACK_LIBRARY_PATH="$$TORCH_LIB_DIR:$$DYLD_FALLBACK_LIBRARY_PATH" && \
-		PYTHONPATH=backend/src python training-lab/train_and_evaluate.py \
+		PYTHONPATH=backend/src:model/src python training-lab/train_and_evaluate.py \
 		--config training-lab/configs/$(CONFIG).yaml \
 		--new \
-		--model-arch v3 \
+		--model-arch v4 \
 		$(EXTRA)
 
 # ──────────────────────────────────────────────
