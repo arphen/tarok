@@ -15,9 +15,10 @@ async def test_arena_runs_with_nn_agent(tmp_path, monkeypatch):
 
     # Create a real checkpoint file (TorchScript export needs valid weights)
     import torch
-    from tarok_model.network import TarokNet
+    from tarok_model.network import TarokNetV4
     ckpt_path = tmp_path / "dummy.pt"
-    torch.save(TarokNet().state_dict(), str(ckpt_path))
+    net = TarokNetV4()
+    torch.save({"model_arch": "v4", "model_state_dict": net.state_dict()}, str(ckpt_path))
 
     # Compose request: 1 NN agent, 3 bots
     req_agents = [

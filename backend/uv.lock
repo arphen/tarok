@@ -1201,6 +1201,7 @@ dependencies = [
     { name = "pydantic" },
     { name = "pyyaml" },
     { name = "shortuuid" },
+    { name = "tarok-model" },
     { name = "tensorboard" },
     { name = "torch" },
     { name = "uvicorn", extra = ["standard"] },
@@ -1238,6 +1239,7 @@ requires-dist = [
     { name = "pyyaml", specifier = ">=6.0.3" },
     { name = "ruff", marker = "extra == 'dev'", specifier = ">=0.7" },
     { name = "shortuuid", specifier = ">=1.0.13" },
+    { name = "tarok-model", editable = "../model" },
     { name = "tensorboard", specifier = ">=2.18" },
     { name = "torch", specifier = ">=2.4" },
     { name = "uvicorn", extras = ["standard"], specifier = ">=0.30" },
@@ -1247,6 +1249,21 @@ provides-extras = ["dev"]
 
 [package.metadata.requires-dev]
 dev = [{ name = "httpx", specifier = ">=0.28.1" }]
+
+[[package]]
+name = "tarok-model"
+version = "0.1.0"
+source = { editable = "../model" }
+dependencies = [
+    { name = "numpy" },
+    { name = "torch" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "numpy", specifier = ">=2.0" },
+    { name = "torch", specifier = ">=2.4" },
+]
 
 [[package]]
 name = "tensorboard"
