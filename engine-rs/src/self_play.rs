@@ -57,8 +57,6 @@ struct InFlightGame {
     initial_hands: [CardSet; 4],
     initial_talon: CardSet,
     trace: GameTrace,
-    // Set when a trick is completed; consumed in main loop to shape rewards.
-    last_trick_result: Option<(u8, u8)>,
 }
 
 /// Internal tracking for a pending decision.
@@ -66,6 +64,7 @@ struct Pending {
     slot: usize,
     player: u8,
     decision_type: DecisionType,
+    game_mode: u8,
     state_buf: Vec<f32>,
     legal_mask: Vec<f32>,
 }
@@ -98,12 +97,13 @@ pub struct RawExperience {
     pub log_prob: f32,
     pub value: f32,
     pub decision_type: u8,
+    pub game_mode: u8,
     pub legal_mask: Vec<f32>,
     pub game_id: u32,
     pub step_in_game: u16,
     pub player: u8,
-    // Signed trick points for shaped rewards: +points for winner team,
-    // -points for losing team (Klop handled specially), 0 otherwise.
+    // Reserved for optional trick-level shaping (currently disabled).
+    // Kept at 0 so value targets are driven by final game scores.
     pub trick_points: i16,
 }
 
@@ -264,6 +264,7 @@ impl SelfPlayRunner {
                     log_prob: result.log_prob,
                     value: result.value,
                     decision_type: pd.decision_type as u8,
+                    game_mode: pd.game_mode,
                     legal_mask: padded_mask,
                     game_id: game.game_id,
                     step_in_game: game.step_counter,
@@ -278,30 +279,6 @@ impl SelfPlayRunner {
                     result.action,
                     &self.players[pd.player as usize],
                 );
-
-                if let Some((winner, points)) = game.last_trick_result.take() {
-                    let exps = &mut game_exps[gid];
-                    let n = exps.len();
-                    let start = n.saturating_sub(4);
-                    let is_klop = game.gs.contract == Some(Contract::Klop);
-                    let winner_team = game.gs.get_team(winner);
-
-                    for exp in &mut exps[start..n] {
-                        if is_klop {
-                            // In Klop, taking a trick is bad.
-                            if exp.player == winner {
-                                exp.trick_points = -(points as i16);
-                            }
-                        } else {
-                            let exp_team = game.gs.get_team(exp.player);
-                            if exp_team == winner_team {
-                                exp.trick_points = points as i16;
-                            } else {
-                                exp.trick_points = -(points as i16);
-                            }
-                        }
-                    }
-                }
             }
 
             // Step 4: finalize newly-done games
@@ -362,12 +339,20 @@ impl SelfPlayRunner {
             initial_hands,
             initial_talon,
             trace: GameTrace::default(),
-            last_trick_result: None,
         }
     }
 
     fn score_game(gs: &GameState) -> [i32; 4] {
         scoring::score_game(gs)
+    }
+
+    fn game_mode_id(contract: Option<Contract>) -> u8 {
+        match contract {
+            Some(c) if c.is_solo() => 0,
+            Some(Contract::Klop | Contract::Berac) => 1,
+            Some(Contract::BarvniValat) => 3,
+            _ => 2,
+        }
     }
 
     fn build_result(game: &InFlightGame, exps: Vec<RawExperience>) -> GameResult {
@@ -442,6 +427,7 @@ impl SelfPlayRunner {
             slot: 0,
             player: bidder,
             decision_type: DecisionType::Bid,
+            game_mode: Self::game_mode_id(game.gs.contract),
             state_buf,
             legal_mask: mask,
         })
@@ -562,6 +548,7 @@ impl SelfPlayRunner {
             slot: 0,
             player: declarer,
             decision_type: DecisionType::KingCall,
+            game_mode: Self::game_mode_id(game.gs.contract),
             state_buf,
             legal_mask: mask,
         })
@@ -644,6 +631,7 @@ impl SelfPlayRunner {
             slot: 0,
             player: declarer,
             decision_type: DecisionType::TalonPick,
+            game_mode: Self::game_mode_id(game.gs.contract),
             state_buf,
             legal_mask: mask,
         })
@@ -746,6 +734,7 @@ impl SelfPlayRunner {
             slot: 0,
             player,
             decision_type: DecisionType::CardPlay,
+            game_mode: Self::game_mode_id(game.gs.contract),
             state_buf,
             legal_mask: mask,
         })
@@ -769,11 +758,10 @@ impl SelfPlayRunner {
         game.trick_offset += 1;
 
         if game.trick_offset >= 4 {
-            let (winner, points) = game.gs.finish_trick();
+            let (winner, _points) = game.gs.finish_trick();
             game.lead_player = winner;
             game.trick_num += 1;
             game.trick_offset = 0;
-            game.last_trick_result = Some((winner, points));
 
             if game.trick_num >= 12 {
                 game.phase = GamePhase::Done;

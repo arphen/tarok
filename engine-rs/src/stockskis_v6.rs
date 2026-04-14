@@ -36,10 +36,6 @@ struct CardTracker {
     player_tarok_likelihood: [f64; NUM_PLAYERS],
     tricks_left: usize,
     phase: GamePhase,
-    /// Points already secured by declarer team.
-    declarer_team_points: i32,
-    /// Points already secured by opposition.
-    opposition_points: i32,
 }
 
 #[derive(Clone, Copy, PartialEq)]
@@ -153,33 +149,6 @@ impl CardTracker {
             }
         }
 
-        // Compute points accumulated
-        let mut declarer_team_points = 0i32;
-        let mut opposition_points = 0i32;
-        for trick in &state.tricks {
-            if trick.count < 4 {
-                continue;
-            }
-            let lead_suit = trick.lead_suit();
-            let mut winner = trick.cards[0].0;
-            let mut best = trick.cards[0].1;
-            let mut trick_pts = 0i32;
-            for i in 0..trick.count as usize {
-                trick_pts += trick.cards[i].1.points() as i32;
-                if i > 0 && trick.cards[i].1.beats(best, lead_suit) {
-                    best = trick.cards[i].1;
-                    winner = trick.cards[i].0;
-                }
-            }
-            let winner_is_declarer_team = state.declarer == Some(winner)
-                || state.partner == Some(winner);
-            if winner_is_declarer_team {
-                declarer_team_points += trick_pts;
-            } else {
-                opposition_points += trick_pts;
-            }
-        }
-
         let tricks_left = (hand.len() as usize).saturating_sub(state.tricks.len()).max(1);
         let phase = match state.tricks.len() {
             0..=3 => GamePhase::Early,
@@ -196,8 +165,6 @@ impl CardTracker {
             player_tarok_likelihood,
             tricks_left,
             phase,
-            declarer_team_points,
-            opposition_points,
         }
     }
 
@@ -234,20 +201,6 @@ impl CardTracker {
         count
     }
 
-    /// Lowest tarok in remaining that is higher than `value`.
-    fn lowest_winning_tarok_remaining(&self, value: u8) -> Option<u8> {
-        let mut lowest: Option<u8> = None;
-        for card in self.taroks_remaining.iter() {
-            if card.value() > value {
-                match lowest {
-                    None => lowest = Some(card.value()),
-                    Some(v) if card.value() < v => lowest = Some(card.value()),
-                    _ => {}
-                }
-            }
-        }
-        lowest
-    }
 }
 
 // -----------------------------------------------------------------------

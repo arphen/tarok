@@ -27,8 +27,6 @@ struct CardTracker {
     player_tarok_likelihood: [f64; NUM_PLAYERS],
     tricks_left: usize,
     phase: GamePhase,
-    declarer_team_points: i32,
-    opposition_points: i32,
     /// Estimated number of taroks this player started with.
     starting_taroks_estimate: u8,
 }
@@ -146,32 +144,6 @@ impl CardTracker {
             }
         }
 
-        let mut declarer_team_points = 0i32;
-        let mut opposition_points = 0i32;
-        for trick in &state.tricks {
-            if trick.count < 4 {
-                continue;
-            }
-            let lead_suit = trick.lead_suit();
-            let mut winner = trick.cards[0].0;
-            let mut best = trick.cards[0].1;
-            let mut trick_pts = 0i32;
-            for i in 0..trick.count as usize {
-                trick_pts += trick.cards[i].1.points() as i32;
-                if i > 0 && trick.cards[i].1.beats(best, lead_suit) {
-                    best = trick.cards[i].1;
-                    winner = trick.cards[i].0;
-                }
-            }
-            let winner_is_declarer_team = state.declarer == Some(winner)
-                || state.partner == Some(winner);
-            if winner_is_declarer_team {
-                declarer_team_points += trick_pts;
-            } else {
-                opposition_points += trick_pts;
-            }
-        }
-
         let taroks_in_hand = hand.tarok_count();
         let tricks_left = (hand.len() as usize).saturating_sub(state.tricks.len()).max(1);
         let phase = match state.tricks.len() {
@@ -189,8 +161,6 @@ impl CardTracker {
             player_tarok_likelihood,
             tricks_left,
             phase,
-            declarer_team_points,
-            opposition_points,
             starting_taroks_estimate: taroks_in_hand + own_taroks_played,
         }
     }
@@ -228,19 +198,6 @@ impl CardTracker {
         count
     }
 
-    fn lowest_winning_tarok_remaining(&self, value: u8) -> Option<u8> {
-        let mut lowest: Option<u8> = None;
-        for card in self.taroks_remaining.iter() {
-            if card.value() > value {
-                match lowest {
-                    None => lowest = Some(card.value()),
-                    Some(v) if card.value() < v => lowest = Some(card.value()),
-                    _ => {}
-                }
-            }
-        }
-        lowest
-    }
 }
 
 // -----------------------------------------------------------------------
