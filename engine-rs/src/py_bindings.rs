@@ -4,7 +4,7 @@
 /// Python code calls these functions with plain ints/lists and gets back
 /// plain lists/dicts.
 
-use numpy::{PyArray1, PyArrayMethods};
+use numpy::{PyArray1, PyArrayMethods, PyReadonlyArray1};
 use pyo3::prelude::*;
 use rand::prelude::*;
 use rand::rng;
@@ -1420,12 +1420,56 @@ fn build_deck() -> Vec<Card> {
     crate::card::build_deck().to_vec()
 }
 
+/// Compute GAE and returns over a key-sorted trajectory stream.
+///
+/// Inputs must be 1D arrays of equal length and sorted so that all steps of
+/// the same trajectory key are contiguous.
+#[pyfunction]
+#[pyo3(signature = (values, rewards, traj_keys, gamma=0.99, gae_lambda=0.95))]
+fn compute_gae<'py>(
+    py: Python<'py>,
+    values: PyReadonlyArray1<'py, f32>,
+    rewards: PyReadonlyArray1<'py, f32>,
+    traj_keys: PyReadonlyArray1<'py, i64>,
+    gamma: f32,
+    gae_lambda: f32,
+) -> PyResult<(Bound<'py, PyArray1<f32>>, Bound<'py, PyArray1<f32>>)> {
+    let values = values.as_slice()?;
+    let rewards = rewards.as_slice()?;
+    let traj_keys = traj_keys.as_slice()?;
+
+    let n = values.len();
+    if rewards.len() != n || traj_keys.len() != n {
+        return Err(pyo3::exceptions::PyValueError::new_err(
+            "values, rewards, and traj_keys must have identical length",
+        ));
+    }
+
+    let mut advantages = vec![0.0f32; n];
+    let mut returns = vec![0.0f32; n];
+
+    for idx in (0..n).rev() {
+        let is_last = idx == n - 1 || traj_keys[idx] != traj_keys[idx + 1];
+        let next_value = if is_last { 0.0 } else { values[idx + 1] };
+        let next_gae = if is_last { 0.0 } else { advantages[idx + 1] };
+
+        let delta = rewards[idx] + gamma * next_value - values[idx];
+        let gae = delta + gamma * gae_lambda * next_gae;
+
+        advantages[idx] = gae;
+        returns[idx] = gae + values[idx];
+    }
+
+    Ok((PyArray1::from_vec(py, advantages), PyArray1::from_vec(py, returns)))
+}
+
 pub fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<PyGameState>()?;
     m.add_function(wrap_pyfunction!(generate_warmup_data, m)?)?;
     m.add_function(wrap_pyfunction!(generate_expert_data, m)?)?;
     m.add_function(wrap_pyfunction!(evaluate_trick_winner, m)?)?;
     m.add_function(wrap_pyfunction!(compute_legal_plays, m)?)?;
+    m.add_function(wrap_pyfunction!(compute_gae, m)?)?;
     m.add_function(wrap_pyfunction!(run_self_play, m)?)?;
     m.add_function(wrap_pyfunction!(run_arena_games, m)?)?;
     // Commented out: DD and PIMC functions depend on unavailable modules
@@ -1437,6 +1481,9 @@ pub fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     // Expose constants
     m.add("STATE_SIZE", encoding::STATE_SIZE)?;
     m.add("ORACLE_STATE_SIZE", encoding::ORACLE_STATE_SIZE)?;
+    m.add("CONTRACT_OFFSET", encoding::CONTRACT_OFFSET)?;
+    m.add("CONTRACT_SIZE", encoding::CONTRACT_SIZE)?;
+    m.add("BELIEF_OFFSET", encoding::BELIEF_OFFSET)?;
     m.add("DECK_SIZE", DECK_SIZE)?;
     m.add("NUM_PLAYERS", NUM_PLAYERS)?;
 

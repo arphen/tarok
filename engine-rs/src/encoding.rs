@@ -12,6 +12,12 @@ use crate::trick_eval::evaluate_trick;
 
 /// v1 base features size (for backward compat detection)
 pub const V1_STATE_SIZE: usize = 270;
+/// Contract one-hot feature offset in the flat state vector.
+pub const CONTRACT_OFFSET: usize = 220;
+/// Contract one-hot feature length.
+pub const CONTRACT_SIZE: usize = 10;
+/// Belief feature block offset in the flat state vector.
+pub const BELIEF_OFFSET: usize = V1_STATE_SIZE;
 /// v2 belief features: 3 opponents × 54 cards
 const BELIEF_SIZE: usize = 3 * DECK_SIZE;
 /// v2 opponent play stats: 3 opponents × 4 features

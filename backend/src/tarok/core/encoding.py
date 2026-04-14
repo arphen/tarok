@@ -382,6 +382,10 @@ STATE_SIZE = (
 )  # = 270 + 162 + 12 + 6 = 450
 # Old state size for backward compat migration
 _OLD_STATE_SIZE_V1 = 270
+# Canonical offsets inside the flat state tensor.
+CONTRACT_OFFSET = 220
+CONTRACT_SIZE = 10
+BELIEF_OFFSET = _OLD_STATE_SIZE_V1
 # Oracle critic sees all opponent hands (Perfect Training, Imperfect Execution)
 ORACLE_EXTRA_SIZE = 3 * 54  # 3 opponent hand vectors
 ORACLE_STATE_SIZE = STATE_SIZE + ORACLE_EXTRA_SIZE  # 450 + 162 = 612
