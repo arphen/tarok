@@ -134,10 +134,12 @@ build-engine:
 
 # Auto-install Rust + build engine if the .so is missing
 ensure-engine:
-	@if (cd backend && uv run --default-index https://pypi.org/simple python -c 'import tarok_engine') 2>/dev/null; then \
+	@TORCH_LIB_DIR=$$(cd backend && uv run --default-index https://pypi.org/simple python -c 'import pathlib, torch; print(pathlib.Path(torch.__file__).resolve().parent / "lib")'); \
+	export DYLD_FALLBACK_LIBRARY_PATH="$$TORCH_LIB_DIR:$$DYLD_FALLBACK_LIBRARY_PATH"; \
+	if (cd backend && uv run --default-index https://pypi.org/simple python -c 'import tarok_engine as te; assert hasattr(te, "compute_gae"); assert hasattr(te, "CONTRACT_OFFSET")') 2>/dev/null; then \
 		echo "✅  Rust engine already installed."; \
 	else \
-		echo "==> Rust engine not found, building…"; \
+		echo "==> Rust engine missing/outdated, building…"; \
 		if ! command -v rustc >/dev/null 2>&1; then \
 			echo "==> Installing Rust toolchain…"; \
 			curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y; \
@@ -196,8 +198,10 @@ pipeline-large:
 MODEL  ?= backend/checkpoints/tarok_agent_latest.pt
 CONFIG ?= vs-3-bots
 EXTRA  ?=
-train-iterate:
+train-iterate: ensure-engine
 	source backend/.venv/bin/activate && \
+		TORCH_LIB_DIR=$$(python -c 'import pathlib, torch; print(pathlib.Path(torch.__file__).resolve().parent / "lib")') && \
+		export DYLD_FALLBACK_LIBRARY_PATH="$$TORCH_LIB_DIR:$$DYLD_FALLBACK_LIBRARY_PATH" && \
 		PYTHONPATH=backend/src python training-lab/train_and_evaluate.py \
 		--config training-lab/configs/$(CONFIG).yaml \
 		--checkpoint $(MODEL) \
@@ -206,11 +210,14 @@ train-iterate:
 # Train a brand-new randomly-named model from scratch
 #   make train-new
 #   make train-new CONFIG=self-play EXTRA="--iterations 20"
-train-new:
+train-new: ensure-engine
 	source backend/.venv/bin/activate && \
+		TORCH_LIB_DIR=$$(python -c 'import pathlib, torch; print(pathlib.Path(torch.__file__).resolve().parent / "lib")') && \
+		export DYLD_FALLBACK_LIBRARY_PATH="$$TORCH_LIB_DIR:$$DYLD_FALLBACK_LIBRARY_PATH" && \
 		PYTHONPATH=backend/src python training-lab/train_and_evaluate.py \
 		--config training-lab/configs/$(CONFIG).yaml \
 		--new \
+		--model-arch v3 \
 		$(EXTRA)
 
 # ──────────────────────────────────────────────
