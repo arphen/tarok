@@ -2,8 +2,12 @@
 
 from __future__ import annotations
 
+import gc
 import time
 from pathlib import Path
+
+import numpy as np
+import torch
 
 from training.adapters.ppo import load_human_experiences, merge_experiences
 from training.entities.iteration_result import IterationResult
@@ -38,19 +42,51 @@ class RunIteration:
         identity: ModelIdentity,
         ts_path: str,
         save_dir: Path,
+        prev_placement: float,
         iter_lr: float | None = None,
+        iter_imitation_coef: float | None = None,
+        seats_override: str | None = None,
+        run_benchmark: bool = True,
     ) -> tuple[IterationResult, dict]:
         # Self-play
-        self._presenter.on_selfplay_start(config)
+        effective_seats = seats_override if seats_override is not None else config.seats
+        self._presenter.on_selfplay_start(config, effective_seats=effective_seats)
         t0 = time.time()
         raw = self._selfplay.run(
-            ts_path, config.games, config.seats, config.explore_rate, config.concurrency,
+            ts_path, config.games, effective_seats, config.explore_rate, config.concurrency,
         )
-        nn_seats = config.nn_seat_indices
-        bot_seats = config.bot_seat_indices
+        # nn_seats / bot_seats derived from effective_seats;
+        # path-based tokens (.pt paths) are neither nn nor bot — PPO ignores their exps
+        seat_labels = [s.strip() for s in effective_seats.split(",")]
+        nn_seats = [i for i, s in enumerate(seat_labels) if s == "nn"]
+        bot_seats = [i for i, s in enumerate(seat_labels) if s in {"bot_v1", "bot_v3", "bot_v5", "bot_v6", "bot_m6"}]
         n_exps = len(raw["players"])
         sp_time = time.time() - t0
         self._presenter.on_selfplay_done(n_exps, sp_time)
+
+        # Compute per-seat mean scores as early as possible, then allow
+        # large self-play tensors to be released right after PPO.
+        scores_arr = raw.get("scores")  # shape (n_games, 4) or None
+        if scores_arr is not None and len(scores_arr) > 0:
+            scores_np = np.asarray(scores_arr)
+            ms = np.mean(scores_np, axis=0)
+            mean_scores: tuple[float, float, float, float] = (
+                float(ms[0]), float(ms[1]), float(ms[2]), float(ms[3])
+            )
+            # Per-game outcomes: compare learner (seat 0) vs each opponent seat
+            seat_outcomes: dict[int, tuple[int, int, int]] = {}
+            learner_scores = scores_np[:, 0]
+            for si in range(1, 4):
+                if seat_labels[si] == "nn":
+                    continue  # learner vs learner — skip
+                opp_scores = scores_np[:, si]
+                wins = int(np.sum(learner_scores > opp_scores))
+                losses = int(np.sum(learner_scores < opp_scores))
+                draws = int(np.sum(learner_scores == opp_scores))
+                seat_outcomes[si] = (wins, losses, draws)
+        else:
+            mean_scores = (0.0, 0.0, 0.0, 0.0)
+            seat_outcomes = {}
 
         # Merge human experiences (replay forever — every iteration)
         if config.human_data_dir:
@@ -61,26 +97,37 @@ class RunIteration:
         # PPO update
         if iter_lr is not None:
             self._ppo.set_lr(iter_lr)
-        self._presenter.on_ppo_start(config, iter_lr=iter_lr)
+        if iter_imitation_coef is not None:
+            self._ppo.set_imitation_coef(iter_imitation_coef)
+        self._presenter.on_ppo_start(config, iter_lr=iter_lr, iter_imitation_coef=iter_imitation_coef)
         t0 = time.time()
         metrics, new_weights = self._ppo.update(raw, nn_seats, bot_seats)
         ppo_time = time.time() - t0
         self._presenter.on_ppo_done(metrics, ppo_time)
+
+        # Release the heavy Rust self-play payload before benchmark/checkpoint I/O.
+        del raw
+        _release_python_and_device_memory()
 
         # Export updated model
         self._model.export_for_inference(
             new_weights, identity.hidden_size, identity.oracle_critic, identity.model_arch, ts_path,
         )
 
-        # Benchmark
-        self._presenter.on_benchmark_start(config)
-        t0 = time.time()
-        placement = self._benchmark.measure_placement(
-            ts_path, config.bench_games, config.effective_bench_seats,
-            config.concurrency, session_size=50,
-        )
-        bench_time = time.time() - t0
-        self._presenter.on_benchmark_done(placement, bench_time)
+        # Benchmark (optional, controlled by config checkpoints)
+        if run_benchmark:
+            self._presenter.on_benchmark_start(config)
+            t0 = time.time()
+            placement = self._benchmark.measure_placement(
+                ts_path, config.bench_games, config.effective_bench_seats,
+                config.concurrency, session_size=50,
+            )
+            bench_time = time.time() - t0
+            self._presenter.on_benchmark_done(placement, bench_time)
+        else:
+            placement = prev_placement
+            bench_time = 0.0
+            self._presenter.on_benchmark_skipped(iteration, config)
 
         # Save checkpoint
         ckpt_path = str(save_dir / f"iter_{iteration:03d}.pt")
@@ -100,5 +147,20 @@ class RunIteration:
             selfplay_time=sp_time,
             ppo_time=ppo_time,
             bench_time=bench_time,
+            seat_config_used=effective_seats,
+            mean_scores=mean_scores,
+            seat_outcomes=seat_outcomes,
         )
         return result, new_weights
+
+
+def _release_python_and_device_memory() -> None:
+    """Best-effort cleanup between large phases to limit memory growth."""
+    gc.collect()
+    if torch.cuda.is_available():
+        torch.cuda.empty_cache()
+    if hasattr(torch, "mps") and hasattr(torch.mps, "empty_cache"):
+        try:
+            torch.mps.empty_cache()
+        except Exception:
+            pass

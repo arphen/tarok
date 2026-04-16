@@ -44,7 +44,10 @@ class TerminalPresenter(PresenterPort):
 
     def on_training_plan(self, config: TrainingConfig) -> None:
         print(f"{'=' * 70}")
-        print(f" INITIAL BENCHMARK  ({config.bench_games} games, {config.effective_bench_seats}, greedy)")
+        if config.should_benchmark_initial():
+            print(f" INITIAL BENCHMARK  ({config.bench_games} games, {config.effective_bench_seats}, greedy)")
+        else:
+            print(" INITIAL BENCHMARK  (skipped by config)")
         print(f"{'=' * 70}")
 
     def on_initial_benchmark(self, placement: float, n_games: int, seats: str, elapsed: float) -> None:
@@ -62,7 +65,8 @@ class TerminalPresenter(PresenterPort):
         if config.lr_schedule != "constant":
             lr_info += f" → {config.effective_lr_min} ({config.lr_schedule})"
         print(f"   PPO: {config.ppo_epochs} epochs, batch_size={config.batch_size}, {lr_info}")
-        print(f"   Benchmark: {config.bench_games} games per iteration (greedy)")
+        checkpoints = ",".join(str(i) for i in config.benchmark_checkpoints)
+        print(f"   Benchmark: {config.bench_games} games at checkpoints [{checkpoints}] (0=initial)")
         print(f"{'=' * 70}")
         print()
 
@@ -77,15 +81,28 @@ class TerminalPresenter(PresenterPort):
         bar = _progress_bar(frac)
         print(f"─── Iteration {iteration}/{total}  {bar} {frac*100:.0f}%  {eta_str} ───")
 
-    def on_selfplay_start(self, config: TrainingConfig) -> None:
-        print(f"  [1/3] Self-play: {config.games} games ({config.seats}, explore={config.explore_rate})...", end="", flush=True)
+    def on_selfplay_start(self, config: TrainingConfig, effective_seats: str | None = None) -> None:
+        seats = effective_seats if effective_seats is not None else config.seats
+        print(f"  [1/3] Self-play: {config.games} games ({seats}, explore={config.explore_rate})...", end="", flush=True)
 
     def on_selfplay_done(self, n_experiences: int, elapsed: float) -> None:
         print(f" {n_experiences} exps in {_format_time(elapsed)}")
 
-    def on_ppo_start(self, config: TrainingConfig, iter_lr: float | None = None) -> None:
+    def on_ppo_start(
+        self,
+        config: TrainingConfig,
+        iter_lr: float | None = None,
+        iter_imitation_coef: float | None = None,
+    ) -> None:
         lr_tag = f", lr={iter_lr:.1e}" if iter_lr is not None and config.lr_schedule != "constant" else ""
-        print(f"  [2/3] PPO update ({config.ppo_epochs} epochs, batch={config.batch_size}{lr_tag})...", end="", flush=True)
+        il_tag = ""
+        if iter_imitation_coef is not None:
+            il_tag = f", il_coef={iter_imitation_coef:.4f}"
+        print(
+            f"  [2/3] PPO update ({config.ppo_epochs} epochs, batch={config.batch_size}{lr_tag}{il_tag})...",
+            end="",
+            flush=True,
+        )
 
     def on_ppo_done(self, metrics: dict[str, float], elapsed: float) -> None:
         loss = metrics["total_loss"]
@@ -102,6 +119,9 @@ class TerminalPresenter(PresenterPort):
     def on_benchmark_done(self, placement: float, elapsed: float) -> None:
         print(f" placement={placement:.3f} in {_format_time(elapsed)}")
 
+    def on_benchmark_skipped(self, iteration: int, config: TrainingConfig) -> None:
+        print(f"  [3/3] Benchmark: skipped at iteration {iteration} (checkpoints={list(config.benchmark_checkpoints)})")
+
     def on_iteration_done(self, prev_placement: float, curr_placement: float, elapsed: float) -> None:
         delta = curr_placement - prev_placement
         direction = "▲ better!" if delta < 0 else "▼ worse" if delta > 0 else "─ same"
@@ -115,6 +135,62 @@ class TerminalPresenter(PresenterPort):
         print()
         _print_summary(run)
         _print_next_steps(run)
+
+    def on_league_elo_updated(self, pool, elo_deltas: dict[str, float] | None = None) -> None:
+        entries = pool.entries
+        if not entries:
+            return
+        ranked = sorted(entries, key=lambda e: e.elo, reverse=True)
+        print("  [league] Elo standings:")
+        for idx, e in enumerate(ranked, start=1):
+            delta = 0.0
+            if elo_deltas is not None:
+                delta = elo_deltas.get(e.opponent.name, 0.0)
+            print(
+                f"    {idx:>2}. {e.opponent.name:<20} "
+                f"{e.elo:>7.1f} ({delta:+.1f})  "
+                f"wr={e.win_rate:.2f} gp={e.games_played}"
+            )
+
+    def on_league_snapshot_added(self, iteration: int, path: str) -> None:
+        print(f"  [league] Snapshot added: iter_{iteration:03d} → {path}")
+
+    def on_memory_stats(
+        self,
+        iteration: int,
+        stats: dict[str, float],
+        deltas: dict[str, float] | None = None,
+    ) -> None:
+        del iteration
+
+        def _fmt(name: str, with_delta: bool = True) -> str:
+            v = stats.get(name)
+            if v is None:
+                return ""
+            if not with_delta or deltas is None or name not in deltas:
+                return f"{name}={v:.0f}MB"
+            d = deltas[name]
+            return f"{name}={v:.0f}MB ({d:+.0f})"
+
+        parts = [
+            _fmt("rss_mb"),
+            _fmt("footprint_mb"),
+            _fmt("compressed_mb"),
+            _fmt("py_heap_mb"),
+            _fmt("py_heap_peak_mb", with_delta=False),
+        ]
+        if "mps_alloc_mb" in stats:
+            parts.append(_fmt("mps_alloc_mb"))
+        if "mps_driver_mb" in stats:
+            parts.append(_fmt("mps_driver_mb"))
+        if "cuda_alloc_mb" in stats:
+            parts.append(_fmt("cuda_alloc_mb"))
+        if "cuda_reserved_mb" in stats:
+            parts.append(_fmt("cuda_reserved_mb"))
+
+        parts = [p for p in parts if p]
+        if parts:
+            print("  [mem] " + " | ".join(parts))
 
 
 def _print_summary(run: TrainingRun) -> None:
@@ -138,14 +214,11 @@ def _print_summary(run: TrainingRun) -> None:
     overall_delta = placements[-1] - placements[0]
     direction = "IMPROVED" if overall_delta < 0 else "REGRESSED" if overall_delta > 0 else "UNCHANGED"
     print(f"  Overall: {placements[0]:.3f} → {placements[-1]:.3f}  ({overall_delta:+.3f})  {direction}")
-    print(f"  Best: {run.best_placement:.3f} at iteration {run.best_iteration}")
+    print(f"  Best placement: {run.best_placement:.3f} at iteration {run.best_iteration}")
+    print(f"  Best loss:      {run.best_loss:.4f} at iteration {run.best_loss_iteration}")
     print()
 
-    if run.improved:
-        print(f"  Best model saved to {run.config.save_dir}/best.pt")
-    else:
-        print(f"  Initial model was best — no improvement achieved.")
-        print(f"  Consider: more iterations, higher games/iter, lower LR, or different explore_rate.")
+    print(f"  Best model saved to {run.config.save_dir}/best.pt (metric={run.config.best_model_metric})")
 
     print()
     avg_iter = sum(r.total_time for r in results) / len(results) if results else 0

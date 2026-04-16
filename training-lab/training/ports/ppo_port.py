@@ -18,5 +18,9 @@ class PPOPort(ABC):
         """Update the optimizer learning rate for the next update."""
 
     @abstractmethod
+    def set_imitation_coef(self, coef: float) -> None:
+        """Update the imitation/oracle-distillation coefficient for next update."""
+
+    @abstractmethod
     def update(self, raw_experiences: dict[str, Any], nn_seats: list[int], bot_seats: list[int]) -> tuple[dict[str, float], dict]:
         """Run PPO update on nn_seats + imitation on bot_seats. Return (metrics_dict, new_weights)."""

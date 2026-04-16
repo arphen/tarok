@@ -191,12 +191,130 @@ hyperparameters, and benchmark settings:
 | `vs-1-bot` | 3× NN vs 1× bot_v5 | Late-stage training when NN already beats bots. |
 | `vs-3-v6` | NN vs 3× bot_v6 | Harder opponents. Use when v5 is too easy. |
 | `self-play` | 4× NN | Pure self-play. Use once NN has surpassed all bots. |
+| `ec2-g5-1h` | 4× NN + league bots | 1-hour CUDA-oriented self-play run for EC2 g5.2xlarge. |
 
 You can override any YAML setting via the `EXTRA` variable:
 
 ```bash
 make train-iterate EXTRA="--seats nn,bot_v6,bot_v5,bot_v5 --explore-rate 0.15"
 ```
+
+### Remote Training on EC2 Spot
+
+The repo includes a deployment script plus Makefile wrappers for launching a
+`g5.2xlarge` spot instance, syncing the repo, bootstrapping the backend, and
+starting training inside a remote `tmux` session.
+
+You can run this in any AWS region where all of the following are true:
+
+1. `g5` instances are offered in that region and in the subnet/AZ you choose.
+2. Your account has enough vCPU / GPU quota for `g5.2xlarge` spot requests there.
+3. You pick a region-valid Ubuntu GPU AMI.
+4. Your key pair, security group, subnet, and instance profile exist in that same region.
+
+For this workload, `g5.2xlarge` is a good default. It gives you 1× A10G with 24 GB VRAM,
+which is enough for the `ec2-g5-1h` config and materially faster than M3/MPS training.
+It is not the only valid choice, but it is a sensible first target because the script and
+config are tuned around it.
+
+One-time setup on your Mac:
+
+```bash
+brew install awscli
+aws configure
+aws s3 mb s3://my-tarok-checkpoints
+```
+
+If you already use AWS CLI profiles, prefer putting `AWS_PROFILE` and
+`AWS_DEFAULT_REGION` in a local `.env` file instead of storing raw access keys.
+The EC2 instance itself should use an IAM instance profile, so your long-lived AWS
+secrets do not need to be copied to the machine.
+
+Example `.env`:
+
+```bash
+AWS_PROFILE=default
+AWS_DEFAULT_REGION=eu-central-1
+
+EC2_KEY=my-keypair
+EC2_SG=sg-0123456789abcdef0
+EC2_BUCKET=s3://my-tarok-checkpoints
+EC2_SUBNET=subnet-0123456789abcdef0
+EC2_INSTANCE_PROFILE=ec2-s3-tarok
+EC2_INSTANCE_TYPE=g5.2xlarge
+EC2_SPOT_PRICE=1.20
+TAROK_EC2_AMI=auto
+
+MODEL=checkpoints/Petra_Novak/iter_090.pt
+CONFIG=ec2-g5-1h
+```
+
+`.env` is ignored by git, and the repo includes `.env.example` as a template.
+
+You also need:
+
+1. An EC2 keypair whose PEM file is in `~/.ssh/<key>.pem`
+2. A security group that allows SSH from your IP
+3. An instance profile named `ec2-s3-tarok` with S3 read/write access to your bucket
+
+Launch a 1-hour self-play run:
+
+```bash
+make ec2-train \
+  EC2_KEY=my-keypair \
+  EC2_SG=sg-0123456789abcdef0 \
+  EC2_BUCKET=s3://my-tarok-checkpoints \
+  MODEL=checkpoints/Petra_Novak/iter_090.pt \
+  CONFIG=ec2-g5-1h
+```
+
+Or, if you filled out `.env`, just run:
+
+```bash
+make ec2-train
+```
+
+The script prints the instance ID and public IP when training starts. Use those
+with the monitoring targets below.
+
+### Where To Get Each Value In AWS UI
+
+1. `AWS_DEFAULT_REGION`: top-right region selector in the AWS console.
+2. `EC2_KEY`: EC2 → Network & Security → Key Pairs. Create or import one; use the key pair name.
+3. `EC2_SG`: EC2 → Network & Security → Security Groups. Create one with inbound TCP 22 from your public IP; use the security group ID.
+4. `EC2_BUCKET`: S3 → Buckets. Create a bucket; use `s3://bucket-name`.
+5. `EC2_SUBNET`: VPC → Subnets. Choose a public subnet in an AZ where `g5` has capacity, or leave it unset to use the default VPC path.
+6. `EC2_INSTANCE_PROFILE`: IAM → Roles. Create a role for EC2 with S3 read/write permissions, then use that role / instance profile name.
+7. `TAROK_EC2_AMI`: EC2 → AMIs. You can leave this as `auto`, or explicitly pick the latest Deep Learning GPU Ubuntu AMI for your region.
+8. `MODEL`: local checkpoint path on your machine.
+
+Two practical rules:
+
+1. Keep the S3 bucket in the same region as the instance unless you have a reason not to.
+2. Cheapest region only helps if `g5` spot capacity is actually available there when you launch.
+
+### EC2 Monitoring Targets
+
+```bash
+# Attach to the remote tmux session for full live output
+make ec2-attach EC2_KEY=my-keypair EC2_IP=1.2.3.4
+
+# Follow the tee'd training log without attaching to tmux
+make ec2-logs EC2_KEY=my-keypair EC2_IP=1.2.3.4
+
+# Pull checkpoints synced to S3 back to your machine
+make ec2-pull EC2_BUCKET=s3://my-tarok-checkpoints
+
+# Terminate the instance when the run is finished
+make ec2-terminate INSTANCE_ID=i-0123456789abcdef0
+```
+
+Operational notes:
+
+1. Training runs inside `tmux`, so detaching with `Ctrl-b d` does not stop the job.
+2. The deploy script writes `~/tarok/train.log` on the instance via `tee`.
+3. A cron job syncs `~/tarok/checkpoints/` to `s3://.../checkpoints/` every 5 minutes.
+4. `training-lab/configs/ec2-g5-1h.yaml` is tuned for the A10G GPU on `g5.2xlarge`.
 
 ### Training Output
 

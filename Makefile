@@ -1,9 +1,23 @@
+ifneq (,$(wildcard .env))
+include .env
+export
+endif
+
 .PHONY: run backend frontend test train clean install test-e2e setup setup-hooks \
 	test-backend test-frontend test-frontend-unit test-coverage check-coverage test-lookahead \
 	pipeline imitation-pretrain generate-expert-data build-engine ensure-engine kill stop \
-	train-with-humans
+	train-with-humans ec2-train ec2-attach ec2-logs ec2-pull ec2-terminate
 
 UV_RUN = cd backend && PYTHONPATH=src:../model/src uv run --default-index https://pypi.org/simple
+EC2_KEY ?=
+EC2_SG ?=
+EC2_BUCKET ?=
+EC2_IP ?=
+INSTANCE_ID ?=
+EC2_SUBNET ?=
+EC2_INSTANCE_TYPE ?=
+EC2_SPOT_PRICE ?=
+EC2_INSTANCE_PROFILE ?=
 
 # ──────────────────────────────────────────────
 # Bootstrap — run this once on a fresh Mac
@@ -237,6 +251,50 @@ train-new: ensure-engine
 		--new \
 		--model-arch v4 \
 		$(EXTRA)
+
+# Launch a g5.2xlarge spot instance, deploy the repo, and start tmux-based training.
+# Required vars:
+#   EC2_KEY=my-keypair EC2_SG=sg-... EC2_BUCKET=s3://... MODEL=checkpoints/...pt
+# Optional vars:
+#   CONFIG=ec2-g5-1h AWS_DEFAULT_REGION=us-east-1 EC2_SUBNET=subnet-... \
+#   EC2_INSTANCE_TYPE=g5.2xlarge EC2_SPOT_PRICE=1.20 EC2_INSTANCE_PROFILE=ec2-s3-tarok
+ec2-train:
+	@test -n "$(EC2_KEY)" || (echo "EC2_KEY is required" && exit 1)
+	@test -n "$(EC2_SG)" || (echo "EC2_SG is required" && exit 1)
+	@test -n "$(EC2_BUCKET)" || (echo "EC2_BUCKET is required" && exit 1)
+	@test -n "$(MODEL)" || (echo "MODEL is required" && exit 1)
+	./scripts/ec2-train.sh \
+		--key "$(EC2_KEY)" \
+		--sg "$(EC2_SG)" \
+		--bucket "$(EC2_BUCKET)" \
+		--model "$(MODEL)" \
+		--config "$(CONFIG)" \
+		$(if $(EC2_SUBNET),--subnet "$(EC2_SUBNET)") \
+		$(if $(EC2_INSTANCE_TYPE),--instance-type "$(EC2_INSTANCE_TYPE)") \
+		$(if $(EC2_SPOT_PRICE),--spot-price "$(EC2_SPOT_PRICE)") \
+		$(if $(EC2_INSTANCE_PROFILE),--instance-profile "$(EC2_INSTANCE_PROFILE)")
+
+# Attach to the remote tmux session for live training output.
+ec2-attach:
+	@test -n "$(EC2_KEY)" || (echo "EC2_KEY is required" && exit 1)
+	@test -n "$(EC2_IP)" || (echo "EC2_IP is required" && exit 1)
+	ssh -i ~/.ssh/$(EC2_KEY).pem ubuntu@$(EC2_IP) -t "tmux attach -t train"
+
+# Follow the remote tee'd training log without attaching to tmux.
+ec2-logs:
+	@test -n "$(EC2_KEY)" || (echo "EC2_KEY is required" && exit 1)
+	@test -n "$(EC2_IP)" || (echo "EC2_IP is required" && exit 1)
+	ssh -i ~/.ssh/$(EC2_KEY).pem ubuntu@$(EC2_IP) "tail -f ~/tarok/train.log"
+
+# Pull remote checkpoints from S3 back to the local checkpoints folder.
+ec2-pull:
+	@test -n "$(EC2_BUCKET)" || (echo "EC2_BUCKET is required" && exit 1)
+	aws s3 sync "$(EC2_BUCKET)/checkpoints/" checkpoints/ec2-run/
+
+# Terminate the EC2 instance created by ec2-train.
+ec2-terminate:
+	@test -n "$(INSTANCE_ID)" || (echo "INSTANCE_ID is required" && exit 1)
+	./scripts/ec2-train.sh --terminate "$(INSTANCE_ID)"
 
 # ──────────────────────────────────────────────
 # Build

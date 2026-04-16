@@ -96,6 +96,19 @@ Examples:
     parser.add_argument("--iterations", "-n", type=int, default=None)
     parser.add_argument("--games", "-g", type=int, default=None)
     parser.add_argument("--bench-games", type=int, default=None)
+    parser.add_argument(
+        "--benchmark-checkpoints",
+        type=str,
+        default=None,
+        help="Comma-separated checkpoints to benchmark (0=initial), e.g. 0,4,7",
+    )
+    parser.add_argument(
+        "--best-model-metric",
+        type=str,
+        choices=["loss", "placement"],
+        default=None,
+        help="Metric used to choose best.pt",
+    )
     parser.add_argument("--ppo-epochs", type=int, default=None)
     parser.add_argument("--batch-size", type=int, default=None)
     parser.add_argument("--lr", type=float, default=None)
@@ -115,6 +128,32 @@ Examples:
                         help="Minimum LR for cosine/linear schedules (default: lr / 10)")
     parser.add_argument("--human-data", type=str, default=None,
                         help="Directory of human-play JSONL files to mix into every PPO update")
+    parser.add_argument(
+        "--imitation-schedule",
+        type=str,
+        default=None,
+        choices=["constant", "linear", "cosine"],
+        help="Schedule for oracle distillation coefficient",
+    )
+    parser.add_argument(
+        "--imitation-coef-min",
+        type=float,
+        default=None,
+        help="Final imitation coefficient for linear/cosine schedules",
+    )
+    parser.add_argument(
+        "--memory-telemetry",
+        type=str,
+        choices=["true", "false"],
+        default=None,
+        help="Enable per-iteration memory telemetry output",
+    )
+    parser.add_argument(
+        "--memory-telemetry-every",
+        type=int,
+        default=None,
+        help="Print memory telemetry every N iterations",
+    )
     return parser.parse_args()
 
 
@@ -130,6 +169,12 @@ def main() -> None:
         "iterations": args.iterations,
         "games": args.games,
         "bench_games": getattr(args, "bench_games", None),
+        "benchmark_checkpoints": (
+            [int(s.strip()) for s in args.benchmark_checkpoints.split(",")]
+            if getattr(args, "benchmark_checkpoints", None)
+            else None
+        ),
+        "best_model_metric": getattr(args, "best_model_metric", None),
         "ppo_epochs": getattr(args, "ppo_epochs", None),
         "batch_size": getattr(args, "batch_size", None),
         "lr": args.lr,
@@ -140,6 +185,14 @@ def main() -> None:
         "concurrency": args.concurrency,
         "model_arch": getattr(args, "model_arch", None),
         "human_data_dir": _resolve_path(getattr(args, "human_data", None)),
+        "imitation_schedule": getattr(args, "imitation_schedule", None),
+        "imitation_coef_min": getattr(args, "imitation_coef_min", None),
+        "memory_telemetry": (
+            True if args.memory_telemetry == "true"
+            else False if args.memory_telemetry == "false"
+            else None
+        ),
+        "memory_telemetry_every": getattr(args, "memory_telemetry_every", None),
     }
     config_path = _resolve_path(args.config)
     config = container.resolve_config().resolve(cli_overrides, config_path)
@@ -168,6 +221,8 @@ def main() -> None:
                 iterations=config.iterations,
                 games=config.games,
                 bench_games=config.bench_games,
+                benchmark_checkpoints=config.benchmark_checkpoints,
+                best_model_metric=config.best_model_metric,
                 ppo_epochs=config.ppo_epochs,
                 batch_size=config.batch_size,
                 lr=config.lr,
@@ -178,8 +233,13 @@ def main() -> None:
                 save_dir=config.save_dir,
                 concurrency=config.concurrency,
                 imitation_coef=config.imitation_coef,
+                imitation_schedule=config.imitation_schedule,
+                imitation_coef_min=config.imitation_coef_min,
+                memory_telemetry=config.memory_telemetry,
+                memory_telemetry_every=config.memory_telemetry_every,
                 model_arch=identity.model_arch,
                 human_data_dir=config.human_data_dir,
+                league=config.league,
             )
         elif config.model_arch != identity.model_arch:
             print(
@@ -203,6 +263,8 @@ def main() -> None:
         iterations=config.iterations,
         games=config.games,
         bench_games=config.bench_games,
+        benchmark_checkpoints=config.benchmark_checkpoints,
+        best_model_metric=config.best_model_metric,
         ppo_epochs=config.ppo_epochs,
         batch_size=config.batch_size,
         lr=config.lr,
@@ -213,8 +275,13 @@ def main() -> None:
         save_dir=save_dir,
         concurrency=config.concurrency,
         imitation_coef=config.imitation_coef,
+        imitation_schedule=config.imitation_schedule,
+        imitation_coef_min=config.imitation_coef_min,
+        memory_telemetry=config.memory_telemetry,
+        memory_telemetry_every=config.memory_telemetry_every,
         model_arch=config.model_arch,
         human_data_dir=config.human_data_dir,
+        league=config.league,
     )
 
     device = _detect_device(config.device)

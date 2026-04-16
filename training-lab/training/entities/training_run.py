@@ -32,6 +32,19 @@ class TrainingRun:
         return p.index(min(p))
 
     @property
+    def best_loss(self) -> float:
+        if not self.results:
+            return float("inf")
+        return min(r.loss for r in self.results)
+
+    @property
+    def best_loss_iteration(self) -> int:
+        if not self.results:
+            return 0
+        best = min(self.results, key=lambda r: r.loss)
+        return best.iteration
+
+    @property
     def total_time(self) -> float:
         return self.end_time - self.start_time
 

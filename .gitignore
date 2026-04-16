@@ -3,6 +3,8 @@
 *.log
 *.sqlite
 .env
+.env.*
+!.env.example
 .hypothesis/
 checkpoints/
 !backend/checkpoints/hall_of_fame/pinned/

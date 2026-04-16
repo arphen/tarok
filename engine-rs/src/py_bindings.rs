@@ -769,6 +769,10 @@ fn run_self_play(
         None
     };
 
+    // Cache for path-based NN opponents (loaded once per unique path)
+    let mut path_players: std::collections::HashMap<String, Arc<dyn BatchPlayer>> = std::collections::HashMap::new();
+
+    let mut bot_v1: Option<Arc<dyn BatchPlayer>> = None;
     let mut bot_v3: Option<Arc<dyn BatchPlayer>> = None;
     let mut bot_v5: Option<Arc<dyn BatchPlayer>> = None;
     let mut bot_v6: Option<Arc<dyn BatchPlayer>> = None;
@@ -778,6 +782,12 @@ fn run_self_play(
     for &label in &seat_labels {
         let player: Arc<dyn BatchPlayer> = match label {
             "nn" => nn_player.as_ref().unwrap().clone(),
+            "bot_v1" => {
+                if bot_v1.is_none() {
+                    bot_v1 = Some(Arc::new(StockSkisPlayer::v1()));
+                }
+                bot_v1.as_ref().unwrap().clone()
+            }
             "bot_v3" => {
                 if bot_v3.is_none() {
                     bot_v3 = Some(Arc::new(StockSkisPlayer::v3()));
@@ -802,9 +812,21 @@ fn run_self_play(
                 }
                 bot_m6.as_ref().unwrap().clone()
             }
+            path if path.ends_with(".pt") || path.contains('/') || path.contains('\\') => {
+                // Path-based frozen NN checkpoint — cached by path
+                if !path_players.contains_key(path) {
+                    let opp_player = Arc::new(NeuralNetPlayer::new(
+                        path,
+                        tch::Device::Cpu,
+                        0.0, // frozen opponents play greedily
+                    ));
+                    path_players.insert(path.to_string(), opp_player);
+                }
+                path_players[path].clone()
+            }
             other => {
                 return Err(pyo3::exceptions::PyValueError::new_err(
-                    format!("Unknown seat type '{}'. Use 'nn', 'bot_v3', 'bot_v5', 'bot_v6', or 'bot_m6'.", other)
+                    format!("Unknown seat type '{}'. Use 'nn', 'bot_v1', 'bot_v3', 'bot_v5', 'bot_v6', 'bot_m6', or a .pt path.", other)
                 ));
             }
         };

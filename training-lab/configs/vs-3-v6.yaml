@@ -10,8 +10,10 @@ seats: "nn,bot_v6,bot_v6,bot_v6"
 bench_seats: "nn,bot_v6,bot_v6,bot_v6"
 
 iterations: 10
-games: 10000
-bench_games: 10000
+games: 3000
+bench_games: 3000
+benchmark_checkpoints: [0, 4, 7]
+best_model_metric: "loss"
 
 ppo_epochs: 6
 batch_size: 8192

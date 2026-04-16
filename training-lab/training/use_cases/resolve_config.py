@@ -4,8 +4,31 @@ from __future__ import annotations
 
 from typing import Any
 
+from training.entities.league import LeagueConfig, LeagueOpponent
 from training.entities.training_config import TrainingConfig
 from training.ports.config_port import ConfigPort
+
+
+def _parse_league(raw: dict[str, Any]) -> LeagueConfig | None:
+    """Parse the optional ``league:`` block from a YAML dict."""
+    if not raw:
+        return None
+    opponents = tuple(
+        LeagueOpponent(
+            name=o["name"],
+            type=o["type"],
+            path=o.get("path"),
+        )
+        for o in raw.get("opponents", [])
+    )
+    return LeagueConfig(
+        enabled=raw.get("enabled", True),
+        opponents=opponents,
+        min_nn_per_game=raw.get("min_nn_per_game", 1),
+        sampling=raw.get("sampling", "pfsp"),
+        pfsp_alpha=raw.get("pfsp_alpha", 1.5),
+        snapshot_interval=raw.get("snapshot_interval", 5),
+    )
 
 
 class ResolveConfig:
@@ -19,12 +42,22 @@ class ResolveConfig:
 
         merged = {**base, **{k: v for k, v in cli.items() if v is not None}}
 
+        league = _parse_league(merged.get("league") or {})
+
+        raw_bench_checkpoints = merged.get("benchmark_checkpoints", [0, 4, 7])
+        bench_checkpoints = tuple(sorted({int(x) for x in raw_bench_checkpoints if int(x) >= 0}))
+        metric = str(merged.get("best_model_metric", "loss")).strip().lower()
+        if metric not in {"loss", "placement"}:
+            metric = "loss"
+
         return TrainingConfig(
             seats=merged.get("seats", "nn,bot_v5,bot_v5,bot_v5"),
             bench_seats=merged.get("bench_seats"),
             iterations=merged.get("iterations", 10),
             games=merged.get("games", 10_000),
-            bench_games=merged.get("bench_games", 10_000),
+            bench_games=merged.get("bench_games", 3_000),
+            benchmark_checkpoints=bench_checkpoints,
+            best_model_metric=metric,
             ppo_epochs=merged.get("ppo_epochs", 6),
             batch_size=merged.get("batch_size", 8192),
             lr=merged.get("lr", 3e-4),
@@ -35,6 +68,11 @@ class ResolveConfig:
             save_dir=merged.get("save_dir", "checkpoints/training_run"),
             concurrency=merged.get("concurrency", 128),
             imitation_coef=merged.get("imitation_coef", 0.3),
+            imitation_schedule=merged.get("imitation_schedule", "constant"),
+            imitation_coef_min=merged.get("imitation_coef_min", 0.0),
+            memory_telemetry=bool(merged.get("memory_telemetry", True)),
+            memory_telemetry_every=max(1, int(merged.get("memory_telemetry_every", 1))),
             model_arch=merged.get("model_arch", "v4"),
             human_data_dir=merged.get("human_data_dir"),
+            league=league,
         )

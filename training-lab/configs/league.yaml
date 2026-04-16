@@ -1,0 +1,43 @@
+# League play: learner vs a mix of frozen NN checkpoints and heuristic bots
+#
+# Each iteration the 3 opponent seats are sampled from the league pool using
+# PFSP weighting (harder opponents = more often selected).  Every
+# `snapshot_interval` iterations the current checkpoint is auto-added to the
+# pool so the learner plays historical versions of itself.
+#
+# Usage:
+#   make train-iterate CONFIG=league MODEL=path/to/model.pt
+
+seats: "nn,bot_v5,bot_v5,bot_v5"       # fallback only (overridden by league sampler)
+bench_seats: "nn,bot_v5,bot_v5,bot_v5"
+
+iterations: 30
+games: 10000
+bench_games: 10000
+
+ppo_epochs: 6
+batch_size: 8192
+lr: 0.0003
+explore_rate: 0.10
+
+concurrency: 128
+device: auto
+
+league:
+  enabled: true
+  min_nn_per_game: 2        # seat 0 (learner) + at least 1 more nn per game
+  sampling: pfsp            # uniform | pfsp | hardest
+  pfsp_alpha: 1.5
+  snapshot_interval: 5      # auto-snapshot every N iterations
+
+  opponents:
+    - name: AnaVesel
+      type: nn_checkpoint
+      path: checkpoints/Ana_Vesel/_current.pt
+    - name: PetraGolob
+      type: nn_checkpoint
+      path: checkpoints/Petra_Golob/_current.pt
+    - name: StockSkisV5
+      type: bot_v5
+    - name: StockSkisM6
+      type: bot_m6

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import gc
 import shutil
 
 import torch
@@ -28,7 +29,10 @@ class TorchModelAdapter(ModelPort):
         if model_arch != "v4":
             raise ValueError(f"Unsupported model_arch={model_arch}. Only 'v4' is supported.")
         model = TarokNetV4(hidden_size=hidden_size, oracle_critic=oracle)
-        return model.state_dict()
+        state = model.state_dict()
+        del model
+        _cleanup_torch_native_memory()
+        return state
 
     def export_for_inference(self, weights: dict, hidden_size: int, oracle: bool, model_arch: str, path: str) -> None:
         if model_arch != "v4":
@@ -36,21 +40,28 @@ class TorchModelAdapter(ModelPort):
         model = TarokNetV4(hidden_size=hidden_size, oracle_critic=oracle)
         model.load_state_dict(weights)
         model.eval()
-        _export_torchscript(model, path)
+        try:
+            _export_torchscript(model, path)
+        finally:
+            del model
+            _cleanup_torch_native_memory()
 
     def save_checkpoint(
         self, weights: dict, hidden_size: int, oracle: bool, model_arch: str,
         iteration: int, loss: float, placement: float, path: str,
     ) -> None:
-        torch.save({
-            "model_state_dict": weights,
-            "hidden_size": hidden_size,
-            "oracle_critic": oracle,
-            "model_arch": model_arch,
-            "iteration": iteration,
-            "loss": loss,
-            "placement": placement,
-        }, path)
+        try:
+            torch.save({
+                "model_state_dict": weights,
+                "hidden_size": hidden_size,
+                "oracle_critic": oracle,
+                "model_arch": model_arch,
+                "iteration": iteration,
+                "loss": loss,
+                "placement": placement,
+            }, path)
+        finally:
+            _cleanup_torch_native_memory()
 
     def copy_best(self, src: str, dst: str) -> None:
         shutil.copy2(src, dst)
@@ -78,6 +89,25 @@ def _export_torchscript(model: TarokNetV4, path: str) -> None:
 
     w = _Wrapper(model)
     w.eval()
-    with torch.no_grad():
-        traced = torch.jit.trace(w, torch.randn(1, 450), check_trace=False)
-    traced.save(path)
+    example = torch.randn(1, 450)
+    traced = None
+    try:
+        with torch.inference_mode():
+            traced = torch.jit.trace(w, example, check_trace=False)
+        traced.save(path)
+    finally:
+        del traced
+        del example
+        del w
+        _cleanup_torch_native_memory()
+
+
+def _cleanup_torch_native_memory() -> None:
+    gc.collect()
+    if torch.cuda.is_available():
+        torch.cuda.empty_cache()
+    if hasattr(torch, "mps") and hasattr(torch.mps, "empty_cache"):
+        try:
+            torch.mps.empty_cache()
+        except Exception:
+            pass
