@@ -60,11 +60,14 @@ class UpdateLeagueElo:
             # 0.0 = learner won all, draws count as 0.5 each.
             opp_outcome = (opp_wins + 0.5 * draws) / n_games
 
+            learner_outcome = 1.0 - opp_outcome
+
             for entry in entries_for_token:
                 entry.games_played += n_games
-                entry.wins += opp_wins
+                entry.learner_outplaces += learner_wins
 
                 opp_elo = entry.elo
-                learner_elo_ref = 1500.0
-                e_opp = 1.0 - _elo_expected(learner_elo_ref, opp_elo)
+                e_learner = _elo_expected(pool.learner_elo, opp_elo)
+                e_opp = 1.0 - e_learner
+                pool.learner_elo += _K * (learner_outcome - e_learner)
                 entry.elo += _K * (opp_outcome - e_opp)

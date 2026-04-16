@@ -55,14 +55,16 @@ class RunIteration:
         raw = self._selfplay.run(
             ts_path, config.games, effective_seats, config.explore_rate, config.concurrency,
         )
-        # nn_seats / bot_seats derived from effective_seats;
-        # path-based tokens (.pt paths) are neither nn nor bot — PPO ignores their exps
+        # Only learn from seats labelled "nn" (the learner).  Frozen snapshots
+        # (path-based .pt seats) and heuristic bots are excluded — their log_prob
+        # and value come from a different model.
         seat_labels = [s.strip() for s in effective_seats.split(",")]
         nn_seats = [i for i, s in enumerate(seat_labels) if s == "nn"]
-        bot_seats = [i for i, s in enumerate(seat_labels) if s in {"bot_v1", "bot_v3", "bot_v5", "bot_v6", "bot_m6"}]
-        n_exps = len(raw["players"])
+        players_np = np.asarray(raw["players"])
+        n_total = len(players_np)
+        n_learner = int(sum(np.sum(players_np == s) for s in nn_seats))
         sp_time = time.time() - t0
-        self._presenter.on_selfplay_done(n_exps, sp_time)
+        self._presenter.on_selfplay_done(n_total, n_learner, sp_time)
 
         # Compute per-seat mean scores as early as possible, then allow
         # large self-play tensors to be released right after PPO.
@@ -101,7 +103,7 @@ class RunIteration:
             self._ppo.set_imitation_coef(iter_imitation_coef)
         self._presenter.on_ppo_start(config, iter_lr=iter_lr, iter_imitation_coef=iter_imitation_coef)
         t0 = time.time()
-        metrics, new_weights = self._ppo.update(raw, nn_seats, bot_seats)
+        metrics, new_weights = self._ppo.update(raw, nn_seats)
         ppo_time = time.time() - t0
         self._presenter.on_ppo_done(metrics, ppo_time)
 
@@ -143,7 +145,7 @@ class RunIteration:
             policy_loss=metrics["policy_loss"],
             value_loss=metrics["value_loss"],
             entropy=metrics["entropy"],
-            n_experiences=n_exps,
+            n_experiences=n_total,
             selfplay_time=sp_time,
             ppo_time=ppo_time,
             bench_time=bench_time,

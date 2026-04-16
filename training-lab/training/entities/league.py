@@ -45,19 +45,21 @@ class LeaguePoolEntry:
     opponent: LeagueOpponent
     elo: float = 1500.0
     games_played: int = 0
-    wins: int = 0
+    learner_outplaces: int = 0  # games where learner scored above this opponent
 
     @property
-    def win_rate(self) -> float:
+    def outplace_rate(self) -> float:
+        """Fraction of games where the learner placed above this opponent."""
         if self.games_played == 0:
             return 0.5
-        return self.wins / self.games_played
+        return self.learner_outplaces / self.games_played
 
 
 @dataclass
 class LeaguePool:
     config: LeagueConfig
     entries: list[LeaguePoolEntry] = field(default_factory=list)
+    learner_elo: float = 1500.0
 
     def __post_init__(self) -> None:
         for opp in self.config.opponents:
@@ -66,7 +68,7 @@ class LeaguePool:
     def add_snapshot(self, name: str, path: str) -> None:
         """Register an auto-generated checkpoint snapshot as a new pool entry."""
         opp = LeagueOpponent(name=name, type="nn_checkpoint", path=path)
-        self.entries.append(LeaguePoolEntry(opponent=opp))
+        self.entries.append(LeaguePoolEntry(opponent=opp, elo=self.learner_elo))
 
     def sampling_weights(self) -> list[float]:
         """Return a weight per entry for weighted random sampling."""

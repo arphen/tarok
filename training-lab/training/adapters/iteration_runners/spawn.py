@@ -92,8 +92,8 @@ class _QueuePresenter(PresenterPort):
     def on_selfplay_start(self, config, effective_seats=None):
         self._send("on_selfplay_start", config, effective_seats=effective_seats)
 
-    def on_selfplay_done(self, n_experiences, elapsed):
-        self._send("on_selfplay_done", n_experiences, elapsed)
+    def on_selfplay_done(self, n_total, n_learner, elapsed):
+        self._send("on_selfplay_done", n_total, n_learner, elapsed)
 
     def on_ppo_start(self, config, iter_lr=None, iter_imitation_coef=None):
         self._send("on_ppo_start", config, iter_lr=iter_lr, iter_imitation_coef=iter_imitation_coef)
