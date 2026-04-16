@@ -57,16 +57,22 @@ struct InFlightGame {
     initial_hands: [CardSet; 4],
     initial_talon: CardSet,
     trace: GameTrace,
+    // Reusable scratch buffers — allocated once per slot, filled in-place at each
+    // decision point, then moved into RawExperience via replace(). This keeps the
+    // per-decision heap allocation count to one (the fresh replacement buffer).
+    state_buf: Vec<f32>,
+    oracle_state_buf: Vec<f32>,
+    legal_mask: Vec<f32>,
 }
 
 /// Internal tracking for a pending decision.
+/// The actual state/oracle/mask buffers live in the owning `InFlightGame` slot
+/// and are accessed in Steps 2 and 3 via `pd.slot`.
 struct Pending {
     slot: usize,
     player: u8,
     decision_type: DecisionType,
     game_mode: u8,
-    state_buf: Vec<f32>,
-    legal_mask: Vec<f32>,
 }
 
 // -----------------------------------------------------------------------
@@ -93,6 +99,7 @@ pub struct GameTrace {
 
 pub struct RawExperience {
     pub state: Vec<f32>,
+    pub oracle_state: Vec<f32>,
     pub action: u16,
     pub log_prob: f32,
     pub value: f32,
@@ -171,6 +178,12 @@ impl SelfPlayRunner {
             }
         }
 
+        // Persistent per-unique-player buffers reused each loop iteration.
+        // Avoids allocating a new Vec on every dispatch round.
+        let n_unique = unique_players.len();
+        let mut ctx_bufs: Vec<Vec<DecisionContext>> = (0..n_unique).map(|_| Vec::new()).collect();
+        let mut idx_bufs: Vec<Vec<usize>> = (0..n_unique).map(|_| Vec::new()).collect();
+
         while active > 0 {
             // Step 1: advance all games until they need a decision or finish
             let mut pending: Vec<Pending> = Vec::new();
@@ -215,36 +228,34 @@ impl SelfPlayRunner {
             let mut all_results: Vec<DecisionResult> =
                 vec![DecisionResult { action: 0, log_prob: 0.0, value: 0.0 }; pending.len()];
 
-            for (uid, up) in unique_players.iter().enumerate() {
-                let group: Vec<usize> = pending
-                    .iter()
-                    .enumerate()
-                    .filter(|(_, pd)| seat_to_uid[pd.player as usize] == uid)
-                    .map(|(i, _)| i)
-                    .collect();
+            // Route pending indices into per-player index buffers (no alloc).
+            for buf in idx_bufs.iter_mut() { buf.clear(); }
+            for (pi, pd) in pending.iter().enumerate() {
+                idx_bufs[seat_to_uid[pd.player as usize]].push(pi);
+            }
 
-                if group.is_empty() {
-                    continue;
+            for (uid, up) in unique_players.iter().enumerate() {
+                let idx_buf = &idx_bufs[uid];
+                if idx_buf.is_empty() { continue; }
+
+                // Build contexts into the persistent buffer (no alloc on hot path).
+                let ctx_buf = &mut ctx_bufs[uid];
+                ctx_buf.clear();
+                for &pi in idx_buf.iter() {
+                    let pd = &pending[pi];
+                    let game = slots[pd.slot].as_ref().unwrap();
+                    ctx_buf.push(DecisionContext {
+                        gs: game.gs.clone(),
+                        player: pd.player,
+                        decision_type: pd.decision_type,
+                        legal_mask: game.legal_mask.clone(),
+                        state_encoding: game.state_buf.clone(),
+                    });
                 }
 
-                let contexts: Vec<DecisionContext> = group
-                    .iter()
-                    .map(|&pi| {
-                        let pd = &pending[pi];
-                        let game = slots[pd.slot].as_ref().unwrap();
-                        DecisionContext {
-                            gs: game.gs.clone(),
-                            player: pd.player,
-                            decision_type: pd.decision_type,
-                            legal_mask: pd.legal_mask.clone(),
-                            state_encoding: pd.state_buf.clone(),
-                        }
-                    })
-                    .collect();
+                let batch_results = up.batch_decide(ctx_buf);
 
-                let batch_results = up.batch_decide(&contexts);
-
-                for (i, &pi) in group.iter().enumerate() {
+                for (i, &pi) in idx_buf.iter().enumerate() {
                     all_results[pi] = batch_results[i];
                 }
             }
@@ -255,17 +266,30 @@ impl SelfPlayRunner {
                 let result = all_results[pi];
 
                 let gid = game.game_id as usize;
-                let action_size = pd.decision_type.action_size();
-                let mut padded_mask = vec![0.0f32; CARD_ACTION_SIZE];
-                padded_mask[..action_size].copy_from_slice(&pd.legal_mask[..action_size]);
+                // Move the game's scratch buffers into RawExperience (zero clones),
+                // replacing each with a fresh pre-allocated buffer for the next
+                // decision in this slot.
+                let state = std::mem::replace(
+                    &mut game.state_buf,
+                    vec![0f32; encoding::STATE_SIZE],
+                );
+                let oracle_state = std::mem::replace(
+                    &mut game.oracle_state_buf,
+                    vec![0f32; encoding::ORACLE_STATE_SIZE],
+                );
+                let legal_mask = std::mem::replace(
+                    &mut game.legal_mask,
+                    vec![0f32; CARD_ACTION_SIZE],
+                );
                 game_exps[gid].push(RawExperience {
-                    state: pd.state_buf.clone(),
+                    state,
+                    oracle_state,
                     action: result.action as u16,
                     log_prob: result.log_prob,
                     value: result.value,
                     decision_type: pd.decision_type as u8,
                     game_mode: pd.game_mode,
-                    legal_mask: padded_mask,
+                    legal_mask,
                     game_id: game.game_id,
                     step_in_game: game.step_counter,
                     player: pd.player,
@@ -339,6 +363,9 @@ impl SelfPlayRunner {
             initial_hands,
             initial_talon,
             trace: GameTrace::default(),
+            state_buf: vec![0f32; encoding::STATE_SIZE],
+            oracle_state_buf: vec![0f32; encoding::ORACLE_STATE_SIZE],
+            legal_mask: vec![0f32; CARD_ACTION_SIZE],
         }
     }
 
@@ -409,16 +436,18 @@ impl SelfPlayRunner {
             return Self::advance_until_decision(game);
         }
 
-        let mut state_buf = vec![0f32; encoding::STATE_SIZE];
-        encoding::encode_state(&mut state_buf, &game.gs, bidder, encoding::DT_BID);
+        game.state_buf.fill(0.0);
+        encoding::encode_state(&mut game.state_buf, &game.gs, bidder, encoding::DT_BID);
+        game.oracle_state_buf.fill(0.0);
+        encoding::encode_oracle_state(&mut game.oracle_state_buf, &game.gs, bidder, encoding::DT_BID);
 
-        let mut mask = vec![0f32; BID_ACTION_SIZE];
-        mask[0] = 1.0; // pass always legal
+        game.legal_mask.fill(0.0);
+        game.legal_mask[0] = 1.0; // pass always legal
         let legal = game.gs.legal_bids(bidder);
         for contract in &legal {
             for (idx, mapped) in BID_IDX_TO_CONTRACT.iter().enumerate() {
                 if *mapped == Some(*contract) {
-                    mask[idx] = 1.0;
+                    game.legal_mask[idx] = 1.0;
                 }
             }
         }
@@ -428,8 +457,6 @@ impl SelfPlayRunner {
             player: bidder,
             decision_type: DecisionType::Bid,
             game_mode: Self::game_mode_id(game.gs.contract),
-            state_buf,
-            legal_mask: mask,
         })
     }
 
@@ -534,13 +561,15 @@ impl SelfPlayRunner {
             return Self::advance_until_decision(game);
         }
 
-        let mut state_buf = vec![0f32; encoding::STATE_SIZE];
-        encoding::encode_state(&mut state_buf, &game.gs, declarer, encoding::DT_KING_CALL);
+        game.state_buf.fill(0.0);
+        encoding::encode_state(&mut game.state_buf, &game.gs, declarer, encoding::DT_KING_CALL);
+        game.oracle_state_buf.fill(0.0);
+        encoding::encode_oracle_state(&mut game.oracle_state_buf, &game.gs, declarer, encoding::DT_KING_CALL);
 
-        let mut mask = vec![0f32; KING_ACTION_SIZE];
+        game.legal_mask.fill(0.0);
         for &card in &callable {
             if let Some(suit_idx) = card_suit_idx(card.0) {
-                mask[suit_idx] = 1.0;
+                game.legal_mask[suit_idx] = 1.0;
             }
         }
 
@@ -549,8 +578,6 @@ impl SelfPlayRunner {
             player: declarer,
             decision_type: DecisionType::KingCall,
             game_mode: Self::game_mode_id(game.gs.contract),
-            state_buf,
-            legal_mask: mask,
         })
     }
 
@@ -619,12 +646,14 @@ impl SelfPlayRunner {
             .collect();
         game.gs.talon_revealed = groups;
 
-        let mut state_buf = vec![0f32; encoding::STATE_SIZE];
-        encoding::encode_state(&mut state_buf, &game.gs, declarer, encoding::DT_TALON_PICK);
+        game.state_buf.fill(0.0);
+        encoding::encode_state(&mut game.state_buf, &game.gs, declarer, encoding::DT_TALON_PICK);
+        game.oracle_state_buf.fill(0.0);
+        encoding::encode_oracle_state(&mut game.oracle_state_buf, &game.gs, declarer, encoding::DT_TALON_PICK);
 
-        let mut mask = vec![0f32; TALON_ACTION_SIZE];
+        game.legal_mask.fill(0.0);
         for i in 0..num_groups.min(TALON_ACTION_SIZE) {
-            mask[i] = 1.0;
+            game.legal_mask[i] = 1.0;
         }
 
         Some(Pending {
@@ -632,8 +661,6 @@ impl SelfPlayRunner {
             player: declarer,
             decision_type: DecisionType::TalonPick,
             game_mode: Self::game_mode_id(game.gs.contract),
-            state_buf,
-            legal_mask: mask,
         })
     }
 
@@ -719,15 +746,17 @@ impl SelfPlayRunner {
         let player = (game.lead_player + game.trick_offset) % 4;
         game.gs.current_player = player;
 
-        let mut state_buf = vec![0f32; encoding::STATE_SIZE];
-        encoding::encode_state(&mut state_buf, &game.gs, player, encoding::DT_CARD_PLAY);
+        game.state_buf.fill(0.0);
+        encoding::encode_state(&mut game.state_buf, &game.gs, player, encoding::DT_CARD_PLAY);
+        game.oracle_state_buf.fill(0.0);
+        encoding::encode_oracle_state(&mut game.oracle_state_buf, &game.gs, player, encoding::DT_CARD_PLAY);
 
         let ctx = legal_moves::MoveCtx::from_state(&game.gs, player);
         let legal = legal_moves::generate_legal_moves(&ctx);
 
-        let mut mask = vec![0f32; CARD_ACTION_SIZE];
+        game.legal_mask.fill(0.0);
         for card in legal.iter() {
-            mask[card.0 as usize] = 1.0;
+            game.legal_mask[card.0 as usize] = 1.0;
         }
 
         Some(Pending {
@@ -735,8 +764,6 @@ impl SelfPlayRunner {
             player,
             decision_type: DecisionType::CardPlay,
             game_mode: Self::game_mode_id(game.gs.contract),
-            state_buf,
-            legal_mask: mask,
         })
     }
 

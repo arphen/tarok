@@ -52,8 +52,17 @@ class RunIteration:
         effective_seats = seats_override if seats_override is not None else config.seats
         self._presenter.on_selfplay_start(config, effective_seats=effective_seats)
         t0 = time.time()
+        include_oracle_states = bool(
+            identity.oracle_critic
+            and (iter_imitation_coef if iter_imitation_coef is not None else config.imitation_coef) > 0.0
+        )
         raw = self._selfplay.run(
-            ts_path, config.games, effective_seats, config.explore_rate, config.concurrency,
+            ts_path,
+            config.games,
+            effective_seats,
+            config.explore_rate,
+            config.concurrency,
+            include_oracle_states=include_oracle_states,
         )
         # Only learn from seats labelled "nn" (the learner).  Frozen snapshots
         # (path-based .pt seats) and heuristic bots are excluded — their log_prob

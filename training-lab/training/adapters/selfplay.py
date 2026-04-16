@@ -47,6 +47,8 @@ class RustSelfPlay(SelfPlayPort):
         seat_config: str,
         explore_rate: float,
         concurrency: int,
+        include_replay_data: bool = False,
+        include_oracle_states: bool = False,
     ) -> dict[str, Any]:
         raw = te.run_self_play(
             n_games=n_games,
@@ -54,6 +56,8 @@ class RustSelfPlay(SelfPlayPort):
             model_path=model_path,
             explore_rate=explore_rate,
             seat_config=seat_config,
+            include_replay_data=include_replay_data,
+            include_oracle_states=include_oracle_states,
         )
 
         # Compatibility shim for older engine builds that don't expose game_modes.

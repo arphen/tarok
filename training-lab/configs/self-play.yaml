@@ -12,14 +12,14 @@ seats: "nn,nn,nn,nn"
 bench_seats: "nn,bot_v1,bot_v3,bot_m6"
 
 iterations: 100
-games: 20000
+games: 10000
 bench_games: 3000
 benchmark_checkpoints: [0, 10, 20, 30, 40, 50, 60, 70, 80, 90, 100, 110, 120, 130, 140, 149]
 best_model_metric: "placement"
 
 ppo_epochs: 6
 batch_size: 8192
-lr: 0.001
+lr: 0.0003
 gamma: 0.995
 gae_lambda: 0.98
 clip_epsilon: 0.2
@@ -30,7 +30,7 @@ imitation_schedule: linear
 imitation_coef_min: 0.02
 explore_rate: 0.10
 
-concurrency: 128
+concurrency: 256
 device: auto
 memory_telemetry: true
 memory_telemetry_every: 1

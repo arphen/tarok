@@ -747,6 +747,7 @@ async def start_arena(req: ArenaRequest):
                         model_path=ts_model_path,
                         explore_rate=0.0,
                         seat_config=seat_config,
+                        include_replay_data=True,
                     ),
                 )
 

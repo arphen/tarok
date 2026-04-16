@@ -15,5 +15,7 @@ class SelfPlayPort(ABC):
         seat_config: str,
         explore_rate: float,
         concurrency: int,
+        include_replay_data: bool = False,
+        include_oracle_states: bool = False,
     ) -> dict[str, Any]:
         """Run self-play games, return raw experience dict."""
