@@ -39,6 +39,8 @@ class TrainingConfig:
     entropy_coef: float = 0.01
     memory_telemetry: bool = True
     memory_telemetry_every: int = 1
+    iteration_runner_mode: str = "in-process"
+    iteration_runner_restart_every: int = 10
     model_arch: str = "v4"
     human_data_dir: str | None = None
     league: LeagueConfig | None = None

@@ -30,6 +30,8 @@ concurrency: 256         # double the Mac default; CUDA handles larger queues we
 device: cuda
 memory_telemetry: true
 memory_telemetry_every: 5
+iteration_runner_mode: spawn
+iteration_runner_restart_every: 10
 
 league:
   enabled: true

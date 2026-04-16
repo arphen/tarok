@@ -9,6 +9,7 @@ from __future__ import annotations
 from training.ports import (
     BenchmarkPort,
     ConfigPort,
+    IterationRunnerPort,
     ModelPort,
     PPOPort,
     PresenterPort,
@@ -47,6 +48,17 @@ def _default_presenter() -> PresenterPort:
     return TerminalPresenter()
 
 
+def _default_iteration_runner(
+    selfplay: SelfPlayPort,
+    ppo: PPOPort,
+    benchmark: BenchmarkPort,
+    model: ModelPort,
+    presenter: PresenterPort,
+) -> IterationRunnerPort:
+    from training.adapters.iteration_runners import ConfigurableIterationRunner
+    return ConfigurableIterationRunner(selfplay, ppo, benchmark, model, presenter)
+
+
 class Container:
     """Lazy DI container. Build once, use everywhere.
 
@@ -60,6 +72,7 @@ class Container:
         selfplay: SelfPlayPort | None = None,
         benchmark: BenchmarkPort | None = None,
         ppo: PPOPort | None = None,
+        iteration_runner: IterationRunnerPort | None = None,
         model: ModelPort | None = None,
         config_loader: ConfigPort | None = None,
         presenter: PresenterPort | None = None,
@@ -67,6 +80,7 @@ class Container:
         self._selfplay = selfplay
         self._benchmark = benchmark
         self._ppo = ppo
+        self._iteration_runner = iteration_runner
         self._model = model
         self._config_loader = config_loader
         self._presenter = presenter
@@ -88,6 +102,18 @@ class Container:
         if self._ppo is None:
             self._ppo = _default_ppo()
         return self._ppo
+
+    @property
+    def iteration_runner(self) -> IterationRunnerPort:
+        if self._iteration_runner is None:
+            self._iteration_runner = _default_iteration_runner(
+                self.selfplay,
+                self.ppo,
+                self.benchmark,
+                self.model,
+                self.presenter,
+            )
+        return self._iteration_runner
 
     @property
     def model(self) -> ModelPort:
@@ -115,8 +141,7 @@ class Container:
 
     def train_model(self) -> TrainModel:
         return TrainModel(
-            selfplay=self.selfplay,
-            ppo=self.ppo,
+            iteration_runner=self.iteration_runner,
             benchmark=self.benchmark,
             model=self.model,
             presenter=self.presenter,

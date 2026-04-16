@@ -154,6 +154,19 @@ Examples:
         default=None,
         help="Print memory telemetry every N iterations",
     )
+    parser.add_argument(
+        "--iteration-runner-mode",
+        type=str,
+        choices=["in-process", "spawn"],
+        default=None,
+        help="Iteration execution strategy",
+    )
+    parser.add_argument(
+        "--iteration-runner-restart-every",
+        type=int,
+        default=None,
+        help="For spawn runner: restart worker every N iterations",
+    )
     return parser.parse_args()
 
 
@@ -193,6 +206,8 @@ def main() -> None:
             else None
         ),
         "memory_telemetry_every": getattr(args, "memory_telemetry_every", None),
+        "iteration_runner_mode": getattr(args, "iteration_runner_mode", None),
+        "iteration_runner_restart_every": getattr(args, "iteration_runner_restart_every", None),
     }
     config_path = _resolve_path(args.config)
     config = container.resolve_config().resolve(cli_overrides, config_path)
@@ -237,6 +252,8 @@ def main() -> None:
                 imitation_coef_min=config.imitation_coef_min,
                 memory_telemetry=config.memory_telemetry,
                 memory_telemetry_every=config.memory_telemetry_every,
+                iteration_runner_mode=config.iteration_runner_mode,
+                iteration_runner_restart_every=config.iteration_runner_restart_every,
                 model_arch=identity.model_arch,
                 human_data_dir=config.human_data_dir,
                 league=config.league,
@@ -279,6 +296,8 @@ def main() -> None:
         imitation_coef_min=config.imitation_coef_min,
         memory_telemetry=config.memory_telemetry,
         memory_telemetry_every=config.memory_telemetry_every,
+        iteration_runner_mode=config.iteration_runner_mode,
+        iteration_runner_restart_every=config.iteration_runner_restart_every,
         model_arch=config.model_arch,
         human_data_dir=config.human_data_dir,
         league=config.league,

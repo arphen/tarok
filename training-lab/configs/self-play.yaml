@@ -34,16 +34,22 @@ concurrency: 128
 device: auto
 memory_telemetry: true
 memory_telemetry_every: 1
+iteration_runner_mode: spawn
+iteration_runner_restart_every: 10
 
 league:
   enabled: true
   min_nn_per_game: 2        # learner (seat 0) + 1 more nn — up to 2 opponent seats per game
   sampling: pfsp            # uniform | pfsp | hardest
   pfsp_alpha: 0.3           # low alpha = near-uniform; bots rarely dominate sampling
-  snapshot_interval: 10      # auto-snapshot learner checkpoint every N iterations
+  snapshot_interval: 5      # auto-snapshot learner checkpoint every N iterations
 
   opponents:
-    - name: StockSkisV1
+    - name: StockSkis
       type: bot_v1
-    - name: StockSkisV5
+    - name: V3
+      type: bot_v3
+    - name: V5
       type: bot_v5
+    - name: M6
+      type: bot_m6

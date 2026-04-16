@@ -18,11 +18,9 @@ from training.entities.model_identity import ModelIdentity
 from training.entities.training_config import TrainingConfig, scheduled_lr
 from training.entities.training_run import TrainingRun
 from training.ports.benchmark_port import BenchmarkPort
+from training.ports.iteration_runner_port import IterationRunnerPort
 from training.ports.model_port import ModelPort
-from training.ports.ppo_port import PPOPort
 from training.ports.presenter_port import PresenterPort
-from training.ports.selfplay_port import SelfPlayPort
-from training.use_cases.run_iteration import RunIteration
 from training.use_cases.sample_league_seats import SampleLeagueSeats
 from training.use_cases.update_league_elo import UpdateLeagueElo
 
@@ -30,14 +28,12 @@ from training.use_cases.update_league_elo import UpdateLeagueElo
 class TrainModel:
     def __init__(
         self,
-        selfplay: SelfPlayPort,
-        ppo: PPOPort,
+        iteration_runner: IterationRunnerPort,
         benchmark: BenchmarkPort,
         model: ModelPort,
         presenter: PresenterPort,
     ):
-        self._selfplay = selfplay
-        self._ppo = ppo
+        self._iteration_runner = iteration_runner
         self._benchmark = benchmark
         self._model = model
         self._presenter = presenter
@@ -59,22 +55,19 @@ class TrainModel:
         self._presenter.on_model_loaded(identity, str(save_dir))
         self._presenter.on_device_selected(device)
 
-        # Setup PPO
-        self._ppo.setup(weights, config, device)
+        # Setup iteration runner (PPO/setup ownership lives at adapter layer)
+        self._iteration_runner.setup(weights, config, device)
 
         # Initial benchmark
         self._presenter.on_training_plan(config)
-        if config.should_benchmark_initial():
-            t0 = time.time()
-            initial = self._benchmark.measure_placement(
-                ts_path, config.bench_games, config.effective_bench_seats,
-                config.concurrency, session_size=50,
-            )
-            self._presenter.on_initial_benchmark(
-                initial, config.bench_games, config.effective_bench_seats, time.time() - t0,
-            )
-        else:
-            initial = 2.5
+        t0 = time.time()
+        initial = self._benchmark.measure_placement(
+            ts_path, config.bench_games, config.effective_bench_seats,
+            config.concurrency, session_size=50,
+        )
+        self._presenter.on_initial_benchmark(
+            initial, config.bench_games, config.effective_bench_seats, time.time() - t0,
+        )
 
         self._presenter.on_training_loop_start(config)
 
@@ -83,10 +76,6 @@ class TrainModel:
             identity=identity,
             initial_placement=initial,
             start_time=time.time(),
-        )
-
-        run_iteration = RunIteration(
-            self._selfplay, self._ppo, self._benchmark, self._model, self._presenter,
         )
 
         # Build league pool (empty if league not enabled)
@@ -102,60 +91,65 @@ class TrainModel:
             tracemalloc.start(10)
         prev_mem_stats: dict[str, float] | None = None
 
-        for i in range(1, config.iterations + 1):
-            elapsed = time.time() - run.start_time
-            self._presenter.on_iteration_start(i, config.iterations, elapsed)
+        try:
+            for i in range(1, config.iterations + 1):
+                elapsed = time.time() - run.start_time
+                self._presenter.on_iteration_start(i, config.iterations, elapsed)
 
-            iter_lr = scheduled_lr(
-                i - 1, config.iterations,
-                config.lr, config.effective_lr_min, config.lr_schedule,
-            )
-            iter_imitation_coef = config.scheduled_imitation_coef(i)
+                iter_lr = scheduled_lr(
+                    i - 1, config.iterations,
+                    config.lr, config.effective_lr_min, config.lr_schedule,
+                )
+                iter_imitation_coef = config.scheduled_imitation_coef(i)
 
-            seats_override: str | None = None
-            if pool is not None:
-                seats_override = _sample_seats.execute(pool)
+                seats_override: str | None = None
+                if pool is not None:
+                    seats_override = _sample_seats.execute(pool)
 
-            prev = run.placements[-1]
-            should_bench = config.should_benchmark_iteration(i)
-            result, _ = run_iteration.execute(
-                i, config, identity, ts_path, save_dir,
-                prev_placement=prev,
-                iter_lr=iter_lr,
-                iter_imitation_coef=iter_imitation_coef,
-                seats_override=seats_override,
-                run_benchmark=should_bench,
-            )
-            run.results.append(result)
-            self._presenter.on_iteration_done(prev, result.placement, result.total_time)
+                prev = run.placements[-1]
+                should_bench = config.should_benchmark_iteration(i)
+                result = self._iteration_runner.run_iteration(
+                    i, config, identity, ts_path, save_dir,
+                    prev_placement=prev,
+                    iter_lr=iter_lr,
+                    iter_imitation_coef=iter_imitation_coef,
+                    seats_override=seats_override,
+                    run_benchmark=should_bench,
+                )
+                run.results.append(result)
+                self._presenter.on_iteration_done(prev, result.placement, result.total_time)
 
-            if pool is not None:
-                prev_elos = {e.opponent.name: e.elo for e in pool.entries}
-                _update_elo.execute(pool, result.seat_config_used, result.seat_outcomes)
-                elo_deltas = {
-                    e.opponent.name: e.elo - prev_elos.get(e.opponent.name, e.elo)
-                    for e in pool.entries
-                }
-                self._presenter.on_league_elo_updated(pool, elo_deltas)
-
-                if i % config.league.snapshot_interval == 0:
-                    league_pool_dir.mkdir(parents=True, exist_ok=True)
-                    snap_path = str(league_pool_dir / f"iter_{i:03d}.pt")
-                    shutil.copy2(ts_path, snap_path)
-                    pool.add_snapshot(f"snapshot_iter_{i:03d}", snap_path)
-                    self._presenter.on_league_snapshot_added(i, snap_path)
-
-            if config.memory_telemetry and i % config.memory_telemetry_every == 0:
-                stats = _collect_memory_stats()
-                deltas = None
-                if prev_mem_stats is not None:
-                    deltas = {
-                        k: stats[k] - prev_mem_stats[k]
-                        for k in stats.keys()
-                        if k in prev_mem_stats
+                if pool is not None:
+                    prev_elos = {e.opponent.name: e.elo for e in pool.entries}
+                    prev_learner_elo = pool.learner_elo
+                    _update_elo.execute(pool, result.seat_config_used, result.seat_outcomes)
+                    elo_deltas = {
+                        e.opponent.name: e.elo - prev_elos.get(e.opponent.name, e.elo)
+                        for e in pool.entries
                     }
-                self._presenter.on_memory_stats(i, stats, deltas)
-                prev_mem_stats = stats
+                    elo_deltas["__learner__"] = pool.learner_elo - prev_learner_elo
+                    self._presenter.on_league_elo_updated(pool, elo_deltas)
+
+                    if i % config.league.snapshot_interval == 0:
+                        league_pool_dir.mkdir(parents=True, exist_ok=True)
+                        snap_path = str(league_pool_dir / f"iter_{i:03d}.pt")
+                        shutil.copy2(ts_path, snap_path)
+                        pool.add_snapshot(f"snapshot_iter_{i:03d}", snap_path)
+                        self._presenter.on_league_snapshot_added(i, snap_path)
+
+                if config.memory_telemetry and i % config.memory_telemetry_every == 0:
+                    stats = _collect_memory_stats()
+                    deltas = None
+                    if prev_mem_stats is not None:
+                        deltas = {
+                            k: stats[k] - prev_mem_stats[k]
+                            for k in stats.keys()
+                            if k in prev_mem_stats
+                        }
+                    self._presenter.on_memory_stats(i, stats, deltas)
+                    prev_mem_stats = stats
+        finally:
+            self._iteration_runner.teardown()
 
         run.end_time = time.time()
 
