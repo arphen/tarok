@@ -40,9 +40,9 @@ class RustStockskisPlayer(PlayerPort):
     # game-state to the py_state as ``_rust_gs`` before calling the agent.
     # rust_game_loop already does this (``py_state._rust_gs = self._gs``).
 
-    def _call(self, method_suffix: str, gs, player: int):
+    def _call(self, method_suffix: str, gs, player: int, *args):
         fn = getattr(gs, f"{self._variant}_{method_suffix}")
-        return fn(player)
+        return fn(player, *args)
 
     async def choose_bid(self, state, player, legal_bids):
         gs = getattr(state, "_rust_gs", None)
@@ -83,7 +83,8 @@ class RustStockskisPlayer(PlayerPort):
         if gs is None:
             return 0
 
-        return self._call("choose_talon_group", gs, player)
+        group_indices = [[card._idx for card in group] for group in groups]
+        return self._call("choose_talon_group", gs, player, group_indices)
 
     async def choose_discard(self, state, player, num_cards):
         gs = getattr(state, "_rust_gs", None)

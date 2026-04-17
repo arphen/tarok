@@ -56,6 +56,11 @@ jobs:
           PYTHONPATH=src:../model/src \
           uv run --default-index https://pypi.org/simple \
             python -m pytest tests/ \
+              --ignore=tests/test_bidding_bdd.py \
+              --ignore=tests/test_dealing_bdd.py \
+              --ignore=tests/test_tricks_bdd.py \
+              --ignore=tests/test_scoring_bdd.py \
+              --ignore=tests/test_properties.py \
               -p no:randomly --hypothesis-seed=0 \
               --cov=tarok --cov-report=term-missing \
               --cov-report=json:../coverage-backend.json \

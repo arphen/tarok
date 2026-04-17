@@ -1,6 +1,7 @@
 """Unit tests for websocket bidding state exposure to the UI."""
 from unittest.mock import AsyncMock
 
+import numpy as np
 import pytest
 
 from tarok.adapters.api.ws_observer import WebSocketObserver, _state_for_player
@@ -360,6 +361,9 @@ async def test_bidding_does_not_reprompt_highest_bidder_after_all_others_pass(mo
 
         def set_role(self, _player, _role):
             return None
+
+        def encode_state(self, _player, _decision_type):
+            return np.zeros((1143,), dtype=np.float32)
 
     # Bidding order for dealer=0 starts at player 2:
     # P2 Solo Three, P3 pass, P0 Solo Two, P1 pass, P2 pass -> should end.

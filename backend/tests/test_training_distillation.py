@@ -114,8 +114,8 @@ def test_oracle_distillation_moves_actor_toward_critic_features() -> None:
     before_with = copy.deepcopy(adapter_with_oracle._network.state_dict())  # type: ignore[union-attr]
     before_without = copy.deepcopy(adapter_without_oracle._network.state_dict())  # type: ignore[union-attr]
 
-    metrics_with = adapter_with_oracle._ppo_update_batched(batch_with_oracle)
-    metrics_without = adapter_without_oracle._ppo_update_batched(batch_without_oracle)
+    metrics_with = adapter_with_oracle._ppo_update_batched(**batch_with_oracle)
+    metrics_without = adapter_without_oracle._ppo_update_batched(**batch_without_oracle)
 
     after_similarity = _mean_actor_critic_cosine(adapter_with_oracle._network, states, oracle_states)  # type: ignore[arg-type]
     after_with = adapter_with_oracle._network.state_dict()  # type: ignore[union-attr]
