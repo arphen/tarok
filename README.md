@@ -1,5 +1,7 @@
 # Slovenian Tarok
 
+[![CI](https://github.com/arphen/tarok/actions/workflows/ci.yml/badge.svg?branch=gpu)](https://github.com/arphen/tarok/actions/workflows/ci.yml)
+[![codecov](https://codecov.io/gh/arphen/tarok/branch/gpu/graph/badge.svg)](https://codecov.io/gh/arphen/tarok)
 ![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)
 ![Python 3.12](https://img.shields.io/badge/python-3.12-blue.svg)
 ![React 19](https://img.shields.io/badge/react-19-cyan.svg)

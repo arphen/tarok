@@ -1,0 +1,115 @@
+name: CI
+
+on:
+  push:
+    branches: ["gpu", "main"]
+  pull_request:
+    branches: ["gpu", "main"]
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  # ──────────────────────────────────────────────
+  # Backend + training-lab (Python + Rust engine)
+  # ──────────────────────────────────────────────
+  python:
+    name: Python tests & coverage
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      # ── Python ───────────────────────────────
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+
+      # ── uv ───────────────────────────────────
+      - uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+          cache-dependency-glob: "backend/pyproject.toml"
+
+      - name: Install Python dependencies
+        run: cd backend && uv sync --default-index https://pypi.org/simple --extra dev --quiet
+
+      # ── Rust ─────────────────────────────────
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: engine-rs -> target
+
+      - name: Build Rust engine
+        run: |
+          cd backend
+          LIBTORCH_USE_PYTORCH=1 \
+          uv run --default-index https://pypi.org/simple \
+            maturin develop --release --manifest-path ../engine-rs/Cargo.toml
+
+      # ── Backend tests ────────────────────────
+      - name: Backend tests
+        run: |
+          cd backend
+          PYTHONPATH=src:../model/src \
+          uv run --default-index https://pypi.org/simple \
+            python -m pytest tests/ \
+              -p no:randomly --hypothesis-seed=0 \
+              --cov=tarok --cov-report=term-missing \
+              --cov-report=json:../coverage-backend.json \
+              -v
+
+      # ── Training-lab tests ───────────────────
+      - name: Training-lab tests
+        run: |
+          cd backend
+          PYTHONHASHSEED=0 \
+          PYTHONPATH=src:../model/src:../training-lab \
+          uv run --default-index https://pypi.org/simple \
+            python -m pytest ../training-lab/tests/ \
+              -p no:randomly --hypothesis-seed=0 \
+              --cov=training --cov-report=term-missing \
+              --cov-report=json:../coverage-lab.json \
+              -v
+
+      # ── Merge coverage & upload ──────────────
+      - name: Upload coverage reports
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage-reports
+          path: |
+            coverage-backend.json
+            coverage-lab.json
+
+      - name: Upload to Codecov
+        uses: codecov/codecov-action@v4
+        with:
+          files: coverage-backend.json,coverage-lab.json
+          flags: python
+          fail_ci_if_error: false
+        env:
+          CODECOV_TOKEN: ${{ secrets.CODECOV_TOKEN }}
+
+  # ──────────────────────────────────────────────
+  # Frontend unit tests (Vitest)
+  # ──────────────────────────────────────────────
+  frontend:
+    name: Frontend unit tests
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: "npm"
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Install frontend dependencies
+        run: cd frontend && npm ci
+
+      - name: Run Vitest
+        run: cd frontend && npx vitest run
