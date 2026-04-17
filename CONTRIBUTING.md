@@ -54,10 +54,13 @@ make test-coverage      # backend tests with full coverage report
 
 A **pre-commit hook** runs automatically on every `git commit`. It:
 
-1. Type-checks the frontend (`tsc --noEmit`)
-2. Runs all backend tests with coverage measurement
-3. Compares coverage to the saved baseline (`.coverage-baseline`)
-4. **Rejects the commit** if coverage decreased
+1. Runs frontend quality checks (`format:check` / `lint` if configured)
+2. Type-checks frontend (`tsc --noEmit`) and runs frontend unit tests (`vitest`)
+3. Runs backend formatting + lint checks (`ruff format --check`, `ruff check`)
+4. Runs optional backend static typing (`mypy`) when installed
+5. Runs backend tests with coverage measurement
+6. Compares coverage to the saved baseline (`.coverage-baseline`)
+7. **Rejects the commit** if coverage decreased
 
 If coverage improves, the baseline is auto-updated. If you intentionally remove dead code and coverage drops, update the baseline manually:
 

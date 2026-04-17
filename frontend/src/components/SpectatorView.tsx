@@ -1,7 +1,7 @@
 import React, { useEffect, useState } from 'react';
 import { useSpectator } from '../hooks/useSpectator';
 import type { AgentConfig } from '../hooks/useSpectator';
-import type { CardData, CompletedTrick, ScoreBreakdown, TrickSummaryEntry, RoundResult, MatchInfo, TrickCard } from '../types/game';
+import type { RoundResult, TrickCard } from '../types/game';
 import { CONTRACT_NAMES, SUIT_SYMBOLS } from '../types/game';
 import Hand from './Hand';
 import TrickArea from './TrickArea';
@@ -10,8 +10,7 @@ import TalonDrawer from './TalonDrawer';
 import Scoreboard from './Scoreboard';
 import './SpectatorView.css';
 import ModelLeaderboard from './ModelLeaderboard';
-import { buildCountingExam, groupCards } from '../utils/cardCounting';
-import type { CardInGroup, CountingGroup, CountingTeamView } from '../utils/cardCounting';
+import { buildCountingExam } from '../utils/cardCounting';
 
 interface SpectatorViewProps {
   onBack: () => void;

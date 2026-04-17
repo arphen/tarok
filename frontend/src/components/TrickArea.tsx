@@ -1,6 +1,6 @@
 import React from 'react';
 import Card from './Card';
-import type { CardData, TrickCard } from '../types/game';
+import type { TrickCard } from '../types/game';
 import './TrickArea.css';
 
 interface TrickAreaProps {

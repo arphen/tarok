@@ -1,26 +1,62 @@
 #!/usr/bin/env bash
-# Pre-commit hook: runs backend + frontend tests and guards coverage.
+# Pre-commit hook: formatting, linting, type checks, tests, and coverage guard.
 set -euo pipefail
 
 ROOT="$(git rev-parse --show-toplevel)"
 BASELINE_FILE="$ROOT/.coverage-baseline"
+UV_CMD="uv run --default-index https://pypi.org/simple"
 
 echo "──────────────────────────────────────"
 echo "  Pre-commit checks"
 echo "──────────────────────────────────────"
 
-# ── 1. Frontend type-check ───────────────────
+# ── 1. Frontend quality checks ──────────────
 echo ""
-echo "▶ Frontend type-check…"
+echo "▶ Frontend checks…"
 cd "$ROOT/frontend"
+
+if node -e "const s=require('./package.json').scripts||{}; process.exit(s['format:check'] ? 0 : 1)"; then
+  echo "  • format:check"
+  npm run -s format:check
+else
+  echo "  • format:check not configured (skipped)"
+fi
+
+if node -e "const s=require('./package.json').scripts||{}; process.exit(s.lint ? 0 : 1)"; then
+  echo "  • lint"
+  npm run -s lint
+else
+  echo "  • lint not configured (skipped)"
+fi
+
+echo "  • type-check"
 npx tsc -b --noEmit
+echo "  • unit tests"
+npx vitest run
 echo "  ✔ Frontend OK"
 
-# ── 2. Backend tests with coverage ───────────
+# ── 2. Backend format + lint ────────────────
+echo ""
+echo "▶ Backend linting/format checks…"
+cd "$ROOT/backend"
+PYTHONPATH=src:../model/src $UV_CMD ruff format --check src tests
+PYTHONPATH=src:../model/src $UV_CMD ruff check src tests
+echo "  ✔ Backend lint/format OK"
+
+# ── 3. Optional backend type-check (mypy) ───
+echo ""
+echo "▶ Backend static typing…"
+if PYTHONPATH=src:../model/src $UV_CMD python -c "import importlib.util, sys; sys.exit(0 if importlib.util.find_spec('mypy') else 1)"; then
+  PYTHONPATH=src:../model/src $UV_CMD mypy src/tarok
+  echo "  ✔ mypy OK"
+else
+  echo "  • mypy not installed (skipped)"
+fi
+
+# ── 4. Backend tests with coverage ──────────
 echo ""
 echo "▶ Backend tests + coverage…"
-cd "$ROOT/backend"
-PYTHONPATH=src PYTHONHASHSEED=0 uv run --default-index https://pypi.org/simple \
+PYTHONPATH=src:../model/src PYTHONHASHSEED=0 $UV_CMD \
   python -m pytest tests/ -q \
     -p no:randomly --hypothesis-seed=0 \
     --cov=tarok \
@@ -30,7 +66,7 @@ PYTHONPATH=src PYTHONHASHSEED=0 uv run --default-index https://pypi.org/simple \
 NEW_PCT=$(python3 -c "import json; print(round(json.load(open('coverage.json'))['totals']['percent_covered'], 2))")
 echo "  Current coverage: ${NEW_PCT}%"
 
-# ── 3. Coverage regression check ────────────
+# ── 5. Coverage regression check ────────────
 if [ -f "$BASELINE_FILE" ]; then
   OLD_PCT=$(cat "$BASELINE_FILE")
   echo "  Baseline coverage: ${OLD_PCT}%"
@@ -43,7 +79,6 @@ if new < old - TOLERANCE:
     print('  Tip: run \"make update-coverage-baseline\" after intentionally removing dead code.')
     sys.exit(1)
 print('  ✅  Coverage did not decrease.')
-# Auto-update baseline if coverage improved
 if new > old:
     with open('$BASELINE_FILE', 'w') as f:
         f.write(str(new))
@@ -54,7 +89,6 @@ else
   echo "${NEW_PCT}" > "$BASELINE_FILE"
 fi
 
-# Clean up temp coverage file
 rm -f "$ROOT/backend/coverage.json"
 
 echo ""

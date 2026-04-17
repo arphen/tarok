@@ -1,7 +1,6 @@
 import { describe, it, expect } from 'vitest';
-import { renderHook, act } from '@testing-library/react';
+import { renderHook } from '@testing-library/react';
 import { useGame } from '../hooks/useGame';
-import type { LogEntry } from '../hooks/useGame';
 
 describe('useGame log deduplication', () => {
   it('initializes with empty log entries', () => {

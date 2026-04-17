@@ -204,7 +204,7 @@ export function useGame() {
       const data = await res.json();
       setGameId(data.game_id);
       connect(data.game_id);
-    } catch (e) {
+    } catch {
       addEvent('Failed to create game');
     }
   }, [connect, addEvent]);

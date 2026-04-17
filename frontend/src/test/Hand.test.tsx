@@ -1,12 +1,12 @@
-import { describe, it, expect, vi } from 'vitest';
+import { describe, it, expect } from 'vitest';
 import { render, screen } from '@testing-library/react';
 import Hand from '../components/Hand';
 import type { CardData } from '../types/game';
 
-const makeCard = (type: 'tarok' | 'suit', value: number, suit: string | null = null): CardData => ({
+const makeCard = (type: 'tarok' | 'suit', value: number, suit: CardData['suit'] = null): CardData => ({
   card_type: type,
   value,
-  suit: suit as any,
+  suit,
   label: type === 'tarok' ? `T${value}` : `${suit}${value}`,
   points: value >= 5 ? 5 : 1,
 });

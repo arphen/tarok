@@ -5,10 +5,10 @@ import type { CardData, TrickCard } from '../types/game';
 
 const playerNames = ['You', 'AI-1', 'AI-2', 'AI-3'];
 
-const makeCard = (type: 'tarok' | 'suit', value: number, suit: string | null = null): CardData => ({
+const makeCard = (type: 'tarok' | 'suit', value: number, suit: CardData['suit'] = null): CardData => ({
   card_type: type,
   value,
-  suit: suit as any,
+  suit,
   label: type === 'tarok' ? `T${value}` : `${suit}${value}`,
   points: 1,
 });

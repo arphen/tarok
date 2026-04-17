@@ -1,6 +1,5 @@
-import { describe, it, expect, beforeEach } from 'vitest';
+import { describe, it, expect } from 'vitest';
 import { formatEvent } from '../hooks/useGame';
-import type { LogEntry } from '../hooks/useGame';
 
 const NAMES = ['You', 'AI-1', 'AI-2', 'AI-3'];
 

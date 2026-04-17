@@ -3,7 +3,7 @@ import {
   LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip,
   ResponsiveContainer, Legend, BarChart, Bar, Cell,
 } from 'recharts';
-import type { TrainingMetrics, ContractStat } from '../types/game';
+import type { TrainingMetrics } from '../types/game';
 import './TrainingDashboard.css';
 
 interface Props { onBack: () => void }
@@ -18,6 +18,8 @@ const CONTRACT_COLORS: Record<string, string> = {
 };
 
 const API = '';
+
+type NumericRow = { s: number } & Record<string, number | undefined>;
 
 export default function TrainingDashboard({ onBack }: Props) {
   const [metrics, setMetrics] = useState<TrainingMetrics | null>(null);
@@ -114,7 +116,7 @@ export default function TrainingDashboard({ onBack }: Props) {
     return result;
   }, []);
 
-  const applySmoothing = useCallback((data: any[], keys: string[]) => {
+  const applySmoothing = useCallback((data: NumericRow[], keys: string[]) => {
     if (data.length === 0 || smoothing === 0) return data;
     const result = [{ ...data[0] }];
     for (let i = 1; i < data.length; i++) {
@@ -130,7 +132,7 @@ export default function TrainingDashboard({ onBack }: Props) {
     return result;
   }, [smoothing]);
 
-  const smoothAndSample = useCallback((data: any[], keys: string[]) => {
+  const smoothAndSample = useCallback((data: NumericRow[], keys: string[]) => {
     return downsample(applySmoothing(data, keys));
   }, [applySmoothing, downsample]);
 
@@ -176,7 +178,7 @@ export default function TrainingDashboard({ onBack }: Props) {
   // Contract win-rate over time
   const contractWinData = useMemo(() => smoothAndSample(metrics?.contract_win_rate_history
     ? (metrics.avg_placement_history || []).map((_, i) => {
-        const row: any = { s: historyOffset + i + 1 };
+        const row: NumericRow = { s: historyOffset + i + 1 };
         for (const [cname, arr] of Object.entries(metrics.contract_win_rate_history)) {
           if (arr[i] !== undefined) row[cname] = +(arr[i] * 100).toFixed(1);
         }
@@ -187,6 +189,7 @@ export default function TrainingDashboard({ onBack }: Props) {
   const sessionPct = metrics && metrics.total_sessions > 0
     ? (metrics.session / metrics.total_sessions) * 100
     : 0;
+  const metricsExtra = metrics as (TrainingMetrics & { buffer_size?: number; policy_version?: number }) | null;
 
   return (
     <div className="training-dashboard">
@@ -294,8 +297,8 @@ export default function TrainingDashboard({ onBack }: Props) {
             {trainingMode === 'lab' && <span style={{ color: '#d4a843', fontWeight: 600, marginRight: 6 }}>GPU Lab</span>}
             {metrics.run_id && <span className="td-run-id" title="Training run ID">#{metrics.run_id} · </span>}
             Session {metrics.session}/{metrics.total_sessions} · {metrics.episode.toLocaleString()} games · {metrics.games_per_second.toFixed(1)} g/s
-            {(metrics as any).buffer_size > 0 && <> · buf {(metrics as any).buffer_size.toLocaleString()}</>}
-            {(metrics as any).policy_version > 0 && <> · v{(metrics as any).policy_version}</>}
+            {(metricsExtra?.buffer_size ?? 0) > 0 && <> · buf {metricsExtra!.buffer_size!.toLocaleString()}</>}
+            {(metricsExtra?.policy_version ?? 0) > 0 && <> · v{metricsExtra!.policy_version}</>}
           </span>
         </div>
       )}

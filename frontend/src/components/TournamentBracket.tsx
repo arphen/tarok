@@ -1,9 +1,6 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import type {
   TournamentEntry,
-  TournamentState,
-  BracketMatch,
-  AgentStanding,
 } from '../hooks/useTournament';
 import { useTournament } from '../hooks/useTournament';
 import './TournamentBracket.css';

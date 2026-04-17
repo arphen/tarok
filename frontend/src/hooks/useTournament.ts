@@ -368,7 +368,7 @@ export function useTournament() {
     }, 1000);
 
     return () => clearInterval(id);
-  }, [state.multiProgress?.status]);
+  }, [state.multiProgress]);
 
   const currentMatch = state.matches.find(m => m.id === MATCH_ORDER[state.currentMatchIdx]) ?? null;
 
