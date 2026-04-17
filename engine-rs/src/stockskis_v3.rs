@@ -16,6 +16,7 @@ use crate::legal_moves;
 // Card tracking — enhanced with phase + point tracking
 // -----------------------------------------------------------------------
 
+#[allow(dead_code)]
 struct CardTracker {
     remaining: CardSet,
     taroks_in_hand: u8,
@@ -116,6 +117,7 @@ impl CardTracker {
         count
     }
 
+    #[allow(dead_code)]
     fn max_opponent_tarok(&self) -> u8 {
         let mut max_val = 0u8;
         for c in self.taroks_remaining.iter() {
@@ -367,6 +369,7 @@ pub fn choose_discards_v3(hand: CardSet, must_discard: usize, called_king: Optio
 // Card play — v3 with phase awareness + refined logic
 // -----------------------------------------------------------------------
 
+#[allow(private_interfaces)]
 pub fn evaluate_card_play_v3(
     card: Card,
     hand: CardSet,

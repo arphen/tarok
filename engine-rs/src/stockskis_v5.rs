@@ -26,6 +26,7 @@ use crate::legal_moves;
 // Card tracking — enhanced with belief estimation
 // -----------------------------------------------------------------------
 
+#[allow(dead_code)]
 struct CardTracker {
     remaining: CardSet,
     taroks_in_hand: u8,
@@ -235,6 +236,7 @@ impl CardTracker {
     }
 
     /// Lowest tarok in remaining that is higher than `value`.
+    #[allow(dead_code)]
     fn lowest_winning_tarok_remaining(&self, value: u8) -> Option<u8> {
         let mut lowest: Option<u8> = None;
         for card in self.taroks_remaining.iter() {
@@ -624,6 +626,7 @@ pub fn choose_discards_v5(
 //             economy, and role-aware evaluation
 // -----------------------------------------------------------------------
 
+#[allow(private_interfaces)]
 pub fn evaluate_card_play_v5(
     card: Card,
     hand: CardSet,
@@ -634,7 +637,7 @@ pub fn evaluate_card_play_v5(
 ) -> f64 {
     let is_declarer = state.declarer == Some(player);
     let is_partner = state.partner == Some(player);
-    let is_playing = is_declarer || is_partner;
+    let _is_playing = is_declarer || is_partner;
     let is_klop = state
         .contract
         .map_or(false, |contract| contract.is_klop());
@@ -925,7 +928,7 @@ fn eval_leading_v5(
 
 fn eval_following_v5(
     card: Card,
-    hand: CardSet,
+    _hand: CardSet,
     state: &GameState,
     player: u8,
     is_declarer: bool,

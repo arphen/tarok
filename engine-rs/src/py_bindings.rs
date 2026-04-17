@@ -747,7 +747,7 @@ fn run_self_play(
     use crate::self_play::{SelfPlayRunner, GameResult};
     use crate::player::{BatchPlayer, CARD_ACTION_SIZE};
     use crate::player_nn::NeuralNetPlayer;
-    use crate::player_bot::{StockSkisPlayer, BotVersion};
+    use crate::player_bot::StockSkisPlayer;
 
     // Parse seat_config: "nn,nn,nn,nn" or "nn,bot_v5,bot_v5,bot_v5" etc.
     let seat_labels: Vec<&str> = seat_config.split(',').map(|s| s.trim()).collect();

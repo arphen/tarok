@@ -18,6 +18,7 @@ use crate::legal_moves;
 // Card tracking — same as v5/v6
 // -----------------------------------------------------------------------
 
+#[allow(dead_code)]
 struct CardTracker {
     remaining: CardSet,
     taroks_in_hand: u8,
@@ -555,6 +556,7 @@ pub fn choose_discards_m6(
 // Card play
 // -----------------------------------------------------------------------
 
+#[allow(private_interfaces)]
 pub fn evaluate_card_play_m6(
     card: Card,
     hand: CardSet,

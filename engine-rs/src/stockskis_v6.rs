@@ -26,6 +26,7 @@ use crate::legal_moves;
 // Card tracking — enhanced with belief estimation
 // -----------------------------------------------------------------------
 
+#[allow(dead_code)]
 struct CardTracker {
     remaining: CardSet,
     taroks_in_hand: u8,
@@ -514,6 +515,7 @@ pub fn choose_discards_v6(
     discardable.into_iter().take(must_discard).collect()
 }
 
+#[allow(private_interfaces)]
 pub fn evaluate_card_play_v6(
     card: Card,
     hand: CardSet,
@@ -524,7 +526,7 @@ pub fn evaluate_card_play_v6(
 ) -> f64 {
     let is_declarer = state.declarer == Some(player);
     let is_partner = state.partner == Some(player);
-    let is_playing = is_declarer || is_partner;
+    let _is_playing = is_declarer || is_partner;
     let is_klop = state
         .contract
         .map_or(false, |contract| contract.is_klop());
@@ -859,7 +861,7 @@ fn eval_following_v6(
 
 fn eval_following_v6_base(
     card: Card,
-    hand: CardSet,
+    _hand: CardSet,
     state: &GameState,
     player: u8,
     is_declarer: bool,

@@ -18,8 +18,7 @@ use crate::encoding;
 use crate::game_state::*;
 use crate::legal_moves;
 use crate::player::{
-    BatchPlayer, DecisionContext, DecisionResult, DecisionType,
-    BID_ACTION_SIZE, KING_ACTION_SIZE, TALON_ACTION_SIZE, CARD_ACTION_SIZE,
+    BatchPlayer, DecisionContext, DecisionResult, DecisionType, TALON_ACTION_SIZE, CARD_ACTION_SIZE,
     BID_IDX_TO_CONTRACT, card_suit_idx,
 };
 use crate::scoring;

@@ -174,7 +174,7 @@ fn score_barvni_valat(state: &GameState) -> [i32; NUM_PLAYERS] {
 }
 
 fn score_normal(state: &GameState, contract: Contract) -> [i32; NUM_PLAYERS] {
-    let declarer = state.declarer.expect("normal game without declarer");
+    let _declarer = state.declarer.expect("normal game without declarer");
     let winners = trick_winners(state);
     let (decl_card_set, opp_card_set) = collect_team_cards(state, &winners);
 
@@ -573,7 +573,7 @@ fn breakdown_normal(
     scores: [i32; NUM_PLAYERS],
     trick_summary: Vec<TrickSummaryEntry>,
 ) -> ScoreBreakdown {
-    let declarer = state.declarer.expect("normal game without declarer");
+    let _declarer = state.declarer.expect("normal game without declarer");
     let winners = trick_winners(state);
     let (decl_card_set, opp_card_set) = collect_team_cards(state, &winners);
 
