@@ -846,6 +846,15 @@ fn run_self_play(
         players[3].clone(),
     ];
 
+    // Training should only learn from learner seats (labels "nn").
+    // We still run full games with all seats, but only emit learner experiences.
+    let learner_seat_mask = [
+        seat_labels[0] == "nn",
+        seat_labels[1] == "nn",
+        seat_labels[2] == "nn",
+        seat_labels[3] == "nn",
+    ];
+
     // Release GIL — the entire self-play loop runs in pure Rust
     let results: Vec<GameResult> = py.allow_threads(|| {
         let runner = SelfPlayRunner::new(players_arr);
@@ -856,7 +865,18 @@ fn run_self_play(
     let total_games = results.len();
     let state_size = encoding::STATE_SIZE;
 
-    let total_exp: usize = results.iter().map(|r| r.experiences.len()).sum();
+    let total_exp: usize = results
+        .iter()
+        .map(|r| {
+            r.experiences
+                .iter()
+                .filter(|exp| {
+                    let si = exp.player as usize;
+                    si < 4 && learner_seat_mask[si]
+                })
+                .count()
+        })
+        .sum();
 
     let mut all_states = Vec::with_capacity(total_exp * state_size);
     let mut all_actions = Vec::with_capacity(total_exp);
@@ -914,6 +934,10 @@ fn run_self_play(
         }
 
         for exp in &result.experiences {
+            let si = exp.player as usize;
+            if si >= 4 || !learner_seat_mask[si] {
+                continue;
+            }
             all_states.extend_from_slice(&exp.state);
             if include_oracle_states {
                 all_oracle_states.extend_from_slice(&exp.oracle_state);
