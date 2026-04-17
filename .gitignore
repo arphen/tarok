@@ -6,8 +6,13 @@
 .env.*
 !.env.example
 .hypothesis/
-checkpoints/
-!backend/checkpoints/hall_of_fame/pinned/
+data/checkpoints/**
+!data/checkpoints/hall_of_fame/
+!data/checkpoints/hall_of_fame/**
+data/human_play/
+data/replays/
+data/arena_results.json
+data/tournament_results.json
 .venv/
 # Python
 __pycache__/
@@ -55,11 +60,6 @@ coverage/
 *.swp
 *.swo
 
-# Project specific caches and output
-backend/checkpoints/tarok_agent_*.pt
-backend/checkpoints/evo_results/*.json
-backend/checkpoints/evo_tmp/
-backend/checkpoints/breeding_results/
 test-results/
 engine-rs/target/
 

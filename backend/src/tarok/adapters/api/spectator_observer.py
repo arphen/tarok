@@ -15,7 +15,7 @@ from tarok.entities import Card, Contract, GameState, Trick
 
 
 BACKEND_ROOT = Path(__file__).resolve().parents[4]
-REPLAYS_DIR = BACKEND_ROOT / "checkpoints" / "replays"
+REPLAYS_DIR = BACKEND_ROOT.parent / "data" / "replays"
 
 
 def _ensure_replays_dir() -> None:
@@ -34,7 +34,7 @@ def _resolve_replay_path(name: str) -> Path:
         filename = f"{filename}.json"
     path = (REPLAYS_DIR / filename).resolve()
     if not path.is_relative_to(REPLAYS_DIR.resolve()):
-        raise ValueError("replay must stay inside checkpoints/replays")
+        raise ValueError("replay must stay inside data/replays")
     return path
 
 

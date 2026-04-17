@@ -13,6 +13,7 @@ from pydantic import BaseModel
 
 from tarok.adapters.ai.agent import RLAgent
 from tarok.adapters.ai.bot_registry import get_registry
+from tarok.adapters.api.checkpoint_utils import resolve_checkpoint, resolve_checkpoint_or_default
 from tarok.adapters.api.human_player import HumanPlayer
 from tarok.adapters.api.experience_logger import HumanPlayExperienceLogger
 from tarok.adapters.api.spectator_observer import SpectatorObserver, list_replays, load_replay
@@ -138,73 +139,68 @@ def _load_checkpoint_meta(fpath: Path, ckpt_dir: Path) -> dict:
 
 @app.get("/api/checkpoints")
 async def list_checkpoints():
-    """List all saved checkpoint files (training and HOF)."""
-    ckpt_dir = Path("checkpoints")
-    hof_dir = Path("checkpoints/hall_of_fame")
-    root_ckpt_dir = Path("../checkpoints")
-    
+    """List checkpoints from the top-level checkpoints/ directory.
+
+    - HOF: checkpoints/hall_of_fame/*.pt  (manually curated, committed to git)
+    - Persona models: checkpoints/{PersonaName}/_current.pt
+    """
+    import torch as _torch
+
+    root_ckpt_dir = Path("../data/checkpoints")
+    hof_dir = root_ckpt_dir / "hall_of_fame"
     result = []
-    # Always include "latest" if the file exists
-    latest_path = ckpt_dir / "tarok_agent_latest.pt"
-    if latest_path.exists():
-        import torch as _torch
+
+    if not root_ckpt_dir.exists():
+        return {"checkpoints": result}
+
+    # 1. HOF files (manually placed, committed to git)
+    hof_files = sorted(hof_dir.glob("*.pt")) if hof_dir.exists() else []
+    for f in hof_files:
         try:
-            meta = _torch.load(latest_path, map_location="cpu", weights_only=False)
+            meta = _torch.load(f, map_location="cpu", weights_only=False)
+            model_name = meta.get("model_name") or meta.get("display_name") or f.stem
             result.append({
-                "filename": "tarok_agent_latest.pt",
+                "filename": f"hall_of_fame/{f.name}",
+                "persona": meta.get("persona") or f.stem,
+                "model_name": model_name,
                 "episode": meta.get("episode", 0),
                 "session": meta.get("session", 0),
                 "win_rate": meta.get("metrics", {}).get("win_rate", 0),
                 "avg_reward": meta.get("metrics", {}).get("avg_reward", 0),
-                "model_name": meta.get("model_name", None),
+                "is_hof": True,
+            })
+        except Exception:
+            result.append({"filename": f"hall_of_fame/{f.name}", "is_hof": True, "episode": 0})
+
+    # 2. Persona subdirectories — expose _current.pt for each
+    for persona_dir in sorted(root_ckpt_dir.iterdir()):
+        if not persona_dir.is_dir() or persona_dir.name == "hall_of_fame":
+            continue
+        current = persona_dir / "_current.pt"
+        if not current.exists():
+            continue
+        persona_name = persona_dir.name
+        try:
+            meta = _torch.load(current, map_location="cpu", weights_only=False)
+            model_name = meta.get("model_name") or meta.get("display_name") or persona_name
+            result.append({
+                "filename": f"{persona_name}/_current.pt",
+                "persona": persona_name,
+                "model_name": model_name,
+                "episode": meta.get("episode", 0),
+                "session": meta.get("session", 0),
+                "win_rate": meta.get("metrics", {}).get("win_rate", 0),
+                "avg_reward": meta.get("metrics", {}).get("avg_reward", 0),
                 "is_hof": False,
             })
         except Exception:
-            result.append({"filename": "tarok_agent_latest.pt", "episode": 0, "is_hof": False})
+            result.append({"filename": f"{persona_name}/_current.pt", "persona": persona_name, "is_hof": False, "episode": 0})
 
-    if not ckpt_dir.exists():
-        return {"checkpoints": result}
-    files = [f for f in ckpt_dir.glob("tarok_agent_*.pt") if f.name != "tarok_agent_latest.pt"]
-    if hof_dir.exists():
-        files.extend([f for f in hof_dir.glob("hof_*.pt")])
-
-    files = sorted(files, key=lambda x: x.stat().st_mtime, reverse=True)
-
-    # Also scan root-level checkpoints/ directory
-    if root_ckpt_dir.exists():
-        seen_names = {f.name for f in files}
-        seen_names.add("tarok_agent_latest.pt")  # already handled above
-        root_files = sorted(
-            [f for f in root_ckpt_dir.glob("*.pt") if f.name not in seen_names],
-            key=lambda x: x.stat().st_mtime,
-            reverse=True,
-        )
-        files.extend(root_files)
-
-    for f in files:
-        import torch as _torch
-        try:
-            meta = _torch.load(f, map_location="cpu", weights_only=False)
-            model_name = meta.get("model_name", None) or meta.get("display_name", None)
-            is_hof = "hof_" in f.name
-            
-            result.append({
-                "filename": str(f.relative_to(ckpt_dir)) if ckpt_dir in f.parents or f.parent == ckpt_dir else f.name,
-                "episode": meta.get("episode", 0),
-                "session": meta.get("session", 0),
-                "win_rate": meta.get("metrics", {}).get("win_rate", 0),
-                "avg_reward": meta.get("metrics", {}).get("avg_reward", 0),
-                "model_name": model_name,
-                "is_hof": is_hof,
-                "persona": meta.get("persona") if is_hof else None,
-            })
-        except Exception:
-            result.append({
-                "filename": str(f.relative_to(ckpt_dir)) if ckpt_dir in f.parents or f.parent == ckpt_dir else f.name,
-                "episode": 0,
-                "is_hof": "hof_" in f.name,
-            })
     return {"checkpoints": result}
+
+
+def _resolve_checkpoint_path(token: str) -> Path | None:
+    return resolve_checkpoint(token)
 
 
 # ---- Game endpoints ----
@@ -213,23 +209,20 @@ def _load_opponent(choice: str, index: int):
     """Load a single AI opponent from a choice string.
 
     Supports registry bots (random, stockskis_v1..v5, etc.)
-    and checkpoint filenames for RL agents.
+    and checkpoint tokens:
+      - "PersonaName"             → ../data/checkpoints/PersonaName/_current.pt
+      - "PersonaName/_current.pt" → ../data/checkpoints/PersonaName/_current.pt
+      - "hall_of_fame/foo.pt"     → ../data/checkpoints/hall_of_fame/foo.pt
     """
     registry = get_registry()
 
-    # Check registry first (stockskis_v1..v5, random, etc.)
     if registry.has(choice):
         return registry.create(choice, name=f"AI-{index + 1}")
 
-    # RL checkpoint path
-    if choice == "latest":
-        path = Path("checkpoints/tarok_agent_latest.pt")
-    else:
-        path = Path("checkpoints") / choice
+    path = _resolve_checkpoint_path(choice)
 
-    # Try to extract a display name from HOF metadata
     name = f"AI-{index + 1}"
-    if path.exists():
+    if path and path.exists():
         try:
             import torch as _torch
             meta = _torch.load(path, map_location="cpu", weights_only=False)
@@ -450,8 +443,8 @@ def _build_spectate_agent(cfg: dict, idx: int):
         return registry.create(f"stockskis_v{max(versions)}", name=agent_name)
 
     # RL agent
-    ckpt_path = Path("checkpoints") / checkpoint if checkpoint else Path("checkpoints/tarok_agent_latest.pt")
-    if ckpt_path.exists():
+    ckpt_path = _resolve_checkpoint_path(checkpoint) if checkpoint else None
+    if ckpt_path and ckpt_path.exists():
         agent = RLAgent.from_checkpoint(ckpt_path, name=agent_name)
     else:
         agent = RLAgent(name=agent_name)
@@ -507,7 +500,7 @@ async def new_spectate(req: SpectateRequest):
 
     # Fill remaining slots with RL agents
     while len(agents) < 4:
-        ckpt_path = Path("checkpoints/tarok_agent_latest.pt")
+        ckpt_path = _resolve_checkpoint_path("training_run") or Path("../data/checkpoints/training_run/_current.pt")
         if ckpt_path.exists():
             agent = RLAgent.from_checkpoint(ckpt_path, name=f"Agent-{len(agents)}")
         else:

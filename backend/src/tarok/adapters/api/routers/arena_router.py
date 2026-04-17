@@ -9,6 +9,8 @@ import time
 from datetime import datetime, timezone
 from pathlib import Path
 
+from tarok.adapters.api.checkpoint_utils import resolve_checkpoint
+
 from fastapi import APIRouter
 from pydantic import BaseModel
 
@@ -30,7 +32,13 @@ class ArenaRequest(BaseModel):
 _arena_task: asyncio.Task | None = None
 _arena_progress: dict | None = None
 _arena_history_path = Path(__file__).resolve().parents[5] / "data" / "arena_results.json"
-_ARENA_CHECKPOINT_DIRS = [Path("checkpoints"), Path("../checkpoints")]
+_ARENA_ROOT_CKPT_DIR = Path("../data/checkpoints")
+
+
+def _arena_resolve_checkpoint(token: str) -> str | None:
+    """Resolve a checkpoint token to a path string, using shared logic."""
+    path = resolve_checkpoint(token)
+    return str(path) if path else None
 
 # Contract name lookup (must match engine-rs Contract enum order)
 _ARENA_CONTRACT_NAMES = [
@@ -391,17 +399,12 @@ async def start_arena(req: ArenaRequest):
             has_nn = True
             ckpt = cfg.get("checkpoint", "")
             if ckpt:
-                for search_dir in _ARENA_CHECKPOINT_DIRS:
-                    candidate = search_dir / ckpt
-                    if candidate.exists():
-                        nn_checkpoint_path = str(candidate)
-                        break
+                nn_checkpoint_path = _arena_resolve_checkpoint(ckpt)
             if nn_checkpoint_path is None:
-                for search_dir in _ARENA_CHECKPOINT_DIRS:
-                    default = search_dir / "tarok_agent_latest.pt"
-                    if default.exists():
-                        nn_checkpoint_path = str(default)
-                        break
+                # Fall back to training_run persona
+                fallback = _ARENA_ROOT_CKPT_DIR / "training_run" / "_current.pt"
+                if fallback.exists():
+                    nn_checkpoint_path = str(fallback)
         seat_labels.append(label)
         agent_names.append(aname)
         agent_types_raw.append(atype)

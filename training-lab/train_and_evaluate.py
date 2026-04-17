@@ -272,7 +272,7 @@ def main() -> None:
             )
 
     # ── Resolve save directory ──────────────────────────────────────
-    save_dir = args.save_dir if args.save_dir is not None else f"checkpoints/{identity.name}"
+    save_dir = args.save_dir if args.save_dir is not None else f"data/checkpoints/{identity.name}"
 
     config = TrainingConfig(
         seats=config.seats,

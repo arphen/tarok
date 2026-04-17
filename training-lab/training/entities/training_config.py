@@ -26,7 +26,7 @@ class TrainingConfig:
     lr_min: float | None = None
     explore_rate: float = 0.10
     device: str = "auto"
-    save_dir: str = "checkpoints/training_run"
+    save_dir: str = "data/checkpoints/training_run"
     concurrency: int = 128
     imitation_coef: float = 0.3
     imitation_schedule: str = "constant"  # constant | linear | cosine

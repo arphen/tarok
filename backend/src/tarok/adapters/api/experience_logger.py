@@ -7,7 +7,7 @@ import time
 from pathlib import Path
 
 
-_DATA_DIR = Path(__file__).resolve().parents[4] / "data" / "human_play"
+_DATA_DIR = Path(__file__).resolve().parents[5] / "data" / "human_play"
 
 
 class HumanPlayExperienceLogger:

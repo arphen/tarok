@@ -65,7 +65,7 @@ class ResolveConfig:
             lr_min=merged.get("lr_min"),
             explore_rate=merged.get("explore_rate", 0.10),
             device=merged.get("device", "auto"),
-            save_dir=merged.get("save_dir", "checkpoints/training_run"),
+            save_dir=merged.get("save_dir", "data/checkpoints/training_run"),
             concurrency=merged.get("concurrency", 128),
             imitation_coef=merged.get("imitation_coef", 0.3),
             imitation_schedule=merged.get("imitation_schedule", "constant"),

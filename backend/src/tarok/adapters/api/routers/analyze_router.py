@@ -8,6 +8,7 @@ from fastapi import APIRouter
 from pydantic import BaseModel
 
 from tarok.adapters.ai.agent import RLAgent
+from tarok.adapters.api.checkpoint_utils import resolve_checkpoint_or_default
 from tarok.entities import Card, CardType, Suit, SuitRank, DECK, Contract, GameState, Phase, PlayerRole, Trick
 from tarok.entities.game_types import suit_card
 
@@ -131,8 +132,8 @@ async def analyze_hand(req: AnalyzeRequest):
     # Load the trained agent and get its recommendation
     agent = RLAgent(name="Advisor")
     agent.set_training(False)
-    checkpoint_path = Path("checkpoints/tarok_agent_latest.pt")
-    if checkpoint_path.exists():
+    checkpoint_path = resolve_checkpoint_or_default(None)
+    if checkpoint_path and checkpoint_path.exists():
         import torch
         checkpoint = torch.load(checkpoint_path, map_location="cpu", weights_only=True)
         agent.network.load_state_dict(checkpoint["model_state_dict"])
@@ -206,8 +207,8 @@ async def analyze_bid(req: AnalyzeBidRequest):
     # Load agent
     agent = RLAgent(name="BidAdvisor")
     agent.set_training(False)
-    checkpoint_path = Path("checkpoints/tarok_agent_latest.pt")
-    if checkpoint_path.exists():
+    checkpoint_path = resolve_checkpoint_or_default(None)
+    if checkpoint_path and checkpoint_path.exists():
         checkpoint = torch.load(checkpoint_path, map_location="cpu", weights_only=True)
         agent.network.load_state_dict(checkpoint["model_state_dict"])
 
@@ -278,8 +279,8 @@ async def analyze_king(req: AnalyzeKingRequest):
 
     agent = RLAgent(name="KingAdvisor")
     agent.set_training(False)
-    checkpoint_path = Path("checkpoints/tarok_agent_latest.pt")
-    if checkpoint_path.exists():
+    checkpoint_path = resolve_checkpoint_or_default(None)
+    if checkpoint_path and checkpoint_path.exists():
         checkpoint = torch.load(checkpoint_path, map_location="cpu", weights_only=True)
         agent.network.load_state_dict(checkpoint["model_state_dict"])
 
@@ -288,5 +289,5 @@ async def analyze_king(req: AnalyzeKingRequest):
     return {
         "recommended": _card_to_dict(recommended),
         "callable_kings": [_card_to_dict(k) for k in callable_kings],
-        "has_trained_model": checkpoint_path.exists(),
+        "has_trained_model": checkpoint_path is not None and checkpoint_path.exists(),
     }

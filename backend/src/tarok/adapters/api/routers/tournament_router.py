@@ -11,6 +11,7 @@ from pydantic import BaseModel
 
 from tarok.adapters.ai.agent import RLAgent
 from tarok.adapters.ai.bot_registry import get_registry
+from tarok.adapters.api.checkpoint_utils import resolve_checkpoint_or_default
 from tarok.adapters.ai.random_agent import RandomPlayer
 from tarok.adapters.ai.rust_game_loop import RustGameLoop as GameLoop
 
@@ -59,19 +60,7 @@ def _build_agent(cfg: dict, idx: int):
             return registry.create(f"stockskis_v{max(versions)}", name=agent_name)
 
     # RL agent (checkpoint)
-    ckpt_path = None
-    if checkpoint:
-        candidate = Path("checkpoints") / checkpoint
-        root_candidate = Path("../checkpoints") / checkpoint
-        if candidate.exists():
-            ckpt_path = candidate
-        elif root_candidate.exists():
-            ckpt_path = root_candidate
-    else:
-        default = Path("checkpoints/tarok_agent_latest.pt")
-        if default.exists():
-            ckpt_path = default
-
+    ckpt_path = resolve_checkpoint_or_default(checkpoint)
     if ckpt_path:
         agent = RLAgent.from_checkpoint(ckpt_path, name=agent_name)
     else:
