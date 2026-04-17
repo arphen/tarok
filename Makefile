@@ -4,11 +4,12 @@ export
 endif
 
 .PHONY: run backend frontend test train clean install test-e2e setup setup-hooks \
-	test-backend test-frontend test-frontend-unit test-coverage check-coverage test-lookahead \
+	test-backend test-lab test-frontend test-frontend-unit test-coverage test-coverage-backend test-coverage-lab check-coverage test-lookahead \
 	pipeline imitation-pretrain generate-expert-data build-engine ensure-engine kill stop \
 	train-with-humans ec2-train ec2-attach ec2-logs ec2-pull ec2-terminate
 
 UV_RUN = cd backend && PYTHONPATH=src:../model/src uv run --default-index https://pypi.org/simple
+UV_RUN_LAB = cd backend && PYTHONPATH=src:../model/src:../training-lab uv run --default-index https://pypi.org/simple
 EC2_KEY ?=
 EC2_SG ?=
 EC2_BUCKET ?=
@@ -78,10 +79,13 @@ frontend:
 # ──────────────────────────────────────────────
 # Tests
 # ──────────────────────────────────────────────
-test: test-backend test-frontend test-frontend-unit
+test: test-backend test-lab test-frontend test-frontend-unit
 
 test-backend:
 	$(UV_RUN) python -m pytest tests/ -v
+
+test-lab: ensure-engine
+	$(UV_RUN_LAB) python -m pytest ../training-lab/tests/ -v
 
 test-quick:
 	$(UV_RUN) python -m pytest tests/ -v -x --no-header
@@ -106,8 +110,13 @@ COVERAGE_BASELINE_FILE = .coverage-baseline
 # Deterministic flags — pin randomness so coverage doesn't fluctuate between runs
 COV_PYTEST = PYTHONHASHSEED=0 $(UV_RUN) python -m pytest tests/ -p no:randomly --hypothesis-seed=0
 
-test-coverage:
+test-coverage: test-coverage-backend test-coverage-lab
+
+test-coverage-backend:
 	$(COV_PYTEST) --cov=tarok --cov-report=term-missing --cov-report=json:coverage.json -v
+
+test-coverage-lab: ensure-engine
+	PYTHONHASHSEED=0 $(UV_RUN_LAB) python -m pytest ../training-lab/tests/ -p no:randomly --hypothesis-seed=0 --cov=training --cov-report=term-missing --cov-report=json:../training-lab/coverage.json -v
 
 check-coverage:
 	@echo "==> Running tests with coverage…"
