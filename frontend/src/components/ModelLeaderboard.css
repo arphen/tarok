@@ -1,0 +1,242 @@
+/* ============================================================
+   Model Leaderboard Drawer — right-side collapsible panel
+   ============================================================ */
+
+.model-leaderboard {
+  position: fixed;
+  top: 50px;
+  right: 0;
+  max-height: calc(100vh - 60px);
+  width: 36px;
+  z-index: 100;
+  display: flex;
+  flex-direction: row-reverse;
+  transition: width 0.25s ease;
+  pointer-events: none;
+}
+
+.model-leaderboard.leaderboard-open {
+  width: 340px;
+  pointer-events: auto;
+}
+
+/* Tab button (always visible) */
+.leaderboard-tab {
+  pointer-events: auto;
+  width: 36px;
+  min-width: 36px;
+  height: auto;
+  max-height: 120px;
+  background: rgba(0, 40, 20, 0.92);
+  border: 1px solid rgba(218, 165, 32, 0.3);
+  border-right: none;
+  border-radius: 6px 0 0 6px;
+  color: #daa520;
+  cursor: pointer;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  padding: 10px 4px;
+  font-size: 0.7rem;
+  writing-mode: vertical-lr;
+  align-self: flex-start;
+  margin-top: 8px;
+  transition: background 0.2s;
+}
+
+.leaderboard-tab:hover {
+  background: rgba(0, 60, 30, 0.95);
+}
+
+.leaderboard-tab-icon {
+  writing-mode: horizontal-tb;
+  font-size: 1.1rem;
+}
+
+.leaderboard-tab-label {
+  letter-spacing: 1px;
+  text-transform: uppercase;
+  font-weight: 600;
+}
+
+/* Panel content */
+.leaderboard-panel {
+  flex: 1;
+  max-height: calc(100vh - 70px);
+  background: rgba(0, 40, 20, 0.95);
+  border-left: 1px solid rgba(218, 165, 32, 0.3);
+  color: #e0e0e0;
+  overflow-y: auto;
+  overflow-x: hidden;
+  display: none;
+  flex-direction: column;
+  padding: 12px;
+}
+
+.leaderboard-open .leaderboard-panel {
+  display: flex;
+}
+
+/* Header */
+.leaderboard-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 10px;
+}
+
+.leaderboard-header h3 {
+  margin: 0;
+  font-size: 0.95rem;
+  color: #daa520;
+}
+
+.leaderboard-close {
+  background: none;
+  border: none;
+  color: #999;
+  cursor: pointer;
+  font-size: 1rem;
+  padding: 2px 6px;
+}
+
+.leaderboard-close:hover {
+  color: #fff;
+}
+
+/* Loading / empty */
+.leaderboard-loading,
+.leaderboard-empty {
+  text-align: center;
+  color: #999;
+  padding: 24px 0;
+  font-size: 0.85rem;
+}
+
+/* Top models banner */
+.top-models {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 8px;
+  background: rgba(218, 165, 32, 0.08);
+  border: 1px solid rgba(218, 165, 32, 0.2);
+  border-radius: 6px;
+  margin-bottom: 10px;
+}
+
+.top-label {
+  font-size: 0.7rem;
+  text-transform: uppercase;
+  letter-spacing: 1px;
+  color: #daa520;
+  font-weight: 700;
+  margin-bottom: 2px;
+}
+
+.top-model {
+  font-size: 0.8rem;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.top-model-0 { color: #ffd700; }
+.top-model-1 { color: #c0c0c0; }
+.top-model-2 { color: #cd7f32; }
+
+/* Tournament tabs */
+.tournament-tabs {
+  display: flex;
+  gap: 4px;
+  margin-bottom: 8px;
+}
+
+.tournament-tab-btn {
+  flex: 1;
+  padding: 5px 8px;
+  background: rgba(255, 255, 255, 0.06);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 4px;
+  color: #ccc;
+  cursor: pointer;
+  font-size: 0.75rem;
+  font-weight: 600;
+  transition: all 0.15s;
+}
+
+.tournament-tab-btn:hover {
+  background: rgba(255, 255, 255, 0.1);
+}
+
+.tournament-tab-btn.active {
+  background: rgba(218, 165, 32, 0.2);
+  border-color: #daa520;
+  color: #daa520;
+}
+
+/* Standings table */
+.leaderboard-table-wrap {
+  flex: 1;
+  overflow-y: auto;
+}
+
+.leaderboard-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.75rem;
+}
+
+.leaderboard-table th {
+  position: sticky;
+  top: 0;
+  background: rgba(0, 40, 20, 0.98);
+  color: #daa520;
+  text-align: left;
+  padding: 4px 6px;
+  font-weight: 700;
+  font-size: 0.7rem;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  border-bottom: 1px solid rgba(218, 165, 32, 0.3);
+}
+
+.leaderboard-table td {
+  padding: 4px 6px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.05);
+}
+
+.leaderboard-table tr:hover {
+  background: rgba(255, 255, 255, 0.04);
+}
+
+.col-rank {
+  color: #999;
+  font-weight: 600;
+  width: 20px;
+}
+
+.col-model {
+  max-width: 100px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.col-avg {
+  font-weight: 600;
+  color: #8f8;
+}
+
+.row-top .col-rank { color: #daa520; }
+.row-random { opacity: 0.5; }
+
+/* Table meta */
+.table-meta {
+  font-size: 0.7rem;
+  color: #777;
+  text-align: center;
+  padding: 8px 0;
+}

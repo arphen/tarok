@@ -1,0 +1,1189 @@
+/* ---- Spectator setup ---- */
+.spectator-view {
+  min-height: 100vh;
+  display: flex;
+  flex-direction: column;
+}
+
+.spectator-title {
+  font-family: 'Playfair Display', serif;
+  font-size: 16px;
+  color: var(--accent-gold);
+}
+
+.spectator-setup {
+  max-width: 800px;
+  margin: 0 auto;
+  padding: 40px 24px;
+  text-align: center;
+}
+
+.spectator-setup h2 {
+  font-size: 32px;
+  color: var(--accent-gold);
+  margin-bottom: 8px;
+}
+
+.setup-subtitle {
+  color: var(--text-secondary);
+  margin-bottom: 32px;
+}
+
+.agent-config-grid {
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  gap: 16px;
+  margin-bottom: 24px;
+  text-align: left;
+}
+
+.agent-config-card {
+  background: rgba(0, 0, 0, 0.3);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 12px;
+  padding: 16px;
+}
+
+.agent-config-header {
+  margin-bottom: 12px;
+}
+
+.agent-seat {
+  font-size: 12px;
+  text-transform: uppercase;
+  letter-spacing: 1px;
+  color: var(--accent-gold);
+  font-weight: 600;
+}
+
+.config-field {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin-bottom: 10px;
+}
+
+.config-field span:first-child {
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  color: var(--text-secondary);
+}
+
+.config-field input,
+.config-field select {
+  background: rgba(0, 0, 0, 0.3);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 6px;
+  padding: 8px 10px;
+  color: var(--text-primary);
+  font-size: 13px;
+  font-family: 'Inter', sans-serif;
+}
+
+.config-field input:focus,
+.config-field select:focus {
+  outline: none;
+  border-color: var(--accent-gold);
+}
+
+.config-field select option {
+  background: var(--bg-primary);
+}
+
+.delay-config {
+  margin-bottom: 24px;
+}
+
+.replay-config {
+  margin-bottom: 24px;
+  padding: 18px;
+  border-radius: 12px;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  background: rgba(0, 0, 0, 0.22);
+  text-align: left;
+}
+
+.replay-config h3 {
+  margin: 0 0 6px;
+  font-size: 18px;
+  color: var(--accent-gold);
+}
+
+.replay-actions {
+  display: flex;
+  gap: 12px;
+  align-items: end;
+  flex-wrap: wrap;
+}
+
+.replay-select-field {
+  flex: 1 1 320px;
+  margin-bottom: 0;
+}
+
+.config-field-inline {
+  flex-direction: row;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+}
+
+.config-field-inline input {
+  width: 80px;
+  text-align: center;
+}
+
+.config-unit {
+  font-size: 13px !important;
+  text-transform: none !important;
+  color: var(--text-secondary) !important;
+}
+
+/* ---- Spectator drawer (replaces sidebar) ---- */
+.spectator-drawer {
+  position: absolute;
+  right: 0;
+  top: 0;
+  bottom: 0;
+  width: 0;
+  z-index: 20;
+  transition: width 0.3s ease;
+  display: flex;
+}
+
+.spectator-drawer.drawer-open {
+  width: 320px;
+}
+
+.drawer-tab {
+  position: absolute;
+  writing-mode: vertical-rl;
+  text-orientation: mixed;
+  background: rgba(0, 0, 0, 0.6);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  color: var(--accent-gold);
+  font-size: 12px;
+  font-weight: 600;
+  padding: 12px 6px;
+  cursor: pointer;
+  z-index: 21;
+  transition: background 0.2s;
+}
+
+.drawer-tab:hover {
+  background: rgba(0, 0, 0, 0.8);
+}
+
+.drawer-tab-right {
+  right: 100%;
+  top: 50%;
+  transform: translateY(-50%);
+  border-radius: 8px 0 0 8px;
+  border-right: none;
+}
+
+.drawer-panel {
+  width: 320px;
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  background: rgba(0, 0, 0, 0.4);
+  border-left: 1px solid rgba(255, 255, 255, 0.08);
+  overflow: hidden;
+}
+
+/* Layout must be position:relative for drawer positioning */
+.spectator-layout {
+  display: flex;
+  flex: 1;
+  min-height: 0;
+  height: calc(100vh - 50px);
+  position: relative;
+  overflow: hidden;
+}
+
+.spectator-board {
+  flex: 1;
+  overflow-y: auto;
+  overflow-x: hidden;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 16px;
+}
+
+.spectator-table {
+  grid-template-columns: 140px 1fr 140px;
+  grid-template-areas:
+    "top    top    top"
+    "left center right"
+    "bottom bottom bottom";
+  flex: 1;
+  min-height: 0;
+  max-height: calc(100vh - 200px);
+}
+
+/* Spectator: all hands visible — use smaller cards for opponents */
+.spectator-table .hand-top .card,
+.spectator-table .hand-left .card,
+.spectator-table .hand-right .card,
+.spectator-table .hand-bottom .card {
+  width: 48px;
+  height: 72px;
+  font-size: 0.65em;
+}
+
+.spectator-table .hand-horizontal .card {
+  margin-left: -16px;
+}
+
+.spectator-table .hand-horizontal .card:first-child {
+  margin-left: 0;
+}
+
+/* Vertical labels for left/right players in spectator mode */
+.spectator-table .hand-left .hand-label {
+  writing-mode: vertical-rl;
+  text-orientation: upright;
+  letter-spacing: 2px;
+}
+
+.spectator-table .hand-right .hand-label {
+  writing-mode: vertical-lr;
+  text-orientation: upright;
+  letter-spacing: 2px;
+}
+
+.spectator-board .game-info-bar {
+  position: sticky;
+  top: 0;
+  z-index: 15;
+  backdrop-filter: blur(8px);
+  background: rgba(0, 0, 0, 0.7);
+  flex-shrink: 0;
+}
+
+/* ---- Spectator Scoreboard ---- */
+.spectator-scoreboard {
+  border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+  flex-shrink: 0;
+}
+
+.spectator-scoreboard-header {
+  padding: 12px 16px 8px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+}
+
+.spectator-scoreboard-header h4 {
+  font-size: 12px;
+  text-transform: uppercase;
+  letter-spacing: 1.5px;
+  color: var(--accent-gold);
+  margin: 0;
+}
+
+.spectator-scoreboard-body {
+  padding: 8px 16px;
+}
+
+.scoreboard-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 4px 0;
+  font-size: 13px;
+  gap: 8px;
+}
+
+.scoreboard-name {
+  flex: 1;
+  color: var(--text-primary);
+  font-weight: 500;
+}
+
+.scoreboard-tricks {
+  color: var(--text-secondary);
+  font-size: 12px;
+  min-width: 55px;
+  text-align: right;
+}
+
+.scoreboard-cumulative {
+  font-size: 12px;
+  font-weight: 600;
+  min-width: 40px;
+  text-align: right;
+}
+
+.scoreboard-final {
+  margin-top: 8px;
+  padding-top: 8px;
+  border-top: 1px solid rgba(255, 255, 255, 0.1);
+}
+
+.scoreboard-final-row.score-positive .scoreboard-score {
+  color: #81c784;
+  font-weight: 700;
+}
+
+.scoreboard-final-row.score-negative .scoreboard-score {
+  color: #e57373;
+  font-weight: 700;
+}
+
+.scoreboard-score {
+  min-width: 40px;
+  text-align: right;
+}
+
+.scoreboard-game-score {
+  font-size: 12px;
+  min-width: 36px;
+  text-align: right;
+}
+
+.scoreboard-leader {
+  background: rgba(218, 165, 32, 0.1);
+  border-radius: 4px;
+  padding: 4px 4px;
+}
+
+.scoreboard-leader .scoreboard-name {
+  color: var(--accent-gold);
+  font-weight: 700;
+}
+
+.scoreboard-leader-row td {
+  color: var(--accent-gold) !important;
+  font-weight: 700;
+}
+
+/* ---- Trick history ---- */
+.trick-history {
+  border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+  max-height: 40%;
+  display: flex;
+  flex-direction: column;
+}
+
+.trick-history-header {
+  padding: 12px 16px 8px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+}
+
+.trick-history-header h4 {
+  font-size: 12px;
+  text-transform: uppercase;
+  letter-spacing: 1.5px;
+  color: var(--accent-gold);
+}
+
+.trick-history-list {
+  overflow-y: auto;
+  padding: 4px 0;
+}
+
+.trick-history-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  padding: 6px 16px;
+  background: none;
+  border: none;
+  border-radius: 0;
+  border-left: 3px solid transparent;
+  color: var(--text-secondary);
+  font-size: 12px;
+  cursor: pointer;
+  text-align: left;
+  transition: background 0.15s;
+}
+
+.trick-history-item:hover {
+  background: rgba(255, 255, 255, 0.04);
+  transform: none;
+}
+
+.trick-history-item.active {
+  background: rgba(212, 168, 67, 0.1);
+  border-left-color: var(--accent-gold);
+  color: var(--text-primary);
+}
+
+.trick-num {
+  font-weight: 600;
+  min-width: 24px;
+  color: var(--text-secondary);
+}
+
+.trick-cards-mini {
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.trick-winner-badge {
+  font-size: 11px;
+  padding: 2px 6px;
+  border-radius: 4px;
+  background: rgba(76, 175, 80, 0.2);
+  color: #81c784;
+  white-space: nowrap;
+}
+
+/* ---- Spectator log ---- */
+.spectator-log {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.spectator-log-header {
+  padding: 12px 16px 8px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+}
+
+.spectator-log-header h4 {
+  font-size: 12px;
+  text-transform: uppercase;
+  letter-spacing: 1.5px;
+  color: var(--accent-gold);
+}
+
+.spectator-log-entries {
+  flex: 1;
+  overflow-y: auto;
+  padding: 4px 0;
+}
+
+.spectator-log-empty {
+  padding: 24px 16px;
+  text-align: center;
+  color: var(--text-secondary);
+  font-size: 13px;
+  font-style: italic;
+}
+
+.spectator-log-entry {
+  display: flex;
+  gap: 8px;
+  padding: 5px 16px;
+  font-size: 12px;
+  line-height: 1.4;
+  color: var(--text-secondary);
+  border-left: 3px solid transparent;
+}
+
+.spectator-log-entry:hover {
+  background: rgba(255, 255, 255, 0.03);
+}
+
+.spectator-log-entry.log-bid { border-left-color: #6a9eff; }
+.spectator-log-entry.log-king { border-left-color: var(--accent-gold); color: var(--accent-gold); }
+.spectator-log-entry.log-play { border-left-color: rgba(255, 255, 255, 0.2); }
+.spectator-log-entry.log-trick { border-left-color: #4caf50; color: #81c784; }
+.spectator-log-entry.log-score { border-left-color: var(--accent); color: var(--text-primary); font-weight: 600; }
+.spectator-log-entry.log-talon { border-left-color: #9c6dcc; }
+.spectator-log-entry.log-announce { border-left-color: #ff9800; }
+
+/* ---- Trick replay ---- */
+.trick-replay {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 12px;
+}
+
+.trick-replay-header {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  font-weight: 600;
+  color: var(--accent-gold);
+}
+
+.trick-replay-winner {
+  font-size: 13px;
+  color: #81c784;
+  font-weight: 600;
+}
+
+/* ---- Spectator bidding ---- */
+.spectator-bidding {
+  text-align: center;
+}
+
+.spectator-bidding h3 {
+  color: var(--accent-gold);
+  margin-bottom: 12px;
+}
+
+.bid-history {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin-bottom: 12px;
+}
+
+.bid-entry {
+  display: flex;
+  justify-content: center;
+  gap: 8px;
+  font-size: 14px;
+}
+
+.bid-player {
+  color: var(--text-secondary);
+  min-width: 80px;
+  text-align: right;
+}
+
+.bid-value {
+  font-weight: 600;
+  min-width: 80px;
+  text-align: left;
+}
+
+.spectator-waiting {
+  color: var(--text-secondary);
+  font-size: 13px;
+  font-style: italic;
+}
+
+.spectator-waiting-center {
+  text-align: center;
+}
+
+.spectator-waiting-center h3 {
+  color: var(--accent-gold);
+  margin-bottom: 8px;
+}
+
+.spectator-waiting-center p {
+  color: var(--text-secondary);
+}
+
+.spectator-talon {
+  text-align: center;
+}
+
+.spectator-talon h3 {
+  color: var(--accent-gold);
+  margin-bottom: 12px;
+}
+
+/* Scrollbar styling for sidebar */
+.trick-history-list::-webkit-scrollbar,
+.spectator-log-entries::-webkit-scrollbar {
+  width: 4px;
+}
+
+.trick-history-list::-webkit-scrollbar-track,
+.spectator-log-entries::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.trick-history-list::-webkit-scrollbar-thumb,
+.spectator-log-entries::-webkit-scrollbar-thumb {
+  background: rgba(255, 255, 255, 0.15);
+  border-radius: 4px;
+}
+
+/* ---- Responsive ---- */
+@media (max-width: 900px) {
+  .agent-config-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .spectator-sidebar {
+    width: 260px;
+    min-width: 260px;
+  }
+
+  .spectator-table {
+    grid-template-columns: 100px 1fr 100px;
+  }
+
+  .counting-exam-grid {
+    grid-template-columns: 1fr;
+  }
+}
+
+.spectator-playback {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  align-items: center;
+  background-color: var(--glass-bg);
+  padding: 10px;
+  border-radius: 8px;
+  margin-top: auto;
+  margin-bottom: 20px;
+  width: 100%;
+}
+
+.playback-controls {
+  display: flex;
+  gap: 10px;
+}
+
+.playback-timeline {
+  display: flex;
+  align-items: center;
+  width: 100%;
+  gap: 10px;
+}
+
+.timeline-slider {
+  flex: 1;
+}
+
+.timeline-text {
+  min-width: 60px;
+  text-align: right;
+  font-family: monospace;
+}
+
+/* ---- Score display (full version with tables) ---- */
+.score-display-full {
+  max-height: 70vh;
+  overflow-y: auto;
+  text-align: left;
+  min-width: 500px;
+}
+
+.score-display-full h3 {
+  text-align: center;
+}
+
+.score-display-full h4 {
+  color: var(--accent-gold);
+  font-size: 15px;
+  margin: 16px 0 8px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+  padding-bottom: 4px;
+}
+
+/* Results table */
+.results-table {
+  width: 100%;
+  border-collapse: collapse;
+  margin-bottom: 8px;
+}
+
+.results-table th {
+  text-align: left;
+  color: var(--text-secondary);
+  font-size: 12px;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  padding: 6px 12px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+}
+
+.results-table td {
+  padding: 6px 12px;
+  font-size: 14px;
+}
+
+.results-table tr.score-positive td {
+  background: rgba(76, 175, 80, 0.12);
+  color: #81c784;
+}
+
+.results-table tr.score-negative td {
+  background: rgba(244, 67, 54, 0.12);
+  color: #e57373;
+}
+
+.results-table .score-value {
+  font-weight: 700;
+  font-size: 16px;
+  text-align: right;
+}
+
+/* Score breakdown */
+.score-breakdown {
+  margin-top: 4px;
+}
+
+.breakdown-explanation {
+  color: var(--text-secondary);
+  font-size: 13px;
+  margin-bottom: 8px;
+}
+
+.breakdown-table {
+  width: 100%;
+  border-collapse: collapse;
+}
+
+.breakdown-table td {
+  padding: 4px 12px;
+  font-size: 13px;
+}
+
+.breakdown-label {
+  color: var(--text-secondary);
+}
+
+.breakdown-value {
+  text-align: right;
+  font-family: monospace;
+}
+
+.val-pos { color: #81c784; }
+.val-neg { color: #e57373; }
+.val-detail { color: var(--text-secondary); font-style: italic; }
+
+/* ---- Match Data & Metadata ---- */
+.match-metadata {
+  margin-top: 8px;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 8px;
+  padding: 12px;
+  background: rgba(0, 0, 0, 0.15);
+}
+
+.match-metadata-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+
+.match-metadata-header h4 {
+  margin: 0;
+  border-bottom: none;
+  padding-bottom: 0;
+}
+
+.match-metadata-summary {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.metadata-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 3px 0;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.04);
+}
+
+.metadata-label {
+  color: var(--text-secondary);
+  font-size: 12px;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  min-width: 100px;
+}
+
+.metadata-value {
+  font-size: 13px;
+  text-align: right;
+}
+
+.match-metadata-detail {
+  margin-top: 12px;
+  border-top: 1px solid rgba(255, 255, 255, 0.1);
+  padding-top: 8px;
+}
+
+.metadata-section {
+  margin-bottom: 12px;
+}
+
+.metadata-section h5 {
+  color: var(--accent-gold);
+  font-size: 12px;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  margin: 0 0 6px 0;
+}
+
+.metadata-section-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 6px;
+}
+
+.metadata-section-header h5 {
+  margin: 0;
+}
+
+.btn-xs {
+  font-size: 10px;
+  padding: 2px 8px;
+  border-radius: 4px;
+}
+
+/* Bidding sequence */
+.bidding-sequence {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+
+.bid-chip {
+  font-size: 11px;
+  padding: 3px 8px;
+  border-radius: 4px;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+}
+
+.bid-chip-active {
+  background: rgba(76, 175, 80, 0.15);
+  color: #81c784;
+  border-color: rgba(76, 175, 80, 0.3);
+}
+
+.bid-chip-pass {
+  background: rgba(255, 255, 255, 0.04);
+  color: var(--text-secondary);
+}
+
+/* Talon / put down metadata */
+.metadata-talon-groups {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.metadata-talon-group {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  flex-wrap: wrap;
+}
+
+.metadata-talon-group-label {
+  font-size: 11px;
+  color: var(--text-secondary);
+  min-width: 58px;
+}
+
+.metadata-card-chip {
+  font-size: 11px;
+  padding: 2px 6px;
+  border-radius: 3px;
+  background: rgba(255, 255, 255, 0.06);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+}
+
+.metadata-put-down {
+  display: flex;
+  gap: 4px;
+  flex-wrap: wrap;
+}
+
+/* Card points breakdown */
+.card-points-breakdown {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.cpb-team {
+  padding: 6px 10px;
+  border-radius: 6px;
+}
+
+.cpb-decl {
+  background: rgba(76, 175, 80, 0.08);
+  border: 1px solid rgba(76, 175, 80, 0.2);
+}
+
+.cpb-opp {
+  background: rgba(244, 67, 54, 0.08);
+  border: 1px solid rgba(244, 67, 54, 0.2);
+}
+
+.cpb-team-label {
+  font-size: 12px;
+  font-weight: 600;
+  margin-right: 8px;
+}
+
+.cpb-team-pts {
+  font-size: 12px;
+  color: var(--text-secondary);
+}
+
+.cpb-cards {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 3px;
+  margin-top: 6px;
+}
+
+.cpb-card {
+  font-size: 10px;
+  padding: 1px 5px;
+  border-radius: 3px;
+  background: rgba(255, 255, 255, 0.06);
+  font-family: monospace;
+}
+
+.cpb-card sup {
+  font-size: 8px;
+  color: var(--accent-gold);
+  margin-left: 1px;
+}
+
+/* Lead / winner arrows in trick table */
+.lead-card {
+  /* subtle indicator for lead player */
+}
+
+.lead-arrow {
+  color: #64b5f6;
+  font-size: 10px;
+  margin-right: 1px;
+}
+
+.winner-arrow {
+  color: var(--accent-gold);
+  font-size: 10px;
+  margin-left: 1px;
+}
+
+/* Trick results table */
+.trick-results {
+  margin-top: 4px;
+}
+
+.trick-results-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 12px;
+}
+
+.trick-results-table th {
+  text-align: left;
+  color: var(--text-secondary);
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  padding: 4px 8px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+}
+
+.trick-results-table td {
+  padding: 3px 8px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.04);
+}
+
+.trick-results-table tr.trick-decl td {
+  background: rgba(76, 175, 80, 0.06);
+}
+
+.trick-results-table tr.trick-opp td {
+  background: rgba(244, 67, 54, 0.06);
+}
+
+.trick-cards-cell {
+  font-size: 11px;
+  color: var(--text-secondary);
+}
+
+.winning-card {
+  color: var(--accent-gold);
+  font-weight: 600;
+}
+
+.trick-winner-cell {
+  font-weight: 600;
+}
+
+/* Card counting examination */
+.counting-exam {
+  margin-top: 8px;
+}
+
+.counting-exam-header-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.counting-exam-header-row h4 {
+  margin: 0;
+  border-bottom: none;
+  padding-bottom: 0;
+}
+
+.counting-exam-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(250px, 1fr));
+  gap: 10px;
+}
+
+.counting-team-card {
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 10px;
+  padding: 10px;
+  background: rgba(0, 0, 0, 0.2);
+}
+
+.counting-team-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: 8px;
+  margin-bottom: 6px;
+}
+
+.counting-team-title {
+  color: var(--accent-gold);
+  font-weight: 600;
+  font-size: 13px;
+}
+
+.counting-team-players {
+  color: var(--text-secondary);
+  font-size: 12px;
+}
+
+.counting-team-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 12px;
+}
+
+.counting-team-table th {
+  text-align: left;
+  color: var(--text-secondary);
+  text-transform: uppercase;
+  font-size: 10px;
+  letter-spacing: 0.4px;
+  padding: 4px 6px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+}
+
+.counting-team-table td {
+  padding: 4px 6px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.05);
+}
+
+.counting-cards-cell {
+  color: var(--text-secondary);
+  font-size: 11px;
+}
+
+.counting-calc-cell {
+  color: var(--text-secondary);
+  font-size: 11px;
+  font-family: monospace;
+  white-space: nowrap;
+}
+
+.counting-value-cell {
+  font-weight: 600;
+  text-align: right;
+}
+
+.counting-team-table tfoot td {
+  border-bottom: none;
+  font-weight: 700;
+  color: var(--accent-gold);
+  padding-top: 8px;
+}
+
+.counting-all-cards {
+  margin-bottom: 8px;
+  padding: 6px 8px;
+  background: rgba(0, 0, 0, 0.15);
+  border-radius: 6px;
+}
+
+.counting-all-cards-label {
+  display: block;
+  font-size: 11px;
+  color: var(--text-secondary);
+  margin-bottom: 4px;
+}
+
+.counting-all-cards-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 3px;
+}
+
+.counting-card-chip {
+  display: inline-block;
+  padding: 1px 5px;
+  border-radius: 3px;
+  background: rgba(255, 255, 255, 0.08);
+  font-size: 11px;
+  color: var(--text-primary);
+  cursor: default;
+}
+
+.counting-card-chip:hover {
+  background: rgba(218, 165, 32, 0.2);
+}
+
+.counting-incomplete-group td {
+  background: rgba(255, 193, 7, 0.06);
+  border-left: 2px solid rgba(255, 193, 7, 0.3);
+}
+
+.counting-empty {
+  color: var(--text-secondary);
+  text-align: center;
+  font-style: italic;
+}
+
+/* ---- Game counter (tournament) ---- */
+.game-counter {
+  font-size: 13px;
+  color: #daa520;
+  font-weight: 600;
+  background: rgba(218, 165, 32, 0.1);
+  padding: 4px 10px;
+  border-radius: 4px;
+}
+
+.tournament-controls {
+  text-align: center;
+  margin-top: 16px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 12px;
+}
+
+.cumulative-scores {
+  background: rgba(0, 0, 0, 0.3);
+  border-radius: 12px;
+  padding: 12px 16px;
+  min-width: 280px;
+}
+
+.cumulative-scores h4 {
+  color: var(--accent-gold);
+  font-size: 14px;
+  margin: 0 0 8px;
+  text-align: center;
+}
+
+.tournament-finished {
+  color: var(--accent-gold);
+  font-size: 18px;
+  font-weight: 700;
+  padding: 8px 16px;
+  background: rgba(218, 165, 32, 0.15);
+  border-radius: 8px;
+}
+

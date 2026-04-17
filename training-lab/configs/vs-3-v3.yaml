@@ -1,0 +1,25 @@
+# Train against 3 classic v3 bots
+#
+# Your neural network sits at seat 0 and learns from games against
+# three StockŠkis v3 opponents.  v3 is weaker than v5/v6 and can be
+# a useful easier starting point or curriculum stage.
+#
+# Usage:
+#   make train-new CONFIG=vs-3-v3
+
+seats: "nn,bot_v3,bot_v3,bot_v3"
+bench_seats: "nn,bot_v3,bot_v3,bot_v3"
+
+iterations: 10
+games: 3000
+bench_games: 3000
+benchmark_checkpoints: [0, 4, 7]
+best_model_metric: "loss"
+
+ppo_epochs: 6
+batch_size: 8192
+lr: 0.0003
+explore_rate: 0.10
+
+concurrency: 128
+device: auto

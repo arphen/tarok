@@ -1,0 +1,801 @@
+/// Scoring rules for Slovenian Tarok.
+///
+/// Cards are counted in groups of 3: (sum of 3 cards) - 2.
+/// Total game points = 70. Declarer wins with > 35 (≥ 36).
+
+use crate::card::*;
+use crate::game_state::*;
+use crate::trick_eval::evaluate_trick;
+use serde::Serialize;
+
+pub const TOTAL_GAME_POINTS: i32 = 70;
+pub const POINT_HALF: i32 = 35;
+
+// Silent bonus values
+const SILENT_TRULA: i32 = 10;
+const SILENT_KINGS: i32 = 10;
+const SILENT_PAGAT_ULTIMO: i32 = 25;
+const SILENT_VALAT: i32 = 250;
+// Announced bonus values
+const ANNOUNCED_TRULA: i32 = 20;
+const ANNOUNCED_KINGS: i32 = 20;
+const ANNOUNCED_PAGAT_ULTIMO: i32 = 50;
+const ANNOUNCED_VALAT: i32 = 500;
+
+/// Count card points using the groups-of-3 method.
+pub fn compute_card_points(cards: &[Card]) -> i32 {
+    let raw: i32 = cards.iter().map(|c| c.points() as i32).sum();
+    let n = cards.len() as i32;
+    let deduction = (n / 3) * 2 + if n % 3 == 2 { 1 } else { 0 };
+    raw - deduction
+}
+
+/// Compute card points for a CardSet.
+pub fn compute_card_points_set(set: CardSet) -> i32 {
+    let cards: Vec<Card> = set.iter().collect();
+    compute_card_points(&cards)
+}
+
+/// Evaluate all tricks and return per-trick winners.
+fn trick_winners(state: &GameState) -> Vec<u8> {
+    let contract = state.contract;
+    state
+        .tricks
+        .iter()
+        .enumerate()
+        .map(|(i, trick)| {
+            let is_last = i == state.tricks.len() - 1;
+            evaluate_trick(trick, is_last, contract).winner
+        })
+        .collect()
+}
+
+/// Collect cards won by each team.
+fn collect_team_cards(state: &GameState, winners: &[u8]) -> (CardSet, CardSet) {
+    let mut decl_cards = CardSet::EMPTY;
+    let mut opp_cards = CardSet::EMPTY;
+    for (i, trick) in state.tricks.iter().enumerate() {
+        let winner_team = state.get_team(winners[i]);
+        for j in 0..trick.count as usize {
+            match winner_team {
+                Team::DeclarerTeam => decl_cards.insert(trick.cards[j].1),
+                Team::OpponentTeam => opp_cards.insert(trick.cards[j].1),
+            }
+        }
+    }
+    (decl_cards, opp_cards)
+}
+
+/// Check if team achieved pagat ultimo (won the last trick with Pagat).
+fn pagat_ultimo(state: &GameState, team: Team, winners: &[u8]) -> bool {
+    if state.tricks.is_empty() {
+        return false;
+    }
+    let last_idx = state.tricks.len() - 1;
+    let last_trick = &state.tricks[last_idx];
+    let winner = winners[last_idx];
+    if state.get_team(winner) != team {
+        return false;
+    }
+    let pagat = Card::tarok(PAGAT);
+    for i in 0..last_trick.count as usize {
+        let (p, c) = last_trick.cards[i];
+        if c == pagat {
+            return state.get_team(p) == team;
+        }
+    }
+    false
+}
+
+/// Get which team announced a given announcement, if any.
+fn announced_by(state: &GameState, ann: Announcement) -> Option<Team> {
+    let bit = 1u8 << (ann as u8);
+    for p in 0..NUM_PLAYERS {
+        if state.announcements[p] & bit != 0 {
+            return Some(state.get_team(p as u8));
+        }
+    }
+    None
+}
+
+// -----------------------------------------------------------------------
+// Scoring entry point
+// -----------------------------------------------------------------------
+
+/// Compute final scores for all players. Returns [i32; 4].
+pub fn score_game(state: &GameState) -> [i32; NUM_PLAYERS] {
+    let contract = state.contract.expect("score_game called without contract");
+
+    match contract {
+        Contract::Klop => score_klop(state),
+        Contract::Berac => score_berac(state),
+        Contract::BarvniValat => score_barvni_valat(state),
+        _ => score_normal(state, contract),
+    }
+}
+
+fn score_klop(state: &GameState) -> [i32; NUM_PLAYERS] {
+    let winners = trick_winners(state);
+    let mut player_points = [0i32; NUM_PLAYERS];
+    let mut player_tricks_won = [0u32; NUM_PLAYERS];
+
+    for (i, trick) in state.tricks.iter().enumerate() {
+        let w = winners[i] as usize;
+        // Collect cards for this trick's winner
+        let trick_cards: Vec<Card> = (0..trick.count as usize)
+            .map(|j| trick.cards[j].1)
+            .collect();
+        player_points[w] += compute_card_points(&trick_cards);
+        player_tricks_won[w] += 1;
+    }
+
+    let mut scores = [0i32; NUM_PLAYERS];
+    for p in 0..NUM_PLAYERS {
+        if player_points[p] > POINT_HALF {
+            scores[p] = -TOTAL_GAME_POINTS;
+        } else if player_tricks_won[p] == 0 {
+            scores[p] = TOTAL_GAME_POINTS;
+        } else {
+            scores[p] = -player_points[p];
+        }
+    }
+    scores
+}
+
+fn score_berac(state: &GameState) -> [i32; NUM_PLAYERS] {
+    let declarer = state.declarer.expect("berac without declarer") as usize;
+    let winners = trick_winners(state);
+    let base = Contract::Berac.base_value(); // 70
+    let declarer_trick_count = winners.iter().filter(|&&w| w as usize == declarer).count();
+
+    let mut scores = [0i32; NUM_PLAYERS];
+    if declarer_trick_count == 0 {
+        scores[declarer] = base;
+    } else {
+        scores[declarer] = -base;
+    }
+    scores
+}
+
+fn score_barvni_valat(state: &GameState) -> [i32; NUM_PLAYERS] {
+    let declarer = state.declarer.expect("barvni_valat without declarer") as usize;
+    let winners = trick_winners(state);
+    let mut base = Contract::BarvniValat.base_value(); // 125
+    let all_won = winners.iter().all(|&w| w as usize == declarer);
+
+    if !all_won {
+        base = -base;
+    }
+    base *= state.kontra_multiplier(KontraTarget::Game);
+
+    let mut scores = [0i32; NUM_PLAYERS];
+    scores[declarer] = base;
+    scores
+}
+
+fn score_normal(state: &GameState, contract: Contract) -> [i32; NUM_PLAYERS] {
+    let _declarer = state.declarer.expect("normal game without declarer");
+    let winners = trick_winners(state);
+    let (decl_card_set, opp_card_set) = collect_team_cards(state, &winners);
+
+    // Add put-down cards to declarer pile
+    let full_decl_set = decl_card_set.union(state.put_down);
+
+    // Unchosen talon cards go to opponent team
+    let full_opp_set = opp_card_set.union(state.talon);
+
+    let decl_cards: Vec<Card> = full_decl_set.iter().collect();
+    let _opp_cards: Vec<Card> = full_opp_set.iter().collect();
+
+    let declarer_points = compute_card_points(&decl_cards);
+    let declarer_won = declarer_points > POINT_HALF;
+
+    let point_diff = (declarer_points - POINT_HALF).abs();
+    let mut base_score = contract.base_value() + point_diff;
+    if !declarer_won {
+        base_score = -base_score;
+    }
+    base_score *= state.kontra_multiplier(KontraTarget::Game);
+
+    // --- Bonuses ---
+    let mut bonus = 0i32;
+
+    // Trula
+    let decl_has_trula = full_decl_set.has_trula();
+    let opp_has_trula = full_opp_set.has_trula();
+    let mut trula_bonus = 0i32;
+    if let Some(ann_team) = announced_by(state, Announcement::Trula) {
+        if ann_team == Team::DeclarerTeam {
+            trula_bonus = if decl_has_trula {
+                ANNOUNCED_TRULA
+            } else {
+                -ANNOUNCED_TRULA
+            };
+        } else {
+            trula_bonus = if opp_has_trula {
+                -ANNOUNCED_TRULA
+            } else {
+                ANNOUNCED_TRULA
+            };
+        }
+        trula_bonus *= state.kontra_multiplier(KontraTarget::Trula);
+    } else if decl_has_trula {
+        trula_bonus = SILENT_TRULA;
+    } else if opp_has_trula {
+        trula_bonus = -SILENT_TRULA;
+    }
+    bonus += trula_bonus;
+
+    // Kings
+    let decl_has_kings = full_decl_set.has_all_kings();
+    let opp_has_kings = full_opp_set.has_all_kings();
+    let mut kings_bonus = 0i32;
+    if let Some(ann_team) = announced_by(state, Announcement::Kings) {
+        if ann_team == Team::DeclarerTeam {
+            kings_bonus = if decl_has_kings {
+                ANNOUNCED_KINGS
+            } else {
+                -ANNOUNCED_KINGS
+            };
+        } else {
+            kings_bonus = if opp_has_kings {
+                -ANNOUNCED_KINGS
+            } else {
+                ANNOUNCED_KINGS
+            };
+        }
+        kings_bonus *= state.kontra_multiplier(KontraTarget::Kings);
+    } else if decl_has_kings {
+        kings_bonus = SILENT_KINGS;
+    } else if opp_has_kings {
+        kings_bonus = -SILENT_KINGS;
+    }
+    bonus += kings_bonus;
+
+    // Pagat ultimo
+    let decl_pagat = pagat_ultimo(state, Team::DeclarerTeam, &winners);
+    let opp_pagat = pagat_ultimo(state, Team::OpponentTeam, &winners);
+    let mut pagat_bonus = 0i32;
+    if let Some(ann_team) = announced_by(state, Announcement::PagatUltimo) {
+        if ann_team == Team::DeclarerTeam {
+            pagat_bonus = if decl_pagat {
+                ANNOUNCED_PAGAT_ULTIMO
+            } else {
+                -ANNOUNCED_PAGAT_ULTIMO
+            };
+        } else {
+            pagat_bonus = if opp_pagat {
+                -ANNOUNCED_PAGAT_ULTIMO
+            } else {
+                ANNOUNCED_PAGAT_ULTIMO
+            };
+        }
+        pagat_bonus *= state.kontra_multiplier(KontraTarget::PagatUltimo);
+    } else if decl_pagat {
+        pagat_bonus = SILENT_PAGAT_ULTIMO;
+    } else if opp_pagat {
+        pagat_bonus = -SILENT_PAGAT_ULTIMO;
+    }
+    bonus += pagat_bonus;
+
+    // Valat — when achieved, replaces ALL other scoring (base game + bonuses).
+    // Only the valat value applies (250 silent / 500 announced), with kontra.
+    let decl_all = winners.iter().all(|&w| state.get_team(w) == Team::DeclarerTeam);
+    let opp_all = winners.iter().all(|&w| state.get_team(w) == Team::OpponentTeam);
+    let valat_achieved = decl_all || opp_all;
+
+    let total_declarer;
+    if valat_achieved {
+        if let Some(ann_team) = announced_by(state, Announcement::Valat) {
+            let valat_sign = if (ann_team == Team::DeclarerTeam) == decl_all { 1 } else { -1 };
+            total_declarer = valat_sign * ANNOUNCED_VALAT * state.kontra_multiplier(KontraTarget::Valat);
+        } else {
+            let valat_base = if decl_all { SILENT_VALAT } else { -SILENT_VALAT };
+            total_declarer = valat_base * state.kontra_multiplier(KontraTarget::Valat);
+        }
+    } else {
+        // Valat not achieved — check for failed announcement penalty
+        let mut valat_bonus = 0i32;
+        if let Some(ann_team) = announced_by(state, Announcement::Valat) {
+            // Announced but failed
+            if ann_team == Team::DeclarerTeam {
+                valat_bonus = -ANNOUNCED_VALAT;
+            } else {
+                valat_bonus = ANNOUNCED_VALAT;
+            }
+            valat_bonus *= state.kontra_multiplier(KontraTarget::Valat);
+        }
+        bonus += valat_bonus;
+        total_declarer = base_score + bonus;
+    }
+
+    // Distribute scores — only declarer team scores, opponents get 0
+    let mut scores = [0i32; NUM_PLAYERS];
+    for p in 0..NUM_PLAYERS {
+        if state.get_team(p as u8) == Team::DeclarerTeam {
+            scores[p] = total_declarer;
+        }
+    }
+    scores
+}
+
+// -----------------------------------------------------------------------
+// Scoring breakdown — structured data for the UI display layer
+// -----------------------------------------------------------------------
+
+#[derive(Debug, Serialize)]
+pub struct BreakdownLine {
+    pub label: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub value: Option<i32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub detail: Option<String>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct TrickSummaryCard {
+    pub player: u8,
+    pub label: String,
+    pub points: u8,
+}
+
+#[derive(Debug, Serialize)]
+pub struct TrickSummaryEntry {
+    pub trick_num: usize,
+    pub lead_player: u8,
+    pub cards: Vec<TrickSummaryCard>,
+    pub winner: u8,
+    pub card_points: i32,
+}
+
+#[derive(Debug, Serialize)]
+pub struct ScoreBreakdown {
+    pub contract: String,
+    pub mode: String,
+    pub declarer_won: Option<bool>,
+    pub declarer_points: Option<i32>,
+    pub opponent_points: Option<i32>,
+    pub lines: Vec<BreakdownLine>,
+    pub scores: [i32; NUM_PLAYERS],
+    pub trick_summary: Vec<TrickSummaryEntry>,
+}
+
+fn contract_label(c: Contract) -> &'static str {
+    match c {
+        Contract::Klop => "Klop",
+        Contract::Three => "Three",
+        Contract::Two => "Two",
+        Contract::One => "One",
+        Contract::SoloThree => "Solo Three",
+        Contract::SoloTwo => "Solo Two",
+        Contract::SoloOne => "Solo One",
+        Contract::Solo => "Solo",
+        Contract::Berac => "Berač",
+        Contract::BarvniValat => "Barvni Valat",
+    }
+}
+
+fn contract_mode(c: Contract) -> &'static str {
+    if c.is_klop() {
+        "klop"
+    } else if c.is_solo() || c.is_berac() || c.is_barvni_valat() {
+        "solo"
+    } else {
+        "2v2"
+    }
+}
+
+fn build_trick_summary(state: &GameState) -> Vec<TrickSummaryEntry> {
+    let contract = state.contract;
+    state
+        .tricks
+        .iter()
+        .enumerate()
+        .map(|(i, trick)| {
+            let is_last = i == state.tricks.len() - 1;
+            let result = evaluate_trick(trick, is_last, contract);
+            let cards: Vec<TrickSummaryCard> = (0..trick.count as usize)
+                .map(|j| {
+                    let (player, card) = trick.cards[j];
+                    TrickSummaryCard {
+                        player,
+                        label: card.label(),
+                        points: card.points(),
+                    }
+                })
+                .collect();
+            let trick_cards: Vec<Card> = (0..trick.count as usize)
+                .map(|j| trick.cards[j].1)
+                .collect();
+            TrickSummaryEntry {
+                trick_num: i + 1,
+                lead_player: trick.lead_player,
+                cards,
+                winner: result.winner,
+                card_points: compute_card_points(&trick_cards),
+            }
+        })
+        .collect()
+}
+
+/// Full scoring breakdown for UI display. Returns all intermediate values
+/// so Python never re-derives scoring decisions.
+pub fn score_game_breakdown(state: &GameState) -> ScoreBreakdown {
+    let contract = state.contract.expect("score_game_breakdown without contract");
+    let scores = score_game(state);
+    let trick_summary = build_trick_summary(state);
+
+    match contract {
+        Contract::Klop => breakdown_klop(state, scores, trick_summary),
+        Contract::Berac => breakdown_berac(state, contract, scores, trick_summary),
+        Contract::BarvniValat => breakdown_barvni_valat(state, contract, scores, trick_summary),
+        _ => breakdown_normal(state, contract, scores, trick_summary),
+    }
+}
+
+fn breakdown_klop(
+    state: &GameState,
+    scores: [i32; NUM_PLAYERS],
+    trick_summary: Vec<TrickSummaryEntry>,
+) -> ScoreBreakdown {
+    let winners = trick_winners(state);
+    let mut lines = Vec::new();
+
+    for p in 0..NUM_PLAYERS {
+        let trick_cards: Vec<Card> = state
+            .tricks
+            .iter()
+            .enumerate()
+            .filter(|(i, _)| winners[*i] as usize == p)
+            .flat_map(|(_, t)| (0..t.count as usize).map(move |j| t.cards[j].1))
+            .collect();
+        let pts = compute_card_points(&trick_cards);
+        let tricks_won = winners.iter().filter(|&&w| w as usize == p).count();
+        let detail = if tricks_won == 0 {
+            format!("won 0 tricks → +{}", TOTAL_GAME_POINTS)
+        } else if pts > POINT_HALF {
+            format!("{} pts (>{}) → −{}", pts, POINT_HALF, TOTAL_GAME_POINTS)
+        } else {
+            format!("{} pts in {} trick(s)", pts, tricks_won)
+        };
+        lines.push(BreakdownLine {
+            label: format!("Player {}", p),
+            value: Some(scores[p]),
+            detail: Some(detail),
+        });
+    }
+
+    ScoreBreakdown {
+        contract: contract_label(Contract::Klop).to_string(),
+        mode: "klop".to_string(),
+        declarer_won: None,
+        declarer_points: None,
+        opponent_points: None,
+        lines,
+        scores,
+        trick_summary,
+    }
+}
+
+fn breakdown_berac(
+    state: &GameState,
+    contract: Contract,
+    scores: [i32; NUM_PLAYERS],
+    trick_summary: Vec<TrickSummaryEntry>,
+) -> ScoreBreakdown {
+    let declarer = state.declarer.expect("berac without declarer") as usize;
+    let winners = trick_winners(state);
+    let decl_tricks = winners.iter().filter(|&&w| w as usize == declarer).count();
+    let won = decl_tricks == 0;
+
+    let mut lines = vec![
+        BreakdownLine {
+            label: "Contract".to_string(),
+            value: Some(contract.base_value()),
+            detail: Some(contract_label(contract).to_string()),
+        },
+        BreakdownLine {
+            label: if won { "Declarer won all tricks avoided" } else { "Declarer won a trick — loss" }.to_string(),
+            value: Some(scores[declarer]),
+            detail: Some(format!("Declarer tricks: {}", decl_tricks)),
+        },
+    ];
+
+    // Kontra
+    let km = state.kontra_multiplier(KontraTarget::Game);
+    if km > 1 {
+        lines.push(BreakdownLine {
+            label: "Kontra multiplier".to_string(),
+            value: Some(km),
+            detail: None,
+        });
+    }
+
+    ScoreBreakdown {
+        contract: contract_label(contract).to_string(),
+        mode: "solo".to_string(),
+        declarer_won: Some(won),
+        declarer_points: None,
+        opponent_points: None,
+        lines,
+        scores,
+        trick_summary,
+    }
+}
+
+fn breakdown_barvni_valat(
+    state: &GameState,
+    contract: Contract,
+    scores: [i32; NUM_PLAYERS],
+    trick_summary: Vec<TrickSummaryEntry>,
+) -> ScoreBreakdown {
+    let declarer = state.declarer.expect("barvni_valat without declarer") as usize;
+    let winners = trick_winners(state);
+    let all_won = winners.iter().all(|&w| w as usize == declarer);
+
+    let mut lines = vec![
+        BreakdownLine {
+            label: "Contract".to_string(),
+            value: Some(contract.base_value()),
+            detail: Some(contract_label(contract).to_string()),
+        },
+        BreakdownLine {
+            label: if all_won { "All tricks won" } else { "Failed — didn't win all tricks" }.to_string(),
+            value: Some(scores[declarer]),
+            detail: None,
+        },
+    ];
+
+    let km = state.kontra_multiplier(KontraTarget::Game);
+    if km > 1 {
+        lines.push(BreakdownLine {
+            label: "Kontra multiplier".to_string(),
+            value: Some(km),
+            detail: None,
+        });
+    }
+
+    ScoreBreakdown {
+        contract: contract_label(contract).to_string(),
+        mode: "solo".to_string(),
+        declarer_won: Some(all_won),
+        declarer_points: None,
+        opponent_points: None,
+        lines,
+        scores,
+        trick_summary,
+    }
+}
+
+fn breakdown_normal(
+    state: &GameState,
+    contract: Contract,
+    scores: [i32; NUM_PLAYERS],
+    trick_summary: Vec<TrickSummaryEntry>,
+) -> ScoreBreakdown {
+    let _declarer = state.declarer.expect("normal game without declarer");
+    let winners = trick_winners(state);
+    let (decl_card_set, opp_card_set) = collect_team_cards(state, &winners);
+
+    let full_decl_set = decl_card_set.union(state.put_down);
+    let full_opp_set = opp_card_set.union(state.talon);
+
+    let decl_cards: Vec<Card> = full_decl_set.iter().collect();
+    let opp_cards: Vec<Card> = full_opp_set.iter().collect();
+
+    let declarer_points = compute_card_points(&decl_cards);
+    let opponent_points = compute_card_points(&opp_cards);
+    let declarer_won = declarer_points > POINT_HALF;
+
+    let point_diff = (declarer_points - POINT_HALF).abs();
+    let base = contract.base_value();
+
+    let mut lines = Vec::new();
+    lines.push(BreakdownLine {
+        label: "Contract".to_string(),
+        value: Some(base),
+        detail: Some(contract_label(contract).to_string()),
+    });
+    lines.push(BreakdownLine {
+        label: "Card points (declarer)".to_string(),
+        value: Some(declarer_points),
+        detail: Some(format!(
+            "{} by {}",
+            if declarer_won { "Won" } else { "Lost" },
+            point_diff
+        )),
+    });
+
+    let game_score = if declarer_won { base + point_diff } else { -(base + point_diff) };
+    let km_game = state.kontra_multiplier(KontraTarget::Game);
+    lines.push(BreakdownLine {
+        label: "Game score".to_string(),
+        value: Some(game_score * km_game),
+        detail: if km_game > 1 {
+            Some(format!("{} × kontra {}", game_score, km_game))
+        } else {
+            None
+        },
+    });
+
+    // Trula
+    let decl_has_trula = full_decl_set.has_trula();
+    let opp_has_trula = full_opp_set.has_trula();
+    if let Some(ann_team) = announced_by(state, Announcement::Trula) {
+        let succeeded = if ann_team == Team::DeclarerTeam { decl_has_trula } else { opp_has_trula };
+        let km = state.kontra_multiplier(KontraTarget::Trula);
+        let raw = if (ann_team == Team::DeclarerTeam) == succeeded {
+            ANNOUNCED_TRULA
+        } else {
+            -ANNOUNCED_TRULA
+        };
+        lines.push(BreakdownLine {
+            label: "Trula (announced)".to_string(),
+            value: Some(raw * km),
+            detail: Some(format!("{}", if succeeded { "achieved" } else { "failed" })),
+        });
+    } else if decl_has_trula {
+        lines.push(BreakdownLine {
+            label: "Trula (silent)".to_string(),
+            value: Some(SILENT_TRULA),
+            detail: Some("declarer team".to_string()),
+        });
+    } else if opp_has_trula {
+        lines.push(BreakdownLine {
+            label: "Trula (silent)".to_string(),
+            value: Some(-SILENT_TRULA),
+            detail: Some("opponent team".to_string()),
+        });
+    }
+
+    // Kings
+    let decl_has_kings = full_decl_set.has_all_kings();
+    let opp_has_kings = full_opp_set.has_all_kings();
+    if let Some(ann_team) = announced_by(state, Announcement::Kings) {
+        let succeeded = if ann_team == Team::DeclarerTeam { decl_has_kings } else { opp_has_kings };
+        let km = state.kontra_multiplier(KontraTarget::Kings);
+        let raw = if (ann_team == Team::DeclarerTeam) == succeeded {
+            ANNOUNCED_KINGS
+        } else {
+            -ANNOUNCED_KINGS
+        };
+        lines.push(BreakdownLine {
+            label: "Kings (announced)".to_string(),
+            value: Some(raw * km),
+            detail: Some(format!("{}", if succeeded { "achieved" } else { "failed" })),
+        });
+    } else if decl_has_kings {
+        lines.push(BreakdownLine {
+            label: "Kings (silent)".to_string(),
+            value: Some(SILENT_KINGS),
+            detail: Some("declarer team".to_string()),
+        });
+    } else if opp_has_kings {
+        lines.push(BreakdownLine {
+            label: "Kings (silent)".to_string(),
+            value: Some(-SILENT_KINGS),
+            detail: Some("opponent team".to_string()),
+        });
+    }
+
+    // Pagat ultimo
+    let decl_pagat = pagat_ultimo(state, Team::DeclarerTeam, &winners);
+    let opp_pagat = pagat_ultimo(state, Team::OpponentTeam, &winners);
+    if let Some(ann_team) = announced_by(state, Announcement::PagatUltimo) {
+        let succeeded = if ann_team == Team::DeclarerTeam { decl_pagat } else { opp_pagat };
+        let km = state.kontra_multiplier(KontraTarget::PagatUltimo);
+        let raw = if (ann_team == Team::DeclarerTeam) == succeeded {
+            ANNOUNCED_PAGAT_ULTIMO
+        } else {
+            -ANNOUNCED_PAGAT_ULTIMO
+        };
+        lines.push(BreakdownLine {
+            label: "Pagat ultimo (announced)".to_string(),
+            value: Some(raw * km),
+            detail: Some(format!("{}", if succeeded { "achieved" } else { "failed" })),
+        });
+    } else if decl_pagat {
+        lines.push(BreakdownLine {
+            label: "Pagat ultimo (silent)".to_string(),
+            value: Some(SILENT_PAGAT_ULTIMO),
+            detail: Some("declarer team".to_string()),
+        });
+    } else if opp_pagat {
+        lines.push(BreakdownLine {
+            label: "Pagat ultimo (silent)".to_string(),
+            value: Some(-SILENT_PAGAT_ULTIMO),
+            detail: Some("opponent team".to_string()),
+        });
+    }
+
+    // Valat
+    let decl_all = winners.iter().all(|&w| state.get_team(w) == Team::DeclarerTeam);
+    let opp_all = winners.iter().all(|&w| state.get_team(w) == Team::OpponentTeam);
+    let valat_achieved = decl_all || opp_all;
+
+    if valat_achieved {
+        if let Some(ann_team) = announced_by(state, Announcement::Valat) {
+            let succeeded = if ann_team == Team::DeclarerTeam { decl_all } else { opp_all };
+            let km = state.kontra_multiplier(KontraTarget::Valat);
+            let raw = if (ann_team == Team::DeclarerTeam) == succeeded {
+                ANNOUNCED_VALAT
+            } else {
+                -ANNOUNCED_VALAT
+            };
+            lines.push(BreakdownLine {
+                label: "VALAT (announced) — replaces all other scoring".to_string(),
+                value: Some(raw * km),
+                detail: None,
+            });
+        } else {
+            let raw = if decl_all { SILENT_VALAT } else { -SILENT_VALAT };
+            let km = state.kontra_multiplier(KontraTarget::Valat);
+            lines.push(BreakdownLine {
+                label: "VALAT (silent) — replaces all other scoring".to_string(),
+                value: Some(raw * km),
+                detail: Some(format!("{} team won all tricks",
+                    if decl_all { "Declarer" } else { "Opponent" })),
+            });
+        }
+    } else if let Some(ann_team) = announced_by(state, Announcement::Valat) {
+        let km = state.kontra_multiplier(KontraTarget::Valat);
+        let raw = if ann_team == Team::DeclarerTeam {
+            -ANNOUNCED_VALAT
+        } else {
+            ANNOUNCED_VALAT
+        };
+        lines.push(BreakdownLine {
+            label: "Valat (announced, failed)".to_string(),
+            value: Some(raw * km),
+            detail: None,
+        });
+    }
+
+    ScoreBreakdown {
+        contract: contract_label(contract).to_string(),
+        mode: contract_mode(contract).to_string(),
+        declarer_won: Some(declarer_won),
+        declarer_points: Some(declarer_points),
+        opponent_points: Some(opponent_points),
+        lines,
+        scores,
+        trick_summary,
+    }
+}
+
+// -----------------------------------------------------------------------
+// Tests
+// -----------------------------------------------------------------------
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn card_points_groups_of_3() {
+        // 3 pip cards: 1+1+1 - 2 = 1
+        let cards = vec![
+            Card::suit_card(Suit::Hearts, SuitRank::Pip1),
+            Card::suit_card(Suit::Hearts, SuitRank::Pip2),
+            Card::suit_card(Suit::Hearts, SuitRank::Pip3),
+        ];
+        assert_eq!(compute_card_points(&cards), 1);
+    }
+
+    #[test]
+    fn card_points_king_queen_knight() {
+        // K(5) + Q(4) + C(3) - 2 = 10
+        let cards = vec![
+            Card::suit_card(Suit::Spades, SuitRank::King),
+            Card::suit_card(Suit::Spades, SuitRank::Queen),
+            Card::suit_card(Suit::Spades, SuitRank::Knight),
+        ];
+        assert_eq!(compute_card_points(&cards), 10);
+    }
+
+    #[test]
+    fn total_deck_is_70() {
+        let all: Vec<Card> = FULL_DECK.iter().collect();
+        assert_eq!(compute_card_points(&all), 70);
+    }
+}

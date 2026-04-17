@@ -1,0 +1,93 @@
+.arena-checkpoint-leaderboard-view {
+  max-width: 1240px;
+  margin: 0 auto;
+  padding: 24px;
+  color: #e0e0e0;
+}
+
+.arena-checkpoint-leaderboard-header {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  flex-wrap: wrap;
+  margin-bottom: 20px;
+}
+
+.arena-checkpoint-leaderboard-header h1 {
+  margin: 0;
+  font-size: 1.7rem;
+}
+
+.arena-checkpoint-subtitle {
+  color: #8f95ad;
+  font-size: 0.9rem;
+}
+
+.arena-checkpoint-loading,
+.arena-checkpoint-empty {
+  color: #8f95ad;
+  margin: 18px 0;
+}
+
+.arena-checkpoint-section {
+  background: #1a1a2e;
+  border-radius: 12px;
+  padding: 16px;
+  margin-bottom: 18px;
+}
+
+.arena-checkpoint-section h3 {
+  margin: 0 0 10px;
+  color: #c7cbe0;
+  font-size: 1rem;
+}
+
+.arena-checkpoint-table-wrapper {
+  overflow-x: auto;
+}
+
+.arena-checkpoint-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.84rem;
+}
+
+.arena-checkpoint-table th {
+  text-align: left;
+  padding: 8px 10px;
+  border-bottom: 2px solid #333;
+  color: #98a0bf;
+  white-space: nowrap;
+}
+
+.arena-checkpoint-table td {
+  padding: 8px 10px;
+  border-bottom: 1px solid #252842;
+  white-space: nowrap;
+}
+
+.arena-checkpoint-table tbody tr:hover {
+  background: rgba(255, 255, 255, 0.03);
+}
+
+.arena-checkpoint-table .positive {
+  color: #2ecc71;
+}
+
+.arena-checkpoint-table .negative {
+  color: #e74c3c;
+}
+
+.arena-checkpoint-top {
+  background: rgba(243, 156, 18, 0.08);
+}
+
+@media (max-width: 760px) {
+  .arena-checkpoint-leaderboard-view {
+    padding: 14px;
+  }
+
+  .arena-checkpoint-leaderboard-header h1 {
+    font-size: 1.35rem;
+  }
+}

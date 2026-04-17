@@ -1,0 +1,192 @@
+.game-info-drawer {
+  position: relative;
+  width: 36px;
+  min-height: 300px;
+  transition: width 0.25s ease;
+  z-index: 10;
+  flex-shrink: 0;
+}
+
+.game-info-drawer:hover,
+.game-info-drawer.drawer-pinned {
+  width: 260px;
+}
+
+.drawer-tab {
+  position: absolute;
+  top: 50%;
+  right: 0;
+  transform: translateY(-50%);
+  width: 36px;
+  height: 64px;
+  background: rgba(0, 40, 20, 0.9);
+  border: 1px solid rgba(218, 165, 32, 0.3);
+  border-radius: 0 8px 8px 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  z-index: 11;
+}
+
+.game-info-drawer:hover .drawer-tab,
+.game-info-drawer.drawer-pinned .drawer-tab {
+  display: none;
+}
+
+.drawer-tab-icon {
+  font-size: 1.1rem;
+}
+
+.drawer-tab-count {
+  font-size: 0.6rem;
+  color: rgba(255, 255, 255, 0.6);
+}
+
+.drawer-content {
+  width: 260px;
+  height: 100%;
+  background: rgba(0, 40, 20, 0.92);
+  border: 1px solid rgba(218, 165, 32, 0.3);
+  border-radius: 8px;
+  display: none;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.game-info-drawer:hover .drawer-content,
+.game-info-drawer.drawer-pinned .drawer-content {
+  display: flex;
+}
+
+.drawer-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 10px 12px 6px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+}
+
+.drawer-header h3 {
+  margin: 0;
+  font-size: 0.9rem;
+  color: #daa520;
+}
+
+.drawer-pin {
+  background: none;
+  border: none;
+  cursor: pointer;
+  font-size: 0.8rem;
+  padding: 0;
+  opacity: 0.6;
+}
+
+.drawer-pin:hover {
+  opacity: 1;
+}
+
+.drawer-empty {
+  padding: 12px;
+  font-size: 0.8rem;
+  color: rgba(255, 255, 255, 0.4);
+  text-align: center;
+}
+
+.drawer-scroll {
+  flex: 1;
+  overflow-y: auto;
+  padding: 8px 12px;
+}
+
+.drawer-section {
+  margin-bottom: 14px;
+}
+
+.drawer-section h4 {
+  margin: 0 0 6px;
+  font-size: 0.75rem;
+  color: rgba(255, 255, 255, 0.5);
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+
+/* Remaining cards groups */
+.remaining-group {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 3px 0;
+  font-size: 0.8rem;
+}
+
+.remaining-suit {
+  width: 18px;
+  text-align: center;
+  font-size: 1rem;
+}
+
+.remaining-cards {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 2px;
+  flex: 1;
+}
+
+.remaining-card {
+  background: rgba(255, 255, 255, 0.08);
+  padding: 1px 4px;
+  border-radius: 3px;
+  font-size: 0.7rem;
+  color: rgba(255, 255, 255, 0.8);
+  cursor: default;
+}
+
+.remaining-count {
+  font-size: 0.65rem;
+  color: rgba(255, 255, 255, 0.35);
+  min-width: 20px;
+  text-align: right;
+}
+
+/* Player intel */
+.player-intel {
+  background: rgba(255, 255, 255, 0.04);
+  border-radius: 6px;
+  padding: 6px 8px;
+  margin-bottom: 6px;
+}
+
+.intel-name {
+  font-size: 0.8rem;
+  font-weight: 600;
+  color: rgba(255, 255, 255, 0.85);
+  margin-bottom: 3px;
+}
+
+.intel-row {
+  display: flex;
+  gap: 6px;
+  font-size: 0.75rem;
+  padding: 1px 0;
+}
+
+.intel-label {
+  color: rgba(255, 255, 255, 0.45);
+  min-width: 48px;
+}
+
+.intel-voids {
+  color: #f44336;
+  font-size: 0.9rem;
+}
+
+.intel-value {
+  color: rgba(255, 255, 255, 0.7);
+}
+
+.intel-none {
+  color: rgba(255, 255, 255, 0.3);
+  font-style: italic;
+}

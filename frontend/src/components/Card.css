@@ -1,0 +1,256 @@
+.card {
+  width: 80px;
+  height: 120px;
+  border-radius: 8px;
+  position: relative;
+  transition: all 0.2s ease;
+  flex-shrink: 0;
+  user-select: none;
+  box-shadow: var(--card-shadow);
+}
+
+.card-small {
+  width: 60px;
+  height: 90px;
+  font-size: 0.8em;
+}
+
+/* ---- Card back ---- */
+.card-back {
+  background: linear-gradient(135deg, #2c1810, #4a2820);
+  border: 2px solid #8b6914;
+}
+
+.card-back-pattern {
+  width: 100%;
+  height: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: repeating-linear-gradient(
+    45deg,
+    transparent,
+    transparent 5px,
+    rgba(139, 105, 20, 0.15) 5px,
+    rgba(139, 105, 20, 0.15) 6px
+  );
+  border-radius: 6px;
+}
+
+.card-back-inner {
+  font-size: 28px;
+  color: #d4a843;
+  text-shadow: 0 0 10px rgba(212, 168, 67, 0.5);
+}
+
+/* ---- Tarok cards ---- */
+.card-tarok {
+  background: linear-gradient(170deg, #1a0a2e 0%, #2d1b4e 40%, #1a0a2e 100%);
+  border: 2px solid #7b5ea7;
+  color: #e8d5f5;
+}
+
+.card-trula {
+  background: linear-gradient(170deg, #2a1500 0%, #4a2800 40%, #2a1500 100%);
+  border: 2px solid var(--accent-gold);
+  color: #ffd700;
+}
+
+.card-trula .tarok-star {
+  font-size: 32px;
+  color: #ffd700;
+  text-shadow: 0 0 15px rgba(255, 215, 0, 0.6);
+  animation: pulse-glow 2s ease-in-out infinite;
+}
+
+@keyframes pulse-glow {
+  0%, 100% { text-shadow: 0 0 10px rgba(255, 215, 0, 0.4); }
+  50% { text-shadow: 0 0 20px rgba(255, 215, 0, 0.8); }
+}
+
+/* ---- Suit cards ---- */
+.card-suit {
+  background: linear-gradient(170deg, #faf8f0 0%, #f0ead6 50%, #e8e0c8 100%);
+  border: 2px solid #c8b890;
+}
+
+/* ---- Fallback: no image available — white card with text ---- */
+.card-fallback {
+  background: #fff !important;
+  border: 2px solid #bbb !important;
+  color: #222 !important;
+}
+
+.card-fallback.card-red {
+  color: #c41e3a !important;
+}
+
+/* ---- Face card fallback (Jack/Knight/Queen/King) ---- */
+.card-face {
+  border: 2px solid #b8960c !important;
+  background: linear-gradient(170deg, #fffef5 0%, #f5ecd0 50%, #ede0b8 100%) !important;
+}
+
+.card-face.card-red {
+  color: #c41e3a !important;
+}
+
+.card-face.card-black {
+  color: #1a1a1a !important;
+}
+
+.face-card-center {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 2px;
+}
+
+.face-card-emblem {
+  font-size: 28px;
+  line-height: 1;
+  filter: drop-shadow(0 1px 2px rgba(0, 0, 0, 0.15));
+}
+
+.card-small .face-card-emblem {
+  font-size: 20px;
+}
+
+.face-card-title {
+  font-size: 8px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  color: #8b7a2e;
+  opacity: 0.8;
+}
+
+.card-small .face-card-title {
+  font-size: 6px;
+}
+
+.card-fallback .tarok-number,
+.card-fallback .card-numeral {
+  color: #333;
+  opacity: 1;
+}
+
+.card-fallback .tarok-star {
+  color: #d4a843 !important;
+}
+
+.card-fallback .card-points {
+  color: #999 !important;
+}
+
+.card-red {
+  color: #c41e3a;
+}
+
+.card-black {
+  color: #1a1a1a;
+}
+
+.card-suit.card-red .card-points,
+.card-suit.card-black .card-points {
+  color: #888;
+}
+
+/* ---- Card content layout ---- */
+.card-content {
+  width: 100%;
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+  padding: 4px 6px;
+  position: relative;
+}
+
+.card-corner {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  line-height: 1;
+}
+
+.card-corner-bottom {
+  align-self: flex-end;
+  transform: rotate(180deg);
+}
+
+.card-numeral {
+  font-family: 'Playfair Display', serif;
+  font-size: 11px;
+  font-weight: 700;
+}
+
+.card-rank {
+  font-family: 'Playfair Display', serif;
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.card-suit-symbol {
+  font-size: 12px;
+  line-height: 1;
+}
+
+.card-center {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex: 1;
+}
+
+.tarok-emblem {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.tarok-number {
+  font-family: 'Playfair Display', serif;
+  font-size: 18px;
+  font-weight: 700;
+  opacity: 0.4;
+}
+
+.suit-large {
+  font-size: 32px;
+  opacity: 0.9;
+}
+
+.card-small .suit-large {
+  font-size: 24px;
+}
+
+.card-points {
+  position: absolute;
+  bottom: 2px;
+  right: 4px;
+  font-size: 8px;
+  opacity: 0.5;
+  font-weight: 500;
+}
+
+/* ---- Interactive states ---- */
+.card-clickable {
+  cursor: pointer;
+}
+
+.card-clickable:hover {
+  transform: translateY(-8px);
+  box-shadow: var(--card-hover);
+  z-index: 10;
+}
+
+.card-highlighted {
+  box-shadow: 0 0 0 3px var(--accent-gold), var(--card-shadow);
+}
+
+.card-disabled {
+  opacity: 0.4;
+  pointer-events: none;
+}
+.card-image { width: 100%; height: 100%; object-fit: cover; border-radius: 6px; display: block; border: 1px solid rgba(255, 255, 255, 0.4); }

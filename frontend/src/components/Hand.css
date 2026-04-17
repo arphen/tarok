@@ -1,0 +1,124 @@
+.hand {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+}
+
+.hand-label {
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--text-secondary);
+  text-transform: uppercase;
+  letter-spacing: 1px;
+}
+
+.hand-cards {
+  display: flex;
+  gap: 0;
+  transform-origin: center center;
+}
+
+.hand-horizontal {
+  flex-direction: row;
+}
+
+.hand-horizontal .card {
+  margin-left: -20px;
+}
+
+.hand-horizontal .card:first-child {
+  margin-left: 0;
+}
+
+/* ---- Smaller cards for opponent hands when revealed ---- */
+.hand-top .card:not(.card-back),
+.hand-left .card:not(.card-back),
+.hand-right .card:not(.card-back) {
+  width: 52px;
+  height: 78px;
+  font-size: 0.7em;
+}
+
+.hand-top .hand-horizontal .card:not(.card-back),
+.hand-left .hand-horizontal .card:not(.card-back),
+.hand-right .hand-horizontal .card:not(.card-back) {
+  margin-left: -18px;
+}
+
+.hand-top .hand-horizontal .card:not(.card-back):first-child,
+.hand-left .hand-horizontal .card:not(.card-back):first-child,
+.hand-right .hand-horizontal .card:not(.card-back):first-child {
+  margin-left: 0;
+}
+
+.hand-top {
+  order: 0;
+}
+
+.hand-top .hand-cards {
+  transform: rotate(180deg);
+}
+
+.hand-left {
+  order: 0;
+  flex-direction: row-reverse;
+  align-items: center;
+}
+
+.hand-left .hand-label {
+  white-space: nowrap;
+  writing-mode: vertical-lr;
+  transform: rotate(180deg);
+}
+
+.hand-left .hand-cards {
+  transform: rotate(90deg);
+}
+
+.hand-right {
+  order: 0;
+  flex-direction: row;
+  align-items: center;
+}
+
+.hand-right .hand-label {
+  white-space: nowrap;
+  writing-mode: vertical-rl;
+}
+
+.hand-right .hand-cards {
+  transform: rotate(-90deg);
+}
+
+.hand-bottom {
+  order: 0;
+}
+
+/* ---- Team colors ---- */
+.hand-label.team-declarer {
+  color: var(--team-declarer);
+}
+
+.hand-label.team-solo {
+  color: var(--team-solo);
+}
+
+.hand-label.team-defender {
+  color: var(--team-defender);
+}
+
+.hand.team-declarer .card:not(.card-back) {
+  border-color: var(--team-declarer);
+  box-shadow: 0 0 6px rgba(74, 158, 255, 0.3);
+}
+
+.hand.team-solo .card:not(.card-back) {
+  border-color: var(--team-solo);
+  box-shadow: 0 0 6px rgba(212, 168, 67, 0.3);
+}
+
+.hand.team-defender .card:not(.card-back) {
+  border-color: var(--team-defender);
+  box-shadow: 0 0 6px rgba(233, 69, 96, 0.3);
+}

@@ -1,0 +1,27 @@
+# Overnight: 2 v4 NNs vs 2 StockŠkis m6 bots
+#
+# Two copies of your neural network (seats 0-1) play against two
+# m6 heuristic bots.  Designed for long overnight runs with many
+# iterations.  Snapshots are saved every other iteration to limit
+# disk usage.
+#
+# Usage:
+#   make train-iterate CONFIG=2nn-vs-2-m6 MODEL=checkpoints/your_model.pt
+
+seats: "nn,nn,bot_m6,bot_m6"
+bench_seats: "nn,bot_m6,bot_m6,bot_m6"
+
+iterations: 200
+games: 10000
+bench_games: 10000
+snapshot_interval: 5
+
+ppo_epochs: 6
+batch_size: 8192
+lr: 0.0003
+explore_rate: 0.10
+model_arch: "v4"
+imitation_coef: 0.30
+
+concurrency: 128
+device: auto

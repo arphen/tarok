@@ -1,0 +1,37 @@
+# Train v4 (mode-specific card heads) against 3 Stock×kis m6 bots
+#
+# The v4 network has 4 separate card-play heads for different game
+# modes (solo, klop_berac, partner_play, color_valat).  Start from a v2
+# checkpoint — weights are auto-migrated to all 4 heads as warm start.
+#
+# Usage:
+#   make train-iterate CONFIG=v4-vs-3-m6 MODEL=checkpoints/your_v4_model.pt
+#
+# To create a fresh v4 checkpoint:
+#   python -c "
+#   from tarok.adapters.ai.agent import RLAgent
+#   import torch
+#   a = RLAgent(mode_heads=True, oracle_critic=True)
+#   v2 = torch.load('checkpoints/v2.pt', weights_only=True)['model_state_dict']
+#   a.network.load_state_dict(v2)
+#   torch.save({'model_state_dict': a.network.state_dict(), 'model_arch': 'v4'}, 'checkpoints/v4.pt')
+#   "
+
+seats: "nn,bot_m6,bot_m6,bot_m6"
+bench_seats: "nn,bot_m6,bot_m6,bot_m6"
+
+iterations: 10
+games: 3000
+bench_games: 3000
+benchmark_checkpoints: [0, 4, 7]
+best_model_metric: "loss"
+
+ppo_epochs: 6
+batch_size: 8192
+lr: 0.0003
+explore_rate: 0.10
+model_arch: "v4"
+imitation_coef: 0.30
+
+concurrency: 128
+device: auto

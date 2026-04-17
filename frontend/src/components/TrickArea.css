@@ -1,0 +1,151 @@
+.trick-area {
+  position: relative;
+  width: 280px;
+  height: 220px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.trick-empty {
+  color: rgba(255, 255, 255, 0.2);
+  font-style: italic;
+  font-size: 14px;
+}
+
+.trick-card {
+  position: absolute;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+  animation: card-appear 0.3s ease-out;
+}
+
+@keyframes card-appear {
+  from {
+    opacity: 0;
+    transform: scale(0.8);
+  }
+  to {
+    opacity: 1;
+    transform: scale(1);
+  }
+}
+
+.trick-card-bottom {
+  bottom: 0;
+  left: 50%;
+  transform: translateX(-50%);
+}
+
+.trick-card-top {
+  top: 0;
+  left: 50%;
+  transform: translateX(-50%);
+}
+
+.trick-card-left {
+  left: 0;
+  top: 50%;
+  transform: translateY(-50%);
+}
+
+.trick-card-right {
+  right: 0;
+  top: 50%;
+  transform: translateY(-50%);
+}
+
+.trick-player-name {
+  font-size: 10px;
+  color: var(--text-secondary);
+  font-weight: 500;
+}
+
+/* ---- Team colors ---- */
+.trick-player-name.team-declarer {
+  color: var(--team-declarer);
+}
+
+.trick-player-name.team-solo {
+  color: var(--team-solo);
+}
+
+.trick-player-name.team-defender {
+  color: var(--team-defender);
+}
+
+.trick-card.team-declarer .card {
+  border-color: var(--team-declarer);
+}
+
+.trick-card.team-solo .card {
+  border-color: var(--team-solo);
+}
+
+.trick-card.team-defender .card {
+  border-color: var(--team-defender);
+}
+
+/* ---- Trick win sweep animations ---- */
+/* All cards sweep toward the winner's position then fade out */
+.trick-sweep-to-bottom {
+  animation: sweep-bottom 0.7s ease-in forwards !important;
+}
+.trick-sweep-to-top {
+  animation: sweep-top 0.7s ease-in forwards !important;
+}
+.trick-sweep-to-left {
+  animation: sweep-left 0.7s ease-in forwards !important;
+}
+.trick-sweep-to-right {
+  animation: sweep-right 0.7s ease-in forwards !important;
+}
+
+@keyframes sweep-bottom {
+  0%   { opacity: 1; }
+  60%  { opacity: 1; transform: translate(-50%, 0); }
+  100% { opacity: 0; transform: translate(-50%, 80px) scale(0.6); }
+}
+
+@keyframes sweep-top {
+  0%   { opacity: 1; }
+  60%  { opacity: 1; transform: translate(-50%, 0); }
+  100% { opacity: 0; transform: translate(-50%, -80px) scale(0.6); }
+}
+
+@keyframes sweep-left {
+  0%   { opacity: 1; }
+  60%  { opacity: 1; transform: translateY(-50%); }
+  100% { opacity: 0; transform: translate(-80px, -50%) scale(0.6); }
+}
+
+@keyframes sweep-right {
+  0%   { opacity: 1; }
+  60%  { opacity: 1; transform: translateY(-50%); }
+  100% { opacity: 0; transform: translate(80px, -50%) scale(0.6); }
+}
+
+/* Winner flash label */
+.trick-winner-flash {
+  position: absolute;
+  font-size: 14px;
+  font-weight: 700;
+  color: #4caf50;
+  text-shadow: 0 0 8px rgba(76, 175, 80, 0.6);
+  animation: winner-flash-in 0.5s ease-out 0.3s both;
+  pointer-events: none;
+  white-space: nowrap;
+}
+
+.trick-winner-flash-bottom { bottom: 10px; left: 50%; transform: translateX(-50%); }
+.trick-winner-flash-top    { top: 10px;    left: 50%; transform: translateX(-50%); }
+.trick-winner-flash-left   { left: 10px;   top: 50%;  transform: translateY(-50%); }
+.trick-winner-flash-right  { right: 10px;  top: 50%;  transform: translateY(-50%); }
+
+@keyframes winner-flash-in {
+  0%   { opacity: 0; scale: 0.5; }
+  60%  { opacity: 1; scale: 1.15; }
+  100% { opacity: 1; scale: 1; }
+}

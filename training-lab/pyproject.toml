@@ -1,0 +1,10 @@
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+
+filterwarnings = [
+    # torch.jit.trace is deprecated in favour of torch.compile/export,
+    # but the Rust engine (tch-rs) requires TorchScript format, so we
+    # cannot migrate yet. Suppress until torch drops the API entirely.
+    "ignore:`torch.jit.trace` is deprecated:DeprecationWarning",
+    "ignore:`torch.jit.trace_method` is deprecated:DeprecationWarning",
+]

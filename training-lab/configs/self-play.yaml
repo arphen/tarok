@@ -1,0 +1,55 @@
+# Self-play with league opponents
+#
+# All four seats run copies of your neural network by default.  When the
+# league block is enabled the three opponent seats are dynamically sampled
+# from a growing pool of frozen checkpoints and heuristic bots, producing
+# AlphaStar-style historical self-play automatically.
+#
+# Usage:
+#   make train-iterate CONFIG=self-play MODEL=path/to/model.pt
+
+seats: "nn,nn,nn,nn"
+bench_seats: "nn,bot_v1,bot_v3,bot_m6"
+
+iterations: 100
+games: 10000
+bench_games: 3000
+benchmark_checkpoints: [0, 10, 20, 30, 40, 50, 60, 70, 80, 90, 100, 110, 120, 130, 140, 149]
+best_model_metric: "placement"
+
+ppo_epochs: 6
+batch_size: 8192
+lr: 0.0003
+gamma: 0.995
+gae_lambda: 0.98
+clip_epsilon: 0.2
+value_coef: 0.5
+entropy_coef: 0.0005
+imitation_coef: 0.40
+imitation_schedule: linear
+imitation_coef_min: 0.20
+explore_rate: 0.10
+
+concurrency: 256
+device: auto
+memory_telemetry: true
+memory_telemetry_every: 1
+iteration_runner_mode: spawn
+iteration_runner_restart_every: 10
+
+league:
+  enabled: true
+  min_nn_per_game: 2        # learner (seat 0) + 1 more nn — up to 2 opponent seats per game
+  sampling: pfsp            # uniform | pfsp | hardest
+  pfsp_alpha: 0.3           # low alpha = near-uniform; bots rarely dominate sampling
+  snapshot_interval: 5      # auto-snapshot learner checkpoint every N iterations
+
+  opponents:
+    - name: StockSkis
+      type: bot_v1
+    - name: V3
+      type: bot_v3
+    - name: V5
+      type: bot_v5
+    - name: M6
+      type: bot_m6

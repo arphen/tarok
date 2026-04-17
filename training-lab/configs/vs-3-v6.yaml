@@ -1,0 +1,24 @@
+# Train against 3 StockŠkis v6 bots (harder opponents)
+#
+# Same layout as vs-3-bots but using the stronger v6 bot.
+# Use this when the NN already beats v5 comfortably.
+#
+# Usage:
+#   make train-iterate CONFIG=vs-3-v6 MODEL=path/to/model.pt
+
+seats: "nn,bot_v6,bot_v6,bot_v6"
+bench_seats: "nn,bot_v6,bot_v6,bot_v6"
+
+iterations: 10
+games: 3000
+bench_games: 3000
+benchmark_checkpoints: [0, 4, 7]
+best_model_metric: "loss"
+
+ppo_epochs: 6
+batch_size: 8192
+lr: 0.0003
+explore_rate: 0.10
+
+concurrency: 128
+device: auto

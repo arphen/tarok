@@ -1,0 +1,25 @@
+# Train with 2 NNs vs 2 rule-based bots
+#
+# Two copies of your neural network (seats 0-1) play against two
+# StockŠkis v5 bots.  The NN learns from seat-0 experiences while
+# seat 1 provides a partner that plays like itself.
+#
+# Usage:
+#   make train-iterate CONFIG=vs-2-bots MODEL=path/to/model.pt
+
+seats: "nn,nn,bot_v5,bot_v5"
+bench_seats: "nn,bot_v5,bot_v5,bot_v5"
+
+iterations: 10
+games: 3000
+bench_games: 3000
+benchmark_checkpoints: [0, 4, 7]
+best_model_metric: "loss"
+
+ppo_epochs: 6
+batch_size: 8192
+lr: 0.0003
+explore_rate: 0.10
+
+concurrency: 128
+device: auto
