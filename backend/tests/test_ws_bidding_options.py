@@ -5,8 +5,8 @@ import numpy as np
 import pytest
 
 from tarok.adapters.api.ws_observer import WebSocketObserver, _state_for_player
-from tarok.adapters.ai import rust_game_loop as rgl
-from tarok.adapters.ai.rust_game_loop import RustGameLoop, _build_py_state_from_rust
+from tarok.use_cases import game_loop as rgl
+from tarok.use_cases.game_loop import RustGameLoop, _build_py_state_from_rust
 from tarok.entities import Contract, Phase
 
 

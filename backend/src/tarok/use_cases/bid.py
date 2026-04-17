@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from tarok.adapters.ai.rust_game_loop import (
+from tarok.use_cases.rust_state import (
     _PY_CONTRACT_TO_RUST_U8,
     _build_py_state_from_rust,
 )

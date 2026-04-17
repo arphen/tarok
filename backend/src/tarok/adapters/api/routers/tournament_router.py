@@ -9,11 +9,11 @@ from pathlib import Path
 from fastapi import APIRouter
 from pydantic import BaseModel
 
-from tarok.adapters.ai.agent import RLAgent
-from tarok.adapters.ai.bot_registry import get_registry
+from tarok.adapters.players.neural_player import NeuralPlayer
+from tarok.adapters.players.factory import get_player_factory
 from tarok.adapters.api.checkpoint_utils import resolve_checkpoint_or_default
-from tarok.adapters.ai.random_agent import RandomPlayer
-from tarok.adapters.ai.rust_game_loop import RustGameLoop as GameLoop
+
+from tarok.use_cases.game_loop import RustGameLoop as GameLoop
 
 router = APIRouter(prefix="/api/tournament", tags=["tournament"])
 
@@ -47,9 +47,9 @@ def _build_agent(cfg: dict, idx: int):
     agent_name = cfg.get("name", f"Agent-{idx}")
     checkpoint = cfg.get("checkpoint")
 
-    registry = get_registry()
+    registry = get_player_factory()
 
-    # Check registry first (random, stockskis_v*, etc.)
+    # Check registry first (stockskis_*, nn, human)
     if registry.has(agent_type):
         return registry.create(agent_type, name=agent_name)
 
@@ -59,12 +59,12 @@ def _build_agent(cfg: dict, idx: int):
         if versions:
             return registry.create(f"stockskis_v{max(versions)}", name=agent_name)
 
-    # RL agent (checkpoint)
+    # Neural player (checkpoint)
     ckpt_path = resolve_checkpoint_or_default(checkpoint)
     if ckpt_path:
-        agent = RLAgent.from_checkpoint(ckpt_path, name=agent_name)
+        agent = NeuralPlayer.from_checkpoint(ckpt_path, name=agent_name)
     else:
-        agent = RLAgent(name=agent_name)
+        agent = NeuralPlayer(name=agent_name)
     agent.set_training(False)
     return agent
 
@@ -76,7 +76,7 @@ async def tournament_match(req: TournamentMatchRequest):
     """Run N games between 4 agents and return cumulative scores."""
     agents = [_build_agent(cfg, i) for i, cfg in enumerate(req.agents[:4])]
     while len(agents) < 4:
-        agents.append(RandomPlayer(name=f"Fill-{len(agents)}"))
+        agents.append(get_player_factory().create("stockskis_m6", name=f"StockŠkis-{len(agents)}"))
 
     cumulative: dict[int, int] = {0: 0, 1: 0, 2: 0, 3: 0}
     game_results: list[dict[str, int]] = []
@@ -107,14 +107,14 @@ async def _simulate_single_tournament(
 
     padded = list(agent_configs)
     while len(padded) < 8:
-        padded.append({"name": f"Random-{len(padded)}", "type": "random"})
+        padded.append({"name": f"StockŠkis-{len(padded)}", "type": "stockskis_m6"})
     _random.shuffle(padded)
 
     async def _play_match(cfgs: list[dict]) -> list[dict]:
         """Play a match, return configs ranked best→worst."""
         agents = [_build_agent(c, i) for i, c in enumerate(cfgs[:4])]
         while len(agents) < 4:
-            agents.append(RandomPlayer(name=f"Fill-{len(agents)}"))
+            agents.append(get_player_factory().create("stockskis_m6", name=f"StockŠkis-{len(agents)}"))
 
         cumulative: dict[int, int] = {0: 0, 1: 0, 2: 0, 3: 0}
         for _ in range(max(1, min(games_per_round, 100))):
@@ -198,12 +198,12 @@ async def simulate_multi_tournament(req: MultiTournamentRequest):
                 "tournaments_played": 0,
                 "placements": [],
             }
-        # Also init for random fillers
+        # Also init for stockskis fillers
         for i in range(len(agent_configs), 8):
-            fill_name = f"Random-{i}"
+            fill_name = f"StockŠkis-{i}"
             standings[fill_name] = {
                 "name": fill_name,
-                "type": "random",
+                "type": "stockskis_m6",
                 "checkpoint": "",
                 "wins": 0,
                 "top2": 0,

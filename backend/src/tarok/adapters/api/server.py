@@ -11,10 +11,10 @@ from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 
-from tarok.adapters.ai.agent import RLAgent
-from tarok.adapters.ai.bot_registry import get_registry
+from tarok.adapters.players.neural_player import NeuralPlayer
+from tarok.adapters.players.factory import get_player_factory
 from tarok.adapters.api.checkpoint_utils import resolve_checkpoint, resolve_checkpoint_or_default
-from tarok.adapters.api.human_player import HumanPlayer
+from tarok.adapters.players.human_player import HumanPlayer
 from tarok.adapters.api.experience_logger import HumanPlayExperienceLogger
 from tarok.adapters.api.spectator_observer import SpectatorObserver, list_replays, load_replay
 from tarok.adapters.api.ws_observer import WebSocketObserver
@@ -24,8 +24,8 @@ from tarok.adapters.api.schemas import (
 )
 from tarok.entities import Card, CardType, Suit, SuitRank, DECK, Contract
 from tarok.entities.game_types import suit_card
-from tarok.adapters.ai.rust_game_loop import RustGameLoop as GameLoop
-from tarok.adapters.ai.rust_game_loop import _RUST_U8_TO_PY_CONTRACT
+from tarok.use_cases.game_loop import RustGameLoop as GameLoop
+from tarok.use_cases.rust_state import _RUST_U8_TO_PY_CONTRACT
 
 from tarok.adapters.api.routers.analyze_router import router as analyze_router
 from tarok.adapters.api.routers.tournament_router import router as tournament_router
@@ -208,13 +208,13 @@ def _resolve_checkpoint_path(token: str) -> Path | None:
 def _load_opponent(choice: str, index: int):
     """Load a single AI opponent from a choice string.
 
-    Supports registry bots (random, stockskis_v1..v5, etc.)
+    Supports registry players (stockskis_v*, stockskis_m6, nn, human)
     and checkpoint tokens:
       - "PersonaName"             → ../data/checkpoints/PersonaName/_current.pt
       - "PersonaName/_current.pt" → ../data/checkpoints/PersonaName/_current.pt
       - "hall_of_fame/foo.pt"     → ../data/checkpoints/hall_of_fame/foo.pt
     """
-    registry = get_registry()
+    registry = get_player_factory()
 
     if registry.has(choice):
         return registry.create(choice, name=f"AI-{index + 1}")
@@ -232,9 +232,9 @@ def _load_opponent(choice: str, index: int):
                 name = meta["model_name"]
         except Exception:
             pass
-        agent = RLAgent.from_checkpoint(path, name=name)
+        agent = NeuralPlayer.from_checkpoint(path, name=name)
     else:
-        agent = RLAgent(name=name)
+        agent = NeuralPlayer(name=name)
     agent.set_training(False)
     return agent
 
@@ -411,16 +411,16 @@ _spectator_games: dict[str, dict] = {}
 
 
 class SpectateRequest(BaseModel):
-    agents: list[dict] = []  # [{name, type: "rl"|"random", checkpoint?}]
+    agents: list[dict] = []  # [{name, type: "nn"|"stockskis_*"|"human", checkpoint?}]
     delay: float = 1.5  # seconds between moves
 
 
 def _available_stockskis_versions() -> list[int]:
-    return get_registry().stockskis_versions
+    return get_player_factory().stockskis_versions
 
 
 def _build_stockskis_player(version: int, name: str):
-    return get_registry().create(f"stockskis_v{version}", name=name)
+    return get_player_factory().create(f"stockskis_v{version}", name=name)
 
 
 def _build_spectate_agent(cfg: dict, idx: int):
@@ -429,9 +429,9 @@ def _build_spectate_agent(cfg: dict, idx: int):
     agent_name = str(cfg.get("name", f"Agent-{idx}"))
     checkpoint = cfg.get("checkpoint")
 
-    registry = get_registry()
+    registry = get_player_factory()
 
-    # Check registry first (random, stockskis_v*, etc.)
+    # Check registry first (stockskis_*, nn, human)
     if registry.has(agent_type):
         return registry.create(agent_type, name=agent_name)
 
@@ -445,9 +445,9 @@ def _build_spectate_agent(cfg: dict, idx: int):
     # RL agent
     ckpt_path = _resolve_checkpoint_path(checkpoint) if checkpoint else None
     if ckpt_path and ckpt_path.exists():
-        agent = RLAgent.from_checkpoint(ckpt_path, name=agent_name)
+        agent = NeuralPlayer.from_checkpoint(ckpt_path, name=agent_name)
     else:
-        agent = RLAgent(name=agent_name)
+        agent = NeuralPlayer(name=agent_name)
     agent.set_training(False)
     return agent
 
@@ -456,7 +456,7 @@ def _build_spectate_agent(cfg: dict, idx: int):
 async def list_stockskis_versions():
     """List available StockŠkis heuristic versions for UI dropdowns."""
     versions = _available_stockskis_versions()
-    registry = get_registry()
+    registry = get_player_factory()
     all_types = registry.stockskis_types
     return {
         "versions": [f"v{v}" for v in versions],
@@ -472,8 +472,8 @@ async def list_agents():
     Returns categorised entries so the frontend can group them in the lobby
     dropdown (heuristic bots, baseline, search, neural checkpoints).
     """
-    registry = get_registry()
-    bots = registry.list_bots()
+    registry = get_player_factory()
+    bots = registry.list_players()
 
     # Also include "latest" as a virtual entry for the NN checkpoint
     bots.append({
@@ -502,9 +502,9 @@ async def new_spectate(req: SpectateRequest):
     while len(agents) < 4:
         ckpt_path = _resolve_checkpoint_path("training_run") or Path("../data/checkpoints/training_run/_current.pt")
         if ckpt_path.exists():
-            agent = RLAgent.from_checkpoint(ckpt_path, name=f"Agent-{len(agents)}")
+            agent = NeuralPlayer.from_checkpoint(ckpt_path, name=f"Agent-{len(agents)}")
         else:
-            agent = RLAgent(name=f"Agent-{len(agents)}")
+            agent = NeuralPlayer(name=f"Agent-{len(agents)}")
         agent.set_training(False)
         agents.append(agent)
 
@@ -611,10 +611,14 @@ async def _replay_from_trace(
 
     No agents or model inference needed — all decisions come from the trace.
     """
-    from tarok.adapters.ai.rust_game_loop import (
-        _RUST_U8_TO_PY_CONTRACT, _BID_IDX_TO_RUST, _build_py_state_from_rust,
-        _RustTrickSnapshot, _PyBid, _is_klop, _is_berac, _is_solo,
-        _talon_cards, _build_talon_groups,
+    from tarok.use_cases.game_loop import _RustTrickSnapshot, _PyBid
+    from tarok.use_cases.rust_state import (
+        _BID_IDX_TO_RUST,
+        _RUST_U8_TO_PY_CONTRACT,
+        _build_py_state_from_rust,
+        _is_berac,
+        _talon_cards,
+        _build_talon_groups,
     )
     import tarok_engine as te  # type: ignore[import-untyped]
 
@@ -806,7 +810,7 @@ async def _replay_from_trace(
     scores_arr = gs.score_game()
     scores = {i: int(scores_arr[i]) for i in range(4)}
 
-    from tarok.adapters.ai.rust_game_loop import _build_py_state_stub
+    from tarok.use_cases.rust_state import _build_py_state_stub
     py_state = _build_py_state_stub(
         dealer, py_contract, declarer,
         gs, {}, completed_tricks, bid_history,

@@ -6,7 +6,7 @@ import random
 
 import tarok_engine as te
 
-from tarok.adapters.ai.rust_game_loop import _build_py_state_from_rust
+from tarok.use_cases.rust_state import _build_py_state_from_rust
 from tarok.entities import GameState
 
 

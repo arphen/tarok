@@ -1,15 +1,17 @@
-"""Smoke test — run a full game with random players to verify the engine works."""
+"""Smoke test — run a full game to verify the engine works end-to-end."""
 
 import asyncio
 import pytest
-from tarok.adapters.ai.random_agent import RandomPlayer
-from tarok.adapters.ai.rust_game_loop import RustGameLoop as GameLoop
+
+from tarok.use_cases.game_loop import RustGameLoop as GameLoop
+from tarok.adapters.players.stockskis_player import StockskisPlayer
 
 
 @pytest.mark.asyncio
 async def test_full_game_with_random_players():
-    players = [RandomPlayer(name=f"Bot-{i}", rng=__import__("random").Random(42 + i)) for i in range(4)]
-    game = GameLoop(players, rng=__import__("random").Random(123))
+async def test_full_game():
+    players = [StockskisPlayer(variant="m6", name=f"Bot-{i}") for i in range(4)]
+    game = GameLoop(players)
 
     state, scores = await game.run()
 
@@ -33,8 +35,8 @@ async def test_full_game_with_random_players():
 async def test_multiple_games():
     """Run 10 games to check stability."""
     for seed in range(10):
-        players = [RandomPlayer(name=f"Bot-{i}", rng=__import__("random").Random(seed * 10 + i)) for i in range(4)]
-        game = GameLoop(players, rng=__import__("random").Random(seed))
+        players = [StockskisPlayer(variant="m6", name=f"Bot-{i}") for i in range(4)]
+        game = GameLoop(players)
         state, scores = await game.run()
 
         assert state.phase.value == "finished"

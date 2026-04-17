@@ -89,8 +89,8 @@ def test_rust_game_state_legal_plays_mask():
 @pytest.fixture
 def rl_agents():
     """Create 4 untrained RL agents for testing RustGameLoop."""
-    from tarok.adapters.ai.agent import RLAgent
-    agents = [RLAgent(name=f"Test-{i}") for i in range(4)]
+    from tarok.adapters.players.neural_player import NeuralPlayer
+    agents = [NeuralPlayer(name=f"Test-{i}") for i in range(4)]
     for a in agents:
         a.set_training(False)
     return agents
@@ -98,7 +98,7 @@ def rl_agents():
 
 async def test_rust_game_loop_runs(rl_agents):
     """RustGameLoop with RL agents should complete a game."""
-    from tarok.adapters.ai.rust_game_loop import RustGameLoop
+    from tarok.use_cases.game_loop import RustGameLoop
     loop = RustGameLoop(rl_agents)
     state, scores = await loop.run()
     assert state is not None
@@ -110,7 +110,7 @@ async def test_rust_game_loop_runs(rl_agents):
 
 async def test_rust_game_loop_scores_are_ints(rl_agents):
     """Scores from RustGameLoop should all be integers."""
-    from tarok.adapters.ai.rust_game_loop import RustGameLoop
+    from tarok.use_cases.game_loop import RustGameLoop
     loop = RustGameLoop(rl_agents)
     _state, scores = await loop.run()
     for pid, score in scores.items():
@@ -119,7 +119,7 @@ async def test_rust_game_loop_scores_are_ints(rl_agents):
 
 async def test_rust_game_loop_state_has_contract(rl_agents):
     """Completed game should have a contract."""
-    from tarok.adapters.ai.rust_game_loop import RustGameLoop
+    from tarok.use_cases.game_loop import RustGameLoop
     loop = RustGameLoop(rl_agents)
     state, _scores = await loop.run()
     # Either a real contract or klop (which is -99 / Contract.KLOP)
@@ -128,7 +128,7 @@ async def test_rust_game_loop_state_has_contract(rl_agents):
 
 async def test_rust_game_loop_different_dealers(rl_agents):
     """Games with different dealers should all complete."""
-    from tarok.adapters.ai.rust_game_loop import RustGameLoop
+    from tarok.use_cases.game_loop import RustGameLoop
     for dealer in range(4):
         loop = RustGameLoop(rl_agents)
         state, scores = await loop.run(dealer=dealer)
@@ -137,12 +137,12 @@ async def test_rust_game_loop_different_dealers(rl_agents):
 
 async def test_rust_game_loop_mixed_players_compatible():
     """RustGameLoop should support non-RL players via compatibility fallback."""
-    from tarok.adapters.ai.agent import RLAgent
-    from tarok.adapters.ai.rust_game_loop import RustGameLoop
-    from tarok.adapters.ai.stockskis import RustStockskisPlayer
+    from tarok.adapters.players.neural_player import NeuralPlayer
+    from tarok.use_cases.game_loop import RustGameLoop
+    from tarok.adapters.players.stockskis_player import StockskisPlayer
 
-    agents = [RLAgent(name="RL-0")]
-    agents.extend(RustStockskisPlayer(variant="v5", name=f"Skis-{i}") for i in range(1, 4))
+    agents = [NeuralPlayer(name="RL-0")]
+    agents.extend(StockskisPlayer(variant="v5", name=f"Skis-{i}") for i in range(1, 4))
     agents[0].set_training(False)
 
     loop = RustGameLoop(agents)
@@ -154,5 +154,5 @@ async def test_rust_game_loop_mixed_players_compatible():
 
 def test_rust_game_loop_import_succeeds():
     """RustGameLoop should be importable when engine is installed."""
-    from tarok.adapters.ai.rust_game_loop import RustGameLoop
+    from tarok.use_cases.game_loop import RustGameLoop
     assert RustGameLoop is not None

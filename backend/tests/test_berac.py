@@ -10,14 +10,15 @@ import random
 
 import pytest
 
-from tarok.adapters.ai.agent import RLAgent
-from tarok.adapters.ai.random_agent import RandomPlayer
+from tarok.adapters.players.neural_player import NeuralPlayer
+from tarok.adapters.players.stockskis_player import StockskisPlayer
+
 from tarok.entities import (
     Card, CardType, Suit, SuitRank, DECK,
     Bid, Contract, GameState, Phase, PlayerRole, Trick,
     score_game, suit_card, tarok,
 )
-from tarok.adapters.ai.rust_game_loop import RustGameLoop as GameLoop, NullObserver
+from tarok.use_cases.game_loop import RustGameLoop as GameLoop, NullObserver
 from tarok.use_cases.deal import deal
 from tarok.use_cases.play_trick import start_trick, play_card
 
@@ -255,8 +256,8 @@ async def test_berac_remaining_cards_stay_in_hands():
 async def test_non_berac_games_unaffected():
     """Regular (non-Berač) games should still play all 12 tricks."""
     for seed in range(10):
-        players = [RandomPlayer(name=f"Bot-{i}", rng=random.Random(seed * 10 + i)) for i in range(4)]
-        loop = GameLoop(players, rng=random.Random(seed))
+        players = [StockskisPlayer(variant="m6", name=f"Bot-{i}") for i in range(4)]
+        loop = GameLoop(players)
         state, scores = await loop.run()
 
         assert state.phase == Phase.FINISHED
@@ -271,7 +272,7 @@ async def test_berac_with_rl_agents_stable():
         human = ScriptedPlayer("You", bid=Contract.BERAC)
         agents = [human]
         for i in range(3):
-            a = RLAgent(name=f"AI-{i+1}")
+            a = NeuralPlayer(name=f"AI-{i+1}")
             a.set_training(False)
             agents.append(a)
 

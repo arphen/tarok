@@ -1,6 +1,6 @@
 """Port for player decision-making.
 
-Implemented by: HumanPlayer (via WebSocket), AIPlayer (RL agent), RandomPlayer.
+Implemented by: HumanPlayer (via WebSocket), NeuralPlayer (neural network), StockskisPlayer (heuristic bots).
 """
 
 from __future__ import annotations
@@ -11,7 +11,7 @@ from tarok.entities import Card, Contract, GameState, Announcement
 
 
 class PlayerPort(Protocol):
-    """Interface for any player (human, AI, random)."""
+    """Interface for any player implementation (human, neural, stockskis)."""
 
     @property
     def name(self) -> str: ...

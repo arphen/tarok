@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import asyncio
 
-from tarok.entities import Card, CardType, Suit, SuitRank, Announcement, Contract, GameState
+from tarok.entities import Announcement, Card, Contract, GameState
 
 
 class HumanPlayer:
@@ -15,18 +15,15 @@ class HumanPlayer:
         self._pending_action: asyncio.Future | None = None
         self._queued_action: object | None = None
         self._has_queued: bool = False
-        self._expected_action: str | None = None  # "bid", "king", "talon", "discard", "card"
+        self._expected_action: str | None = None
 
     @property
     def name(self) -> str:
         return self._name
 
     def submit_action(self, action, *, action_type: str | None = None) -> None:
-        """Called by the WebSocket handler when the human submits a move."""
-        # If we know what we're expecting, reject mismatches to prevent
-        # stale actions from a previous phase contaminating the current one.
         if self._expected_action and action_type and action_type != self._expected_action:
-            return  # Silently discard cross-phase action
+            return
         if self._pending_action and not self._pending_action.done():
             self._pending_action.set_result(action)
         else:
@@ -34,7 +31,6 @@ class HumanPlayer:
             self._has_queued = True
 
     def drain_queue(self) -> None:
-        """Discard any queued action that arrived between phases."""
         self._queued_action = None
         self._has_queued = False
 
@@ -76,7 +72,7 @@ class HumanPlayer:
     async def choose_announcements(
         self, state: GameState, player_idx: int
     ) -> list[Announcement]:
-        return []  # Simplified for now
+        return []
 
     async def choose_card(
         self, state: GameState, player_idx: int, legal_plays: list[Card]

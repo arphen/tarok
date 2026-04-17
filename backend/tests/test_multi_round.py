@@ -9,7 +9,8 @@ from httpx import ASGITransport, AsyncClient
 from tarok.adapters.api.server import app
 from tarok.adapters.api.ws_observer import _build_card_tracker, _state_for_player
 from tarok.entities import Card, CardType, Suit, SuitRank, DECK, GameState, Phase, Contract, Trick, tarok, suit_card
-from tarok.adapters.ai.rust_game_loop import RustGameLoop as GameLoop, NullObserver
+from tarok.use_cases.game_loop import RustGameLoop as GameLoop, NullObserver
+from tarok.adapters.players.stockskis_player import StockskisPlayer
 
 
 # ---- Fixtures ----
@@ -214,11 +215,11 @@ class RecordingObserver(NullObserver):
 
 async def test_single_round_game_loop():
     """A single round game completes normally."""
-    from tarok.adapters.ai.random_agent import RandomPlayer
+    
 
-    players = [RandomPlayer(f"P{i}") for i in range(4)]
+    players = [StockskisPlayer(variant="m6", name=f"P{i}") for i in range(4)]
     obs = RecordingObserver()
-    loop = GameLoop(players, observer=obs, rng=random.Random(42))
+    loop = GameLoop(players, observer=obs)
     state, scores = await loop.run(dealer=0)
 
     assert state.phase == Phase.FINISHED
@@ -229,14 +230,14 @@ async def test_single_round_game_loop():
 
 async def test_multi_round_cumulative_scores():
     """Running multiple rounds accumulates scores correctly."""
-    from tarok.adapters.ai.random_agent import RandomPlayer
+    
 
-    players = [RandomPlayer(f"P{i}") for i in range(4)]
+    players = [StockskisPlayer(variant="m6", name=f"P{i}") for i in range(4)]
     cumulative = {i: 0 for i in range(4)}
     num_rounds = 3
 
     for r in range(num_rounds):
-        loop = GameLoop(players, rng=random.Random(42 + r))
+        loop = GameLoop(players)
         state, scores = await loop.run(dealer=r % 4)
         for p, s in scores.items():
             cumulative[p] += s

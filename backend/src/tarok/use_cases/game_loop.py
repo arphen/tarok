@@ -5,8 +5,8 @@ happen in the Rust engine (tarok_engine).  Python is only responsible for
 player decisions (neural-network inference, human input, heuristic bots).
 
 Players with ``_decide_from_tensors`` use the fast tensor path (pre-encoded
-state from Rust → action index).  All other PlayerPort implementations
-(HumanPlayer, RandomPlayer, etc.) receive a lightweight Python state view
+state from Rust -> action index).  All other PlayerPort implementations
+(HumanPlayer, StockskisPlayer, etc.) receive a lightweight Python state view
 built from the Rust game state and return Python-domain objects that are
 translated back to Rust indices.
 """
@@ -18,8 +18,6 @@ from typing import TYPE_CHECKING, Any, Callable
 
 import torch
 
-if TYPE_CHECKING:
-    from tarok.adapters.ai.agent import RLAgent
 
 try:
     import tarok_engine as te
@@ -48,6 +46,7 @@ from tarok.entities import (
     Announcement, Contract, GameState, KontraLevel, Phase, PlayerRole,
 )
 from tarok.ports.observer_port import GameObserverPort
+from tarok.use_cases import rust_state as _rust_state
 
 
 # Map Rust contract u8 → Python Contract enum
@@ -156,7 +155,7 @@ class _PyBid:
 class RustGameLoop:
     """Plays a full game of Tarok using the Rust engine.
 
-    Agents are still Python RLAgent objects — they receive pre-encoded
+    Agents are still Python NeuralPlayer objects — they receive pre-encoded
     tensors from Rust and return action indices.  All game-state mutation
     and encoding happens in Rust for maximum throughput.
     """
@@ -307,27 +306,10 @@ class RustGameLoop:
 
                 if hasattr(agent, '_decide_from_tensors'):
                     # Fast tensor path
-                    state_t = torch.from_numpy(
-                        card_state_np
-                    ).float()
-                    legal_mask = torch.from_numpy(
-                        card_mask_np
-                    ).float()
-
-                    oracle_t = None
-                    if (
-                        hasattr(agent, 'network')
-                        and agent._training
-                        and agent.network.oracle_critic_enabled
-                    ):
-                        oracle_t = torch.from_numpy(
-                            gs.encode_oracle_state(player, te.DT_CARD_PLAY)
-                        ).float()
-
-                    action_idx = agent._decide_from_tensors(
-                        state_t, legal_mask, DecisionType.CARD_PLAY, oracle_t,
-                        game_mode=contract_to_game_mode(py_contract),
-                    )
+                state_t = torch.from_numpy(card_state_np).float()
+                legal_mask = torch.from_numpy(card_mask_np).float()
+                action_idx = agent._decide_from_tensors(
+                    state_t, legal_mask, DecisionType.CARD_PLAY,
 
                     if action_idx not in legal_cards:
                         action_idx = legal_cards[0]
@@ -374,10 +356,6 @@ class RustGameLoop:
                 points=points,
             )
             completed_tricks.append(trick_snapshot)
-            # Assign per-trick card-point reward to the winning agent
-            winner_agent = self._players[winner]
-            if hasattr(winner_agent, "award_trick_reward"):
-                winner_agent.award_trick_reward(points)
             await self._observer.on_trick_won(
                 trick_snapshot,
                 winner,
@@ -473,28 +451,14 @@ class RustGameLoop:
             bid_mask = encode_bid_mask(py_legal_bids)
 
             if hasattr(agent, '_decide_from_tensors'):
-                # Fast tensor path (RLAgent)
-                state_t = torch.from_numpy(
-                    bid_state_np
-                ).float()
-                mask = bid_mask
-
-                oracle_t = None
-                if (
-                    hasattr(agent, 'network')
-                    and agent._training
-                    and agent.network.oracle_critic_enabled
-                ):
-                    oracle_t = torch.from_numpy(
-                        gs.encode_oracle_state(bidder, te.DT_BID)
-                    ).float()
-
+                # Fast tensor path (NeuralPlayer)
+                state_t = torch.from_numpy(bid_state_np).float()
                 action_idx = agent._decide_from_tensors(
-                    state_t, mask, DecisionType.BID, oracle_t,
+                    state_t, bid_mask, DecisionType.BID,
                 )
                 bid_contract = BID_ACTIONS[action_idx]  # Contract | None
             else:
-                # PlayerPort path (HumanPlayer, RandomPlayer, etc.)
+                # PlayerPort path (HumanPlayer, StockskisPlayer, etc.)
                 py_state = _build_py_state_from_rust(gs, completed_tricks, bids=bid_history)
                 bid_contract = await agent.choose_bid(py_state, bidder, py_legal_bids)
 
@@ -601,23 +565,9 @@ class RustGameLoop:
 
         if hasattr(agent, '_decide_from_tensors'):
             # Fast tensor path
-            state_t = torch.from_numpy(
-                king_state_np
-            ).float()
-            mask = king_mask
-
-            oracle_t = None
-            if (
-                hasattr(agent, 'network')
-                and agent._training
-                and agent.network.oracle_critic_enabled
-            ):
-                oracle_t = torch.from_numpy(
-                    gs.encode_oracle_state(declarer, te.DT_KING_CALL)
-                ).float()
-
+            state_t = torch.from_numpy(king_state_np).float()
             action_idx = agent._decide_from_tensors(
-                state_t, mask, DecisionType.KING_CALL, oracle_t,
+                state_t, king_mask, DecisionType.KING_CALL,
             )
 
             chosen_suit = KING_ACTIONS[action_idx]
@@ -682,23 +632,9 @@ class RustGameLoop:
 
         if hasattr(agent, '_decide_from_tensors'):
             # Fast tensor path
-            state_t = torch.from_numpy(
-                talon_state_np
-            ).float()
-            mask = talon_mask
-
-            oracle_t = None
-            if (
-                hasattr(agent, 'network')
-                and agent._training
-                and agent.network.oracle_critic_enabled
-            ):
-                oracle_t = torch.from_numpy(
-                    gs.encode_oracle_state(declarer, te.DT_TALON_PICK)
-                ).float()
-
+            state_t = torch.from_numpy(talon_state_np).float()
             action_idx = agent._decide_from_tensors(
-                state_t, mask, DecisionType.TALON_PICK, oracle_t,
+                state_t, talon_mask, DecisionType.TALON_PICK,
             )
             if action_idx >= num_groups:
                 action_idx = 0
@@ -868,7 +804,7 @@ def _build_py_state_from_rust(
 ) -> GameState:
     """Build a lightweight Python GameState view from Rust state.
 
-    Used to provide PlayerPort implementations (HumanPlayer, RandomPlayer,
+    Used to provide PlayerPort implementations (HumanPlayer, StockskisPlayer,
     etc.) with the state they need to make decisions.  All game mechanics
     still run in Rust — this is a read-only snapshot.
     """
@@ -986,7 +922,7 @@ def _build_py_state_from_rust(
 
         state.callable_kings = _callable_kings
 
-    # Attach the raw Rust state so adapters (e.g. RustStockskisPlayer)
+    # Attach the raw Rust state so adapters (e.g. StockskisPlayer)
     # can call Rust-side heuristic methods directly.
     state._rust_gs = gs
 
@@ -1037,6 +973,19 @@ def _build_py_state_stub(
     state.roles = roles
 
     return state
+
+
+# Canonical state bridge now lives under use_cases.
+# Keep adapter-level names for compatibility with older imports.
+_RUST_U8_TO_PY_CONTRACT = _rust_state._RUST_U8_TO_PY_CONTRACT
+_PY_CONTRACT_TO_RUST_U8 = _rust_state._PY_CONTRACT_TO_RUST_U8
+_build_py_state_from_rust = _rust_state._build_py_state_from_rust
+_build_py_state_stub = _rust_state._build_py_state_stub
+_is_klop = _rust_state._is_klop
+_is_solo = _rust_state._is_solo
+_is_berac = _rust_state._is_berac
+_talon_cards = _rust_state._talon_cards
+_build_talon_groups = _rust_state._build_talon_groups
 
 
 # Backward-compatibility alias — all code should use RustGameLoop directly

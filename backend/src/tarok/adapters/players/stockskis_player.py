@@ -1,28 +1,14 @@
-"""Thin adapter from Rust StockŠkis heuristic bots to the PlayerPort interface.
-
-The Rust engine exposes ``v5_choose_*`` and ``m6_choose_*`` methods on
-``RustGameState``.  This adapter wraps them so the RustGameLoop can call
-``choose_card(state, player, legal)`` etc. like any other agent.
-"""
+"""PlayerPort adapter for Rust StockSkis heuristic bots."""
 
 from __future__ import annotations
 
 from tarok.ports.player_port import PlayerPort
 
 
-class RustStockskisPlayer(PlayerPort):
-    """PlayerPort adapter for Rust-side StockŠkis heuristic bots.
+class StockskisPlayer(PlayerPort):
+    """PlayerPort adapter for Rust-side StockSkis bots (v5/m6)."""
 
-    Parameters
-    ----------
-    variant : str
-        ``"v5"`` or ``"m6"`` — selects which set of ``gs.{variant}_choose_*``
-        methods to call.
-    name : str
-        Display name.
-    """
-
-    def __init__(self, *, variant: str = "v5", name: str = "StockŠkis"):
+    def __init__(self, *, variant: str = "v5", name: str = "StockSkis"):
         self._variant = variant
         self._name = name
 
@@ -30,19 +16,9 @@ class RustStockskisPlayer(PlayerPort):
     def name(self) -> str:
         return self._name
 
-    # The RustGameLoop gives us the *RustGameState* directly via the
-    # ``_rust_state`` attribute on the pystate object it constructs.
-    # But currently the PlayerPort methods receive a *Python* GameState
-    # representation.  The RustGameLoop stores the original RustGameState
-    # in ``self._gs`` — but we don't have access to it from here.
-    #
-    # Instead we use the approach from the old wrappers: attach the Rust
-    # game-state to the py_state as ``_rust_gs`` before calling the agent.
-    # rust_game_loop already does this (``py_state._rust_gs = self._gs``).
-
-    def _call(self, method_suffix: str, gs, player: int):
+    def _call(self, method_suffix: str, gs, player: int, *args):
         fn = getattr(gs, f"{self._variant}_{method_suffix}")
-        return fn(player)
+        return fn(player, *args)
 
     async def choose_bid(self, state, player, legal_bids):
         gs = getattr(state, "_rust_gs", None)
@@ -53,8 +29,8 @@ class RustStockskisPlayer(PlayerPort):
         if raw is None:
             return None
 
-        # Map Rust u8 contract → Python Contract enum
-        from tarok.adapters.ai.rust_game_loop import _RUST_U8_TO_PY_CONTRACT
+        from tarok.use_cases.rust_state import _RUST_U8_TO_PY_CONTRACT
+
         py_contract = _RUST_U8_TO_PY_CONTRACT.get(raw)
         if py_contract in legal_bids:
             return py_contract
@@ -67,6 +43,7 @@ class RustStockskisPlayer(PlayerPort):
 
         card_idx = self._call("choose_card", gs, player)
         from tarok.entities import DECK
+
         return DECK[card_idx]
 
     async def choose_king(self, state, player, callable_kings):
@@ -76,6 +53,7 @@ class RustStockskisPlayer(PlayerPort):
 
         card_idx = self._call("choose_king", gs, player)
         from tarok.entities import DECK
+
         return DECK[card_idx]
 
     async def choose_talon_group(self, state, player, groups):
@@ -83,7 +61,8 @@ class RustStockskisPlayer(PlayerPort):
         if gs is None:
             return 0
 
-        return self._call("choose_talon_group", gs, player)
+        group_indices = [[card._idx for card in group] for group in groups]
+        return self._call("choose_talon_group", gs, player, group_indices)
 
     async def choose_discard(self, state, player, num_cards):
         gs = getattr(state, "_rust_gs", None)
@@ -92,4 +71,5 @@ class RustStockskisPlayer(PlayerPort):
 
         idxs = self._call("choose_discards", gs, player)
         from tarok.entities import DECK
+
         return [DECK[i] for i in idxs]

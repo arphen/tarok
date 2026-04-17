@@ -7,7 +7,7 @@ from pathlib import Path
 from fastapi import APIRouter
 from pydantic import BaseModel
 
-from tarok.adapters.ai.agent import RLAgent
+from tarok.adapters.players.neural_player import NeuralPlayer
 from tarok.adapters.api.checkpoint_utils import resolve_checkpoint_or_default
 from tarok.entities import Card, CardType, Suit, SuitRank, DECK, Contract, GameState, Phase, PlayerRole, Trick
 from tarok.entities.game_types import suit_card
@@ -130,7 +130,7 @@ async def analyze_hand(req: AnalyzeRequest):
     legal = state.legal_plays(0)
 
     # Load the trained agent and get its recommendation
-    agent = RLAgent(name="Advisor")
+    agent = NeuralPlayer(name="Advisor")
     agent.set_training(False)
     checkpoint_path = resolve_checkpoint_or_default(None)
     if checkpoint_path and checkpoint_path.exists():
@@ -205,7 +205,7 @@ async def analyze_bid(req: AnalyzeBidRequest):
     legal = state.legal_bids(0)
 
     # Load agent
-    agent = RLAgent(name="BidAdvisor")
+    agent = NeuralPlayer(name="BidAdvisor")
     agent.set_training(False)
     checkpoint_path = resolve_checkpoint_or_default(None)
     if checkpoint_path and checkpoint_path.exists():
@@ -277,7 +277,7 @@ async def analyze_king(req: AnalyzeKingRequest):
     if not callable_kings:
         return {"recommended": None, "callable_kings": [], "has_trained_model": False}
 
-    agent = RLAgent(name="KingAdvisor")
+    agent = NeuralPlayer(name="KingAdvisor")
     agent.set_training(False)
     checkpoint_path = resolve_checkpoint_or_default(None)
     if checkpoint_path and checkpoint_path.exists():
