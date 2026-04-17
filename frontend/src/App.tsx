@@ -8,13 +8,11 @@ import type { CardData } from './types/game';
 import './App.css';
 
 // Lazy-load heavy dashboard components — they pull in Recharts and other large deps
-const CameraAgent = lazy(() => import('./components/CameraAgent'));
 const SpectatorView = lazy(() => import('./components/SpectatorView'));
 const TournamentBracket = lazy(() => import('./components/TournamentBracket'));
 const BotArena = lazy(() => import('./components/BotArena'));
-const ArenaCheckpointLeaderboard = lazy(() => import('./components/ArenaCheckpointLeaderboard'));
 
-type Page = 'home' | 'training' | 'lab' | 'play' | 'lobby' | 'camera' | 'spectate' | 'tournament' | 'arena' | 'arenaLeaderboard';
+type Page = 'home' | 'training' | 'lab' | 'play' | 'lobby' | 'spectate' | 'tournament' | 'arena';
 
 export default function App() {
   const [page, setPage] = useState<Page>('home');
@@ -43,10 +41,6 @@ export default function App() {
     setPage('play');
   };
 
-  if (page === 'camera') {
-    return <Suspense fallback={<div className="app"><p>Loading…</p></div>}><CameraAgent onBack={() => setPage('home')} /></Suspense>;
-  }
-
   if (page === 'spectate') {
     const replayId = arenaReplayGameId;
     return <Suspense fallback={<div className="app"><p>Loading…</p></div>}><SpectatorView onBack={() => { setArenaReplayGameId(null); setPage('home'); }} checkpoints={checkpoints} arenaReplayGameId={replayId} /></Suspense>;
@@ -58,10 +52,6 @@ export default function App() {
 
   if (page === 'arena') {
     return <Suspense fallback={<div className="app"><p>Loading…</p></div>}><BotArena onBack={() => setPage('home')} checkpoints={checkpoints} onReplayGame={(gameId) => { setArenaReplayGameId(gameId); setPage('spectate'); }} /></Suspense>;
-  }
-
-  if (page === 'arenaLeaderboard') {
-    return <Suspense fallback={<div className="app"><p>Loading…</p></div>}><ArenaCheckpointLeaderboard onBack={() => setPage('home')} checkpoints={checkpoints} /></Suspense>;
   }
 
   if (page === 'lobby') {
@@ -296,14 +286,6 @@ export default function App() {
             </span>
           </button>
 
-          <button className="btn-secondary btn-large" onClick={() => setPage('camera')}>
-            <span className="btn-icon">📸</span>
-            <span>
-              <strong>Camera Agent</strong>
-              <small>Get AI advice for a real-world hand</small>
-            </span>
-          </button>
-
           <button className="btn-secondary btn-large" onClick={() => setPage('spectate')}>
             <span className="btn-icon">👁️</span>
             <span>
@@ -328,13 +310,6 @@ export default function App() {
             </span>
           </button>
 
-          <button className="btn-secondary btn-large" onClick={() => setPage('arenaLeaderboard')}>
-            <span className="btn-icon">📈</span>
-            <span>
-              <strong>Arena Leaderboard</strong>
-              <small>Checkpoint-focused ranking from persisted arena runs</small>
-            </span>
-          </button>
         </div>
 
         <div className="rules-summary">
