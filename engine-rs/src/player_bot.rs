@@ -61,7 +61,7 @@ impl StockSkisPlayer {
 }
 
 impl BatchPlayer for StockSkisPlayer {
-    fn batch_decide(&self, contexts: &[DecisionContext]) -> Vec<DecisionResult> {
+    fn batch_decide(&self, contexts: &[DecisionContext<'_>]) -> Vec<DecisionResult> {
         contexts
             .iter()
             .map(|ctx| {
@@ -114,7 +114,7 @@ impl BatchPlayer for StockSkisPlayer {
 // -----------------------------------------------------------------------
 
 impl StockSkisPlayer {
-    fn decide_bid(&self, ctx: &DecisionContext) -> usize {
+    fn decide_bid(&self, ctx: &DecisionContext<'_>) -> usize {
         let hand = ctx.gs.hands[ctx.player as usize];
         let highest = ctx
             .gs
@@ -140,7 +140,7 @@ impl StockSkisPlayer {
         }
     }
 
-    fn decide_king(&self, ctx: &DecisionContext) -> usize {
+    fn decide_king(&self, ctx: &DecisionContext<'_>) -> usize {
         let hand = ctx.gs.hands[ctx.player as usize];
         let chosen = match self.version {
             BotVersion::V1 => stockskis_v1::choose_king_v1(hand),
@@ -156,7 +156,7 @@ impl StockSkisPlayer {
         }
     }
 
-    fn decide_talon(&self, ctx: &DecisionContext) -> usize {
+    fn decide_talon(&self, ctx: &DecisionContext<'_>) -> usize {
         let hand = ctx.gs.hands[ctx.player as usize];
         let called_king = ctx.gs.called_king;
         let groups = &ctx.gs.talon_revealed;
@@ -176,7 +176,7 @@ impl StockSkisPlayer {
         }
     }
 
-    fn decide_card(&self, ctx: &DecisionContext) -> usize {
+    fn decide_card(&self, ctx: &DecisionContext<'_>) -> usize {
         let hand = ctx.gs.hands[ctx.player as usize];
         let card = match self.version {
             BotVersion::V1 => stockskis_v1::choose_card_v1(hand, &ctx.gs, ctx.player),

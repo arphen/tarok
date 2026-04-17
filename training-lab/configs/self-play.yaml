@@ -27,7 +27,7 @@ value_coef: 0.5
 entropy_coef: 0.0005
 imitation_coef: 0.40
 imitation_schedule: linear
-imitation_coef_min: 0.02
+imitation_coef_min: 0.20
 explore_rate: 0.10
 
 concurrency: 256

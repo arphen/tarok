@@ -178,10 +178,8 @@ impl SelfPlayRunner {
             }
         }
 
-        // Persistent per-unique-player buffers reused each loop iteration.
-        // Avoids allocating a new Vec on every dispatch round.
+        // Persistent per-unique-player index buffers reused each loop iteration.
         let n_unique = unique_players.len();
-        let mut ctx_bufs: Vec<Vec<DecisionContext>> = (0..n_unique).map(|_| Vec::new()).collect();
         let mut idx_bufs: Vec<Vec<usize>> = (0..n_unique).map(|_| Vec::new()).collect();
 
         while active > 0 {
@@ -238,14 +236,13 @@ impl SelfPlayRunner {
                 let idx_buf = &idx_bufs[uid];
                 if idx_buf.is_empty() { continue; }
 
-                // Build contexts into the persistent buffer (no alloc on hot path).
-                let ctx_buf = &mut ctx_bufs[uid];
-                ctx_buf.clear();
+                // Build a borrowed context batch; this avoids deep-cloning GameState.
+                let mut contexts: Vec<DecisionContext<'_>> = Vec::with_capacity(idx_buf.len());
                 for &pi in idx_buf.iter() {
                     let pd = &pending[pi];
                     let game = slots[pd.slot].as_ref().unwrap();
-                    ctx_buf.push(DecisionContext {
-                        gs: game.gs.clone(),
+                    contexts.push(DecisionContext {
+                        gs: &game.gs,
                         player: pd.player,
                         decision_type: pd.decision_type,
                         legal_mask: game.legal_mask.clone(),
@@ -253,7 +250,7 @@ impl SelfPlayRunner {
                     });
                 }
 
-                let batch_results = up.batch_decide(ctx_buf);
+                let batch_results = up.batch_decide(&contexts);
 
                 for (i, &pi) in idx_buf.iter().enumerate() {
                     all_results[pi] = batch_results[i];

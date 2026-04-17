@@ -28,7 +28,7 @@ impl NeuralNetPlayer {
 }
 
 impl BatchPlayer for NeuralNetPlayer {
-    fn batch_decide(&self, contexts: &[DecisionContext]) -> Vec<DecisionResult> {
+    fn batch_decide(&self, contexts: &[DecisionContext<'_>]) -> Vec<DecisionResult> {
         if contexts.is_empty() {
             return Vec::new();
         }

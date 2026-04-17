@@ -12,7 +12,7 @@
 //! struct MyBot;
 //!
 //! impl BatchPlayer for MyBot {
-//!     fn batch_decide(&self, contexts: &[DecisionContext]) -> Vec<DecisionResult> {
+//!     fn batch_decide(&self, contexts: &[DecisionContext<'_>]) -> Vec<DecisionResult> {
 //!         contexts.iter().map(|ctx| {
 //!             let action = my_heuristic(&ctx.gs, ctx.player, ctx.decision_type, &ctx.legal_mask);
 //!             DecisionResult { action, log_prob: 0.0, value: 0.0 }
@@ -93,9 +93,9 @@ pub fn contract_to_bid_action(contract: Option<Contract>) -> usize {
 ///
 /// The runner pre-computes both the raw `GameState` (for heuristic bots)
 /// and the encoded state tensor (for neural-network players).
-pub struct DecisionContext {
-    /// Full game state snapshot (cloned from the in-flight game).
-    pub gs: GameState,
+pub struct DecisionContext<'a> {
+    /// Full in-flight game state borrowed from the runner.
+    pub gs: &'a GameState,
     /// Which player seat is deciding (0–3).
     pub player: u8,
     /// Type of decision required.
@@ -134,7 +134,7 @@ pub trait BatchPlayer: Send + Sync {
     ///
     /// Must return exactly one [`DecisionResult`] per input context,
     /// in the same order.
-    fn batch_decide(&self, contexts: &[DecisionContext]) -> Vec<DecisionResult>;
+    fn batch_decide(&self, contexts: &[DecisionContext<'_>]) -> Vec<DecisionResult>;
 
     /// Choose which cards to discard after picking a talon group.
     ///
