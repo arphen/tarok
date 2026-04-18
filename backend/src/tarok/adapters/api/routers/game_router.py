@@ -5,7 +5,6 @@ from __future__ import annotations
 import asyncio
 
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
-from pathlib import Path
 
 from tarok.adapters.api.checkpoint_utils import resolve_checkpoint
 from tarok.adapters.players.factory import get_player_factory

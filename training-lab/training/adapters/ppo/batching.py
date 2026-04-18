@@ -1,8 +1,7 @@
-"""Batch preparation and memory release helpers for PPO."""
+"""Batch preparation helpers for PPO."""
 
 from __future__ import annotations
 
-import gc
 from typing import Any
 
 import numpy as np
@@ -68,26 +67,18 @@ def prepare_batched(raw: dict[str, Any], gamma: float = 0.99, gae_lambda: float 
         adv_std = float(advantages_np.std())
         advantages_np = (advantages_np - adv_mean) / (adv_std + 1e-8)
 
+    # Stack values / advantages / returns into a single (N, 3) matrix so that
+    # one advanced-index copy on the CPU and one PCIe transfer replace three.
+    # Column layout: 0=old_values, 1=advantages (normalised), 2=returns.
+    vad_np = np.stack([values_np.astype(np.float32), advantages_np, returns_np], axis=1)
+
     return {
         "states": torch.from_numpy(states_np),
         "actions": torch.from_numpy(actions_np.astype(np.int64)),
         "log_probs": torch.from_numpy(log_probs_np),
-        "values": torch.from_numpy(values_np.astype(np.float32)),
-        "advantages": torch.from_numpy(advantages_np),
-        "returns": torch.from_numpy(returns_np),
+        "vad": torch.from_numpy(vad_np),
         "decision_types": decision_types_np,
         "legal_masks": torch.from_numpy(legal_masks_np),
         "oracle_states": torch.from_numpy(oracle_states_np) if oracle_states_np is not None else None,
         "game_modes": game_modes_np,
     }
-
-
-def release_allocator_memory() -> None:
-    gc.collect()
-    if torch.cuda.is_available():
-        torch.cuda.empty_cache()
-    if hasattr(torch, "mps") and hasattr(torch.mps, "empty_cache"):
-        try:
-            torch.mps.empty_cache()
-        except Exception:
-            pass

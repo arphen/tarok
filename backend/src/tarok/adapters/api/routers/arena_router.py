@@ -210,7 +210,9 @@ async def _run_arena(
         session_scores[:] = [0, 0, 0, 0]
         games_in_session = 0
 
-    def _accumulate_scores(scores, n_batch, initial_hands=None, initial_talon=None, traces=None) -> None:
+    def _accumulate_scores(
+        scores, n_batch, initial_hands=None, initial_talon=None, traces=None
+    ) -> None:
         nonlocal games_in_session, session_scores
 
         for pid in range(4):
@@ -261,10 +263,21 @@ async def _run_arena(
             if games_in_session >= session_size:
                 _flush_session()
 
-    def _process_batch(scores, contracts, declarers, partners, bid_contracts, taroks_in_hand,
-                       n_batch, initial_hands=None, initial_talon=None, traces=None) -> None:
-        _accumulate_scores(scores, n_batch, initial_hands=initial_hands,
-                           initial_talon=initial_talon, traces=traces)
+    def _process_batch(
+        scores,
+        contracts,
+        declarers,
+        partners,
+        bid_contracts,
+        taroks_in_hand,
+        n_batch,
+        initial_hands=None,
+        initial_talon=None,
+        traces=None,
+    ) -> None:
+        _accumulate_scores(
+            scores, n_batch, initial_hands=initial_hands, initial_talon=initial_talon, traces=traces
+        )
 
         if taroks_in_hand is not None:
             for pid in range(4):
@@ -316,8 +329,12 @@ async def _run_arena(
         for cu8, cnt in zip(unique_contracts, contract_counts):
             cname = contract_name(int(cu8))
             if cname not in contract_stats:
-                contract_stats[cname] = {"played": 0, "decl_won": 0,
-                                         "total_decl_score": 0, "total_def_score": 0}
+                contract_stats[cname] = {
+                    "played": 0,
+                    "decl_won": 0,
+                    "total_decl_score": 0,
+                    "total_def_score": 0,
+                }
             contract_stats[cname]["played"] += int(cnt)
 
         non_klop_mask = declarers >= 0
@@ -346,9 +363,13 @@ async def _run_arena(
                 d_won = is_decl & decl_won_mask
                 d_lost = is_decl & ~decl_won_mask
                 ps["declared_win_games"] += int(d_won.sum())
-                ps["declared_win_score_total"] += int(decl_scores_arr[d_won].sum()) if d_won.any() else 0
+                ps["declared_win_score_total"] += (
+                    int(decl_scores_arr[d_won].sum()) if d_won.any() else 0
+                )
                 ps["declared_loss_games"] += int(d_lost.sum())
-                ps["declared_loss_score_total"] += int(decl_scores_arr[d_lost].sum()) if d_lost.any() else 0
+                ps["declared_loss_score_total"] += (
+                    int(decl_scores_arr[d_lost].sum()) if d_lost.any() else 0
+                )
                 ps["times_called"] += int((nk_part == pid).sum())
                 in_team = is_decl | (nk_part == pid)
                 ps["declared_count"] += int(in_team.sum())
@@ -405,10 +426,18 @@ async def _run_arena(
             bi = nv_idx[int(game_max_scores[nv_idx].argmax())]
             wi = nv_idx[int(game_min_scores[nv_idx].argmin())]
             bs, ws = int(game_max_scores[bi]), int(game_min_scores[wi])
-            if notable_games["best_non_valat"] is None or bs > notable_games["best_non_valat"]["score"]:
+            if (
+                notable_games["best_non_valat"] is None
+                or bs > notable_games["best_non_valat"]["score"]
+            ):
                 notable_games["best_non_valat"] = _make_notable(int(bi), int(game_max_pids[bi]), bs)
-            if notable_games["worst_non_valat"] is None or ws < notable_games["worst_non_valat"]["score"]:
-                notable_games["worst_non_valat"] = _make_notable(int(wi), int(game_min_pids[wi]), ws)
+            if (
+                notable_games["worst_non_valat"] is None
+                or ws < notable_games["worst_non_valat"]["score"]
+            ):
+                notable_games["worst_non_valat"] = _make_notable(
+                    int(wi), int(game_min_pids[wi]), ws
+                )
 
         vm = valat_mask
         if vm.any():
@@ -434,8 +463,13 @@ async def _run_arena(
 
     def _current_analytics() -> dict:
         return build_analytics(
-            player_stats, contract_stats, taroks_per_contract,
-            games_done, total, session_size, notable_games,
+            player_stats,
+            contract_stats,
+            taroks_per_contract,
+            games_done,
+            total,
+            session_size,
+            notable_games,
         )
 
     batch_size = min(2_000 if has_nn else 10_000, total)
@@ -461,11 +495,19 @@ async def _run_arena(
                 contracts=np.asarray(result["contracts"]),
                 declarers=np.asarray(result["declarers"]),
                 partners=np.asarray(result["partners"]),
-                bid_contracts=np.asarray(result["bid_contracts"]) if "bid_contracts" in result else None,
-                taroks_in_hand=np.asarray(result["taroks_in_hand"]) if "taroks_in_hand" in result else None,
+                bid_contracts=np.asarray(result["bid_contracts"])
+                if "bid_contracts" in result
+                else None,
+                taroks_in_hand=np.asarray(result["taroks_in_hand"])
+                if "taroks_in_hand" in result
+                else None,
                 n_batch=n_batch,
-                initial_hands=np.asarray(result["initial_hands"]) if "initial_hands" in result else None,
-                initial_talon=np.asarray(result["initial_talon"]) if "initial_talon" in result else None,
+                initial_hands=np.asarray(result["initial_hands"])
+                if "initial_hands" in result
+                else None,
+                initial_talon=np.asarray(result["initial_talon"])
+                if "initial_talon" in result
+                else None,
                 traces=result.get("traces"),
             )
 
@@ -483,7 +525,11 @@ async def _run_arena(
 
     except asyncio.CancelledError:
         log.info("Arena cancelled at game %d/%d", games_done, total)
-        payload = {"status": "cancelled", "games_done": games_done, "analytics": _current_analytics()}
+        payload = {
+            "status": "cancelled",
+            "games_done": games_done,
+            "analytics": _current_analytics(),
+        }
         _arena_progress = {**payload, "total_games": total}
         arena_history.persist_run(agent_configs, total, session_size, payload)
         return

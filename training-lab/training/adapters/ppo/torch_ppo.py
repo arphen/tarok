@@ -22,7 +22,7 @@ from tarok_model.encoding import (
 )
 from tarok_model.network import TarokNetV4
 
-from training.adapters.ppo.batching import prepare_batched, release_allocator_memory
+from training.adapters.ppo.batching import prepare_batched
 from training.adapters.ppo.contracts import validate_v4_contract_indices_with_rust
 from training.entities import TrainingConfig
 from training.ports import PPOPort
@@ -118,7 +118,6 @@ class PPOAdapter(PPOPort):
 
         new_weights = {k: v.cpu() for k, v in self._network.state_dict().items()}
         del prepped
-        release_allocator_memory()
         return metrics, new_weights
 
     def _ppo_update_batched(
@@ -127,16 +126,13 @@ class PPOAdapter(PPOPort):
         states: torch.Tensor,
         actions: torch.Tensor,
         log_probs: torch.Tensor,
-        values: torch.Tensor,
-        advantages: torch.Tensor,
-        returns: torch.Tensor,
+        vad: torch.Tensor,
         decision_types: np.ndarray,
         legal_masks: torch.Tensor,
         oracle_states: torch.Tensor | None,
         game_modes: np.ndarray,
     ) -> dict[str, float]:
         old_log_probs = log_probs
-        old_values = values
 
         if len(states) == 0:
             return {"policy_loss": 0, "value_loss": 0, "entropy": 0, "total_loss": 0}
@@ -178,9 +174,7 @@ class PPOAdapter(PPOPort):
             g_states = compute.to_device(states[idx])
             g_actions = compute.to_device(actions[idx])
             g_old_log_probs = compute.to_device(old_log_probs[idx])
-            g_old_values = compute.to_device(old_values[idx])
-            g_advantages = compute.to_device(advantages[idx])
-            g_returns = compute.to_device(returns[idx])
+            g_vad = compute.to_device(vad[idx])  # (n, 3): old_values | advantages | returns
             g_masks = compute.to_device(legal_masks[idx, :action_size])
             g_oracle_states = compute.to_device(oracle_states[idx]) if oracle_states is not None else None
 
@@ -194,9 +188,10 @@ class PPOAdapter(PPOPort):
                     b_states = g_states[batch_idx]
                     b_actions = g_actions[batch_idx]
                     b_old_log_probs = g_old_log_probs[batch_idx]
-                    b_old_values = g_old_values[batch_idx]
-                    b_advantages = g_advantages[batch_idx]
-                    b_returns = g_returns[batch_idx]
+                    b_vad = g_vad[batch_idx]  # (batch, 3)
+                    b_old_values = b_vad[:, 0]
+                    b_advantages = b_vad[:, 1]
+                    b_returns = b_vad[:, 2]
                     b_masks = g_masks[batch_idx]
                     b_oracle_states = g_oracle_states[batch_idx] if g_oracle_states is not None else None
 

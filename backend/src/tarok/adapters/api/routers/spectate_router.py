@@ -370,7 +370,9 @@ async def _replay_from_trace(
         talon_revealed = [[DECK[idx] for idx in g] for g in groups]
         await observer.on_talon_revealed(
             talon_revealed,
-            _build_py_state_from_rust(gs, completed_tricks, bids=bid_history, talon_revealed=groups),
+            _build_py_state_from_rust(
+                gs, completed_tricks, bids=bid_history, talon_revealed=groups
+            ),
         )
 
         pick_idx = min(tp_group_idx, len(groups) - 1)

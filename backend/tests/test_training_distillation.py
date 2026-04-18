@@ -72,13 +72,12 @@ def _make_neutral_batch(network: TarokNetV4, include_oracle_states: bool) -> dic
             oracle_state=oracle_states if include_oracle_states else None,
         )
 
+    vad = torch.stack([old_values.clone(), torch.zeros(batch_size), old_values.clone()], dim=1)
     return {
         "states": states,
         "actions": actions,
         "log_probs": old_log_probs.clone(),
-        "values": old_values.clone(),
-        "advantages": torch.zeros(batch_size),
-        "returns": old_values.clone(),
+        "vad": vad,
         "decision_types": np.zeros(batch_size, dtype=np.int8),
         "legal_masks": legal_masks,
         "oracle_states": oracle_states if include_oracle_states else None,
