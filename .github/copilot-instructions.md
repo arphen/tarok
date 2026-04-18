@@ -32,3 +32,8 @@ Current rules:
 	- implement the Port in `tarok.adapters`
 	- inject the adapter through the port interface into the use case
 - Keep business orchestration and game rules in use cases; keep framework/library details in adapters.
+
+## Git
+
+- NEVER use `--no-verify` when committing. Fix failing tests instead.
+- The pre-commit hook runs `make lint-architecture` and the backend test suite. All must pass before committing.

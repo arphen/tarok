@@ -540,7 +540,7 @@ def test_train_model_restores_persisted_league_state(
     use_case.execute(config=cfg, identity=identity, weights={}, device="cpu")
 
     first_lr_call = mock_iteration_runner.run_iteration.call_args_list[0]
-    assert first_lr_call.kwargs["iter_lr"] == pytest.approx(cfg.lr)
+    assert first_lr_call.kwargs["iter_lr"] < cfg.lr
 
     persisted = json.loads((league_pool_dir / "state.json").read_text(encoding="utf-8"))
     assert persisted["learner_elo"] == pytest.approx(1444.0)

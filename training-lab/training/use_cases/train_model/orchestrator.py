@@ -50,7 +50,10 @@ class TrainModel:
             imitation_policy if imitation_policy is not None else DefaultImitationCoefPolicy()
         )
         self._entropy_policy = entropy_policy if entropy_policy is not None else DefaultEntropyCoefPolicy()
-        self._league_persistence = league_persistence
+        if league_persistence is None:
+            from training.adapters.league_persistence import JsonLeagueStatePersistence
+            league_persistence = JsonLeagueStatePersistence()
+        self._league_persistence: LeagueStatePersistencePort = league_persistence
 
     def execute(
         self,
@@ -94,8 +97,6 @@ class TrainModel:
 
         if config.league is None or not config.league.enabled:
             raise ValueError("TrainModel requires league.enabled=true")
-        if self._league_persistence is None:
-            raise ValueError("TrainModel requires a LeagueStatePersistencePort")
 
         pool = LeaguePool(config=config.league)
         league_maintenance = MaintainLeaguePool(
