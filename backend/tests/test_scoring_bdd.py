@@ -6,15 +6,10 @@ from pytest_bdd import scenarios, given, then, parsers
 
 from tarok.entities import (
     CardType,
-    Suit,
-    SuitRank,
     PAGAT,
     MOND,
     SKIS,
-    tarok,
-    suit_card,
     DECK,
-    Announcement,
     Contract,
     GameState,
     KontraLevel,
@@ -23,6 +18,7 @@ from tarok.entities import (
     Team,
     Trick,
     compute_card_points,
+    score_game,
 )
 from tarok.use_cases.deal import deal
 from tarok.use_cases.play_trick import play_card, start_trick
@@ -39,6 +35,15 @@ CONTRACT_MAP = {
     "solo_one": Contract.SOLO_ONE,
     "solo": Contract.SOLO,
 }
+
+_SILENT_TRULA = 10
+_ANNOUNCED_TRULA = 20
+_SILENT_PAGAT_ULTIMO = 25
+_ANNOUNCED_PAGAT_ULTIMO = 50
+
+
+def _contract_multiplier(contract: Contract) -> int:
+    return contract.base_value
 
 
 @then(parsers.parse('contract "{name}" should have base value {value:d}'))
@@ -214,7 +219,7 @@ def _play_random_game(seed: int) -> GameState:
     state = place_bid(state, 2, None)
     state = place_bid(state, 3, None)
 
-    if not state.contract.is_solo:
+    if state.contract is not None and not state.contract.is_solo():
         kings = state.callable_kings()
         if kings:
             from tarok.use_cases.call_king import call_king
@@ -226,6 +231,8 @@ def _play_random_game(seed: int) -> GameState:
 
         reveal_talon(state)
         state = pick_talon_group(state, 0)
+        assert state.declarer is not None
+        assert state.contract is not None
         discardable = [
             c
             for c in state.hands[state.declarer]

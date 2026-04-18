@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from tarok.entities import Card, Contract
+from tarok.entities.game_types import DECK
 from tarok.ports.player_port import PlayerPort
 
 
@@ -20,12 +22,14 @@ class StockskisPlayer(PlayerPort):
         fn = getattr(gs, f"{self._variant}_{method_suffix}")
         return fn(player, *args)
 
-    async def choose_bid(self, state, player, legal_bids):
+    async def choose_bid(
+        self, state, player_idx: int, legal_bids: list[Contract | None]
+    ) -> Contract | None:
         gs = getattr(state, "_rust_gs", None)
         if gs is None:
             return legal_bids[0] if legal_bids else None
 
-        raw = self._call("choose_bid", gs, player)
+        raw = self._call("choose_bid", gs, player_idx)
         if raw is None:
             return None
 
@@ -36,40 +40,41 @@ class StockskisPlayer(PlayerPort):
             return py_contract
         return None
 
-    async def choose_card(self, state, player, legal_cards=None):
+    async def choose_card(self, state, player_idx: int, legal_plays: list[Card]) -> Card:
         gs = getattr(state, "_rust_gs", None)
         if gs is None:
-            return legal_cards[0] if legal_cards else None
+            return legal_plays[0]
 
-        card_idx = self._call("choose_card", gs, player)
-        from tarok.entities import DECK
+        card_idx = self._call("choose_card", gs, player_idx)
 
         return DECK[card_idx]
 
-    async def choose_king(self, state, player, callable_kings):
+    async def choose_king(self, state, player_idx: int, callable_kings: list[Card]) -> Card:
         gs = getattr(state, "_rust_gs", None)
         if gs is None:
-            return callable_kings[0] if callable_kings else None
+            return callable_kings[0]
 
-        card_idx = self._call("choose_king", gs, player)
-        from tarok.entities import DECK
+        card_idx = self._call("choose_king", gs, player_idx)
 
         return DECK[card_idx]
 
-    async def choose_talon_group(self, state, player, groups):
+    async def choose_talon_group(
+        self, state, player_idx: int, talon_groups: list[list[Card]]
+    ) -> int:
         gs = getattr(state, "_rust_gs", None)
         if gs is None:
             return 0
 
-        group_indices = [[card._idx for card in group] for group in groups]
-        return self._call("choose_talon_group", gs, player, group_indices)
+        group_indices = [[card._idx for card in group] for group in talon_groups]
+        return self._call("choose_talon_group", gs, player_idx, group_indices)
 
-    async def choose_discard(self, state, player, num_cards):
+    async def choose_discard(self, state, player_idx: int, must_discard: int) -> list[Card]:
         gs = getattr(state, "_rust_gs", None)
         if gs is None:
             return []
 
-        idxs = self._call("choose_discards", gs, player)
-        from tarok.entities import DECK
+        idxs = self._call("choose_discards", gs, player_idx)
+        if must_discard <= 0:
+            return []
 
-        return [DECK[i] for i in idxs]
+        return [DECK[i] for i in idxs[:must_discard]]

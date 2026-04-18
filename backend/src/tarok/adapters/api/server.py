@@ -349,8 +349,8 @@ async def game_websocket(ws: WebSocket, game_id: str):
                     round_num=round_num + 1,
                     player_names=player_names,
                     decisions=round_decisions,
-                    scores=scores,
-                    contract=state.contract.value if state.contract else None,
+                    scores=[int(scores.get(i, 0)) for i in range(4)],
+                    contract=state.contract.name if state.contract else None,
                     declarer=state.declarer,
                     partner=state.partner,
                 )
@@ -597,6 +597,7 @@ async def spectate_websocket(ws: WebSocket, game_id: str):
             )
         else:
             # Live game with agents
+            assert agents is not None
             game_loop = GameLoop(agents, observer=observer, allow_berac=False)
             preset_hands = game_info.get("preset_hands")
             preset_talon = game_info.get("preset_talon")

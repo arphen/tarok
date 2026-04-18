@@ -88,6 +88,7 @@ def _card_to_dict(card: Card) -> dict:
 
 def _full_state(state: GameState, player_names: list[str]) -> dict:
     """Return the complete game state with all hands visible."""
+    current_trick = getattr(state, "current_trick", None)
     return {
         "phase": state.phase.value,
         "hands": [[_card_to_dict(c) for c in state.hands[i]] for i in range(4)],
@@ -107,8 +108,8 @@ def _full_state(state: GameState, player_names: list[str]) -> dict:
         "partner_revealed": state.is_partner_revealed,
         "partner": state.partner if state.is_partner_revealed else None,
         "current_trick": (
-            [(p, _card_to_dict(c)) for p, c in state.current_trick.cards]
-            if state.current_trick
+            [(p, _card_to_dict(c)) for p, c in current_trick.cards]
+            if current_trick and hasattr(current_trick, "cards")
             else []
         ),
         "tricks_played": state.tricks_played,
@@ -209,12 +210,14 @@ class SpectatorObserver:
             state,
         )
 
-    async def on_contract_won(self, player: int, contract: Contract, state: GameState) -> None:
+    async def on_contract_won(
+        self, player: int, contract: Contract | None, state: GameState
+    ) -> None:
         await self._broadcast(
             "contract_won",
             {
                 "player": player,
-                "contract": contract.value,
+                "contract": contract.value if contract is not None else None,
             },
             state,
         )
@@ -274,7 +277,7 @@ class SpectatorObserver:
             state,
         )
 
-    async def on_trick_won(self, trick: Trick, winner: int, state: GameState) -> None:
+    async def on_trick_won(self, trick: Any, winner: int, state: GameState) -> None:
         await self._broadcast(
             "trick_won",
             {

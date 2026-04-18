@@ -6,24 +6,19 @@ from hypothesis import given as hgiven, settings, assume
 from hypothesis import strategies as st
 
 from tarok.entities import (
-    Card,
     CardType,
     Suit,
     SuitRank,
     DECK,
     tarok,
     suit_card,
-    PAGAT,
-    MOND,
-    SKIS,
     Contract,
     GameState,
     Phase,
-    PlayerRole,
     Team,
-    Trick,
-    Announcement,
     compute_card_points,
+    score_game,
+    TOTAL_GAME_POINTS,
 )
 from tarok.use_cases.deal import deal
 from tarok.use_cases.bid import place_bid
@@ -124,7 +119,7 @@ def test_legal_plays_always_nonempty(seed):
         state = place_bid(state, p, None)
 
     # King calling
-    if not state.contract.is_solo:
+    if state.contract is not None and not state.contract.is_solo():
         kings = state.callable_kings()
         if kings:
             from tarok.use_cases.call_king import call_king
@@ -173,7 +168,7 @@ def test_opponents_score_zero(seed):
     for p in [1, 2, 3]:
         state = place_bid(state, p, None)
 
-    if not state.contract.is_solo:
+    if state.contract is not None and not state.contract.is_solo():
         kings = state.callable_kings()
         if kings:
             from tarok.use_cases.call_king import call_king
@@ -278,7 +273,7 @@ def test_trick_winner_valid(seed):
     for p in [1, 2, 3]:
         state = place_bid(state, p, None)
 
-    if not state.contract.is_solo:
+    if state.contract is not None and not state.contract.is_solo():
         kings = state.callable_kings()
         if kings:
             from tarok.use_cases.call_king import call_king

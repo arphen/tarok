@@ -1,6 +1,5 @@
 """Smoke test — run a full game to verify the engine works end-to-end."""
 
-import asyncio
 import pytest
 
 from tarok.use_cases.game_loop import RustGameLoop as GameLoop
@@ -22,7 +21,7 @@ async def test_full_game():
     for hand in state.hands:
         assert len(hand) == 0
     # Only declarer team should score; opponents get 0
-    if state.declarer is not None and not state.contract.is_klop:
+    if state.declarer is not None and state.contract is not None and not state.contract.is_klop:
         for p in range(4):
             if state.get_team(p) != state.get_team(state.declarer):
                 assert scores.get(p, 0) == 0, f"Opponent {p} has non-zero score: {scores}"
@@ -43,6 +42,7 @@ async def test_multiple_games():
             assert state.tricks_played == 12
         # Only declarer team should score, opponents get 0
         if state.contract and not state.contract.is_klop:
+            assert state.declarer is not None
             for p in range(4):
                 team = state.get_team(p)
                 if team != state.get_team(state.declarer):

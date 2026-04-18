@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Any, Callable
+from typing import Any, Callable, cast
 
 from tarok.ports.player_port import PlayerPort
 
@@ -75,7 +75,7 @@ class PlayerFactory:
                 description="Human player via WebSocket",
                 category="human",
             ),
-            lambda name="Human", **kwargs: HumanPlayer(name=name),
+            lambda name="Human", **kwargs: cast(PlayerPort, HumanPlayer(name=name)),
         )
 
     def _register_stockskis(self) -> None:

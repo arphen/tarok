@@ -1,5 +1,6 @@
 """Unit tests for websocket bidding state exposure to the UI."""
 
+from typing import Any, cast
 from unittest.mock import AsyncMock
 
 import numpy as np
@@ -17,6 +18,7 @@ class DummyState:
     def __init__(self, *, phase: Phase, current_player: int, legal_bids: list[int | None]):
         self.phase = phase
         self.current_player = current_player
+        self.current_bidder: int | None = current_player
         self.hands = [[], [], [], []]
         self.talon_revealed = None
         self.bids = []
@@ -312,9 +314,26 @@ def test_trick_start_snapshot_uses_lead_player_as_current_player() -> None:
 def test_trick_play_legal_plays_falls_back_to_hand_when_empty() -> None:
     names = ["You", "AI-1", "AI-2", "AI-3"]
 
-    class _EmptyLegalRustGS(FakeRustGS):
+    class _EmptyLegalRustGS:
+        dealer = 0
+        phase = 5
+        contract = None
+        declarer = None
+        partner = None
+        called_king = None
+        current_player = 0
+
         def hand(self, _player: int) -> list[int]:
             return [22, 23, 24]  # suit cards
+
+        def talon(self) -> list[int]:
+            return []
+
+        def get_role(self, _player: int) -> int:
+            return 2
+
+        def legal_bids(self, _player_idx: int) -> list[int | None]:
+            return [None]
 
         def legal_plays(self, _player_idx: int) -> list[int]:
             return []
@@ -379,7 +398,7 @@ async def test_bidding_does_not_reprompt_highest_bidder_after_all_others_pass(mo
         _ScriptedPlayer([None]),
     ]
     obs = _Observer()
-    loop = RustGameLoop(players, observer=obs)
+    loop = RustGameLoop(players, observer=cast(Any, obs))
     gs = _FakeGS()
 
     monkeypatch.setattr(

@@ -7,6 +7,7 @@ These are labels, enums, and data bags for the Python/UI layer.
 from __future__ import annotations
 
 from enum import Enum
+from typing import Any, Callable
 
 import tarok_engine as te
 
@@ -109,6 +110,11 @@ class Card:
 
     def __lt__(self, other: Card) -> bool:
         return self._idx < other._idx
+
+    def beats(self, other: Card, lead_suit: Suit | None) -> bool:
+        """Compatibility shim delegating trick comparison to Rust."""
+        lead_suit_idx = None if lead_suit is None else list(Suit).index(lead_suit)
+        return bool(te.RustGameState.card_beats(self._idx, other._idx, lead_suit_idx))
 
 
 # ---------------------------------------------------------------------------
@@ -340,7 +346,28 @@ class GameState:
         self.roles: dict = kwargs.get("roles", {})
         self.scores: dict = kwargs.get("scores", {})
         self.current_player: int = kwargs.get("current_player", 0)
+        self.current_bidder: int | None = kwargs.get("current_bidder", self.current_player)
         self.initial_tarok_counts: dict = kwargs.get("initial_tarok_counts", {})
+
+        # Rust-backed dynamic helpers populated by bridge code.
+        self.legal_bids: Callable[[int], list[int | None]] = kwargs.get(
+            "legal_bids", lambda _player_idx: []
+        )
+        self.legal_plays: Callable[[int], list[Card]] = kwargs.get(
+            "legal_plays", lambda _player_idx: []
+        )
+        self.callable_kings: Callable[[], list[Card]] = kwargs.get("callable_kings", lambda: [])
+
+        # Legacy snapshot compatibility fields used across use-case wrappers.
+        self._legacy_tricks: list = kwargs.get("_legacy_tricks", [])
+        self._legacy_current_trick: Any = kwargs.get("_legacy_current_trick", None)
+        self._legacy_talon_revealed: Any = kwargs.get("_legacy_talon_revealed", None)
+        self._legacy_bid_passed: list[bool] = kwargs.get("_legacy_bid_passed", [False] * 4)
+        self._legacy_bid_highest: Any = kwargs.get("_legacy_bid_highest", None)
+        self._legacy_bid_winner: Any = kwargs.get("_legacy_bid_winner", None)
+
+        # Link to underlying Rust game state when available.
+        self._rust_gs: Any = kwargs.get("_rust_gs", None)
 
     # -- derived properties (pure lookups, no game logic) ------------------
 
@@ -369,9 +396,10 @@ def compute_card_points(cards: list[Card]) -> int:
     return te.RustGameState.compute_card_points([c._idx for c in cards])
 
 
-def score_game(gs: te.RustGameState) -> list[int]:
-    """Delegate to Rust engine."""
-    return list(gs.score_game())
+def score_game(gs: Any) -> list[int]:
+    """Delegate to Rust engine (accepts Rust state or bridged GameState)."""
+    rust_gs = getattr(gs, "_rust_gs", gs)
+    return list(rust_gs.score_game())
 
 
 # Scoring constants (from Rust scoring module)

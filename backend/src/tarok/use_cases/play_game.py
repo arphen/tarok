@@ -122,7 +122,7 @@ class _Session:
         s.num_players = 4
         s.phase = _U8_TO_PHASE.get(gs.phase, Phase.TRICK_PLAY)
         s.hands = [[DECK[i] for i in gs.hand(p)] for p in range(4)]
-        s.contract = _U8_TO_CONTRACT.get(gs.contract)
+        s.contract = _U8_TO_CONTRACT.get(gs.contract) if gs.contract is not None else None
         s.declarer = getattr(gs, "declarer", None)
         s.partner = getattr(gs, "partner", None)
         ck = getattr(gs, "called_king", None)
@@ -224,10 +224,11 @@ class _Session:
         # if bidding ends before that player bids, they may have already
         # sent a premature response that must be discarded.
         for p in self.players:
-            if hasattr(p, "drain_queue"):
-                p.drain_queue()
+            drain_queue = getattr(p, "drain_queue", None)
+            if callable(drain_queue):
+                drain_queue()
 
-        py_contract = _U8_TO_CONTRACT.get(gs.contract)
+        py_contract = _U8_TO_CONTRACT.get(gs.contract) if gs.contract is not None else None
         decl = getattr(gs, "declarer", None) or 0
         await self.observer.on_contract_won(decl, py_contract, self.snap())
 
@@ -238,6 +239,8 @@ class _Session:
     async def king_calling(self) -> None:
         gs = self.gs
         declarer = gs.declarer
+        if declarer is None:
+            return
         callable_idxs = gs.callable_kings()
         if not callable_idxs:
             return
@@ -259,6 +262,8 @@ class _Session:
     async def talon_exchange(self) -> None:
         gs = self.gs
         declarer = gs.declarer
+        if declarer is None:
+            return
         groups = gs.build_talon_groups()
         gs.set_talon_revealed(groups)
 

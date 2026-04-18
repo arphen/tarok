@@ -7,6 +7,7 @@ without winning one, they get +70.
 
 import asyncio
 import random
+from typing import Any, cast
 
 import pytest
 
@@ -81,7 +82,7 @@ class TrackingObserver(NullObserver):
     async def on_trick_won(self, trick, winner, state):
         self.tricks_completed += 1
 
-    async def on_game_end(self, scores, state):
+    async def on_game_end(self, scores, state, breakdown=None):
         self.game_ended = True
         self.final_scores = scores
 
@@ -167,7 +168,7 @@ async def test_berac_ends_early_when_declarer_wins_trick():
     # where the declarer wins a trick (very likely with random cards).
     for seed in range(50):
         observer = TrackingObserver()
-        loop = GameLoop(players, observer=observer, rng=random.Random(seed))
+        loop = GameLoop(players, observer=cast(Any, observer), rng=random.Random(seed))
         state, scores = await loop.run(dealer=3)  # player 0 is forehand, bids first
 
         if state.contract and state.contract.is_berac and state.declarer == 0:
@@ -201,7 +202,7 @@ async def test_berac_plays_all_12_tricks_if_declarer_never_wins():
     found_full_game = False
     for seed in range(200):
         observer = TrackingObserver()
-        loop = GameLoop(players, observer=observer, rng=random.Random(seed))
+        loop = GameLoop(players, observer=cast(Any, observer), rng=random.Random(seed))
         state, scores = await loop.run(dealer=3)
 
         if (
@@ -287,7 +288,7 @@ async def test_berac_with_rl_agents_stable():
     """Berač early termination works with RL agents without crashes."""
     for seed in range(10):
         human = ScriptedPlayer("You", bid=Contract.BERAC)
-        agents = [human]
+        agents: list[object] = [human]
         for i in range(3):
             a = NeuralPlayer(name=f"AI-{i + 1}")
             a.set_training(False)
@@ -298,4 +299,5 @@ async def test_berac_with_rl_agents_stable():
 
         assert state.phase == Phase.FINISHED
         if state.contract and state.contract.is_berac:
+            assert state.declarer is not None
             assert scores[state.declarer] in (-70, 70)

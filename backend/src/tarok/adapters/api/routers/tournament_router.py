@@ -105,7 +105,7 @@ async def tournament_match(req: TournamentMatchRequest):
 async def _simulate_single_tournament(
     agent_configs: list[dict],
     games_per_round: int,
-) -> dict[str, dict]:
+) -> dict[str, int]:
     """Run one double-elimination tournament, return per-agent placement stats."""
     import random as _random
 
@@ -190,6 +190,7 @@ async def simulate_multi_tournament(req: MultiTournamentRequest):
 
     async def _run():
         global _multi_tournament_progress
+        assert _multi_tournament_progress is not None
         # Per-agent stats: {name: {wins, top2, total_placement, placements: [...]}}
         standings: dict[str, dict] = {}
         for cfg in agent_configs:

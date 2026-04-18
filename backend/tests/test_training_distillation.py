@@ -3,9 +3,11 @@
 from __future__ import annotations
 
 import copy
+import importlib
 import sys
 import types
 from pathlib import Path
+from typing import Any
 
 import numpy as np
 import torch
@@ -21,12 +23,13 @@ sys.modules.setdefault("tarok_engine", types.ModuleType("tarok_engine"))
 
 from tarok_model.encoding import DecisionType
 from tarok_model.network import ORACLE_STATE_SIZE, STATE_SIZE, TarokNetV4
-from training.adapters.compute.cpu_backend import CpuBackend
-from training.adapters.ppo import PPOAdapter
-from training.entities.training_config import TrainingConfig
+
+CpuBackend = importlib.import_module("training.adapters.compute.cpu_backend").CpuBackend
+PPOAdapter = importlib.import_module("training.adapters.ppo").PPOAdapter
+TrainingConfig = importlib.import_module("training.entities.training_config").TrainingConfig
 
 
-def _make_adapter(state_dict: dict[str, torch.Tensor], imitation_coef: float) -> PPOAdapter:
+def _make_adapter(state_dict: dict[str, torch.Tensor], imitation_coef: float) -> Any:
     hidden_size = state_dict["shared.0.weight"].shape[0]
     adapter = PPOAdapter()
     adapter._config = TrainingConfig(  # type: ignore[attr-defined]

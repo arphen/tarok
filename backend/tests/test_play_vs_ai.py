@@ -9,6 +9,7 @@ end-to-end with a simulated human player, covering:
 
 import asyncio
 import random
+from typing import Any, cast
 
 import pytest
 
@@ -114,7 +115,7 @@ class StateTrackingObserver(NullObserver):
     async def on_trick_won(self, trick, winner, state):
         await self._record("trick_won", state)
 
-    async def on_game_end(self, scores, state):
+    async def on_game_end(self, scores, state, breakdown=None):
         await self._record("game_end", state)
 
 
@@ -127,14 +128,14 @@ class StateTrackingObserver(NullObserver):
 async def test_full_game_with_rl_agents_completes():
     """A full game with NeuralPlayer (untrained) + auto-human completes without error."""
     human = AutoHuman()
-    agents = [human]
+    agents: list[object] = [human]
     for i in range(3):
         a = NeuralPlayer(name=f"AI-{i + 1}")
         a.set_training(False)
         agents.append(a)
 
     observer = StateTrackingObserver()
-    loop = GameLoop(agents, observer=observer)
+    loop = GameLoop(agents, observer=cast(Any, observer))
     state, scores = await loop.run(dealer=0)
 
     assert state.phase == Phase.FINISHED
@@ -175,7 +176,7 @@ async def test_illegal_bid_falls_back_to_pass():
             return []
 
     for seed in range(5):
-        agents = [AlwaysBidsThree()]
+        agents: list[object] = [AlwaysBidsThree()]
         for i in range(3):
             a = NeuralPlayer(name=f"AI-{i + 1}")
             a.set_training(False)
@@ -190,14 +191,14 @@ async def test_illegal_bid_falls_back_to_pass():
 async def test_legal_bids_sent_during_bidding():
     """_state_for_player should include legal_bids when it's the player's turn to bid."""
     human = AutoHuman()
-    agents = [human]
+    agents: list[object] = [human]
     for i in range(3):
         a = NeuralPlayer(name=f"AI-{i + 1}")
         a.set_training(False)
         agents.append(a)
 
     observer = StateTrackingObserver()
-    loop = GameLoop(agents, observer=observer)
+    loop = GameLoop(agents, observer=cast(Any, observer))
     await loop.run(dealer=0)
 
     # Find events during bidding where it was player 0's turn
@@ -217,14 +218,14 @@ async def test_legal_bids_sent_during_bidding():
 async def test_legal_bids_absent_when_not_our_turn():
     """legal_bids should be null when it's not the player's turn."""
     human = AutoHuman()
-    agents = [human]
+    agents: list[object] = [human]
     for i in range(3):
         a = NeuralPlayer(name=f"AI-{i + 1}")
         a.set_training(False)
         agents.append(a)
 
     observer = StateTrackingObserver()
-    loop = GameLoop(agents, observer=observer)
+    loop = GameLoop(agents, observer=cast(Any, observer))
     await loop.run(dealer=0)
 
     # Find bidding events where it was NOT player 0's turn
@@ -335,7 +336,7 @@ async def test_human_player_submit_action():
     human = HumanPlayer(name="Test")
 
     async def wait_and_get():
-        return await human.choose_bid(None, 0, [None, Contract.THREE])
+        return await human.choose_bid(GameState(), 0, [None, Contract.THREE])
 
     # Start waiting for input
     task = asyncio.create_task(wait_and_get())
@@ -353,7 +354,7 @@ async def test_multiple_games_with_rl_agents_stable():
     """Run 10 games with RL agents to verify stability."""
     for seed in range(10):
         human = AutoHuman()
-        agents = [human]
+        agents: list[object] = [human]
         for i in range(3):
             a = NeuralPlayer(name=f"AI-{i + 1}")
             a.set_training(False)

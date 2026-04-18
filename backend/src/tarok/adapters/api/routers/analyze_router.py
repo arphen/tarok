@@ -21,7 +21,7 @@ from tarok.entities import (
     PlayerRole,
     Trick,
 )
-from tarok.entities.game_types import suit_card
+from tarok.entities.game_types import suit_card, tarok
 
 router = APIRouter(tags=["analyze"])
 
@@ -64,8 +64,11 @@ class AnalyzeKingRequest(BaseModel):
 
 def _parse_card(ci: CardInput) -> Card:
     ct = CardType(ci.card_type)
-    s = Suit(ci.suit) if ci.suit else None
-    return Card(ct, ci.value, s)
+    if ct == CardType.TAROK:
+        return tarok(ci.value)
+    if ci.suit is None:
+        raise ValueError("Suit cards must include suit")
+    return suit_card(Suit(ci.suit), SuitRank(ci.value))
 
 
 def _card_to_dict(card: Card) -> dict:
@@ -156,7 +159,7 @@ async def analyze_hand(req: AnalyzeRequest):
         agent.network.load_state_dict(checkpoint["model_state_dict"])
 
     # Get the agent's card choice
-    recommended = await agent.choose_card(state, 0)
+    recommended = await agent.choose_card(state, 0, legal)
 
     # Also rank all legal plays by the agent's policy
     from tarok_model.encoding import encode_state, encode_legal_mask, CARD_TO_IDX
@@ -193,7 +196,7 @@ async def analyze_hand(req: AnalyzeRequest):
         "legal_plays": [_card_to_dict(c) for c in legal],
         "ranked_plays": ranked,
         "position_value": round(value.item(), 4) if value is not None else None,
-        "has_trained_model": checkpoint_path.exists(),
+        "has_trained_model": bool(checkpoint_path and checkpoint_path.exists()),
     }
 
 
@@ -226,7 +229,17 @@ async def analyze_bid(req: AnalyzeBidRequest):
         state.bids.append(Bid(player=b["player"], contract=c))
 
     # Legal bids for player 0
-    legal = state.legal_bids(0)
+    legal: list[Contract | None] = [
+        None,
+        Contract.THREE,
+        Contract.TWO,
+        Contract.ONE,
+        Contract.SOLO_THREE,
+        Contract.SOLO_TWO,
+        Contract.SOLO_ONE,
+        Contract.SOLO,
+        Contract.BERAC,
+    ]
 
     # Load agent
     agent = NeuralPlayer(name="BidAdvisor")
@@ -281,7 +294,7 @@ async def analyze_bid(req: AnalyzeBidRequest):
         ],
         "ranked_bids": ranked,
         "position_value": round(value.item(), 4) if value is not None else None,
-        "has_trained_model": checkpoint_path.exists(),
+        "has_trained_model": bool(checkpoint_path and checkpoint_path.exists()),
     }
 
 

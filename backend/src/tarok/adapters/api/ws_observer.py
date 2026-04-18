@@ -3,12 +3,11 @@
 from __future__ import annotations
 
 import asyncio
-import json
 from typing import Any
 
 from fastapi import WebSocket
 
-from tarok.entities import Card, CardType, Suit, DECK, Contract, GameState, Phase, Trick
+from tarok.entities import Card, CardType, DECK, Contract, GameState, Phase, Trick
 
 
 def _card_to_dict(card: Card) -> dict:
@@ -35,8 +34,9 @@ def _build_card_tracker(state: GameState) -> dict:
     for trick in state.tricks:
         for player, card in trick.cards:
             played_cards.append((player, card))
-    if state.current_trick:
-        for player, card in state.current_trick.cards:
+    current_trick = getattr(state, "current_trick", None)
+    if current_trick and hasattr(current_trick, "cards"):
+        for player, card in current_trick.cards:
             played_cards.append((player, card))
 
     played_set = {c for _, c in played_cards}
@@ -126,7 +126,7 @@ def _normalize_legal_bids(values: list[int | None]) -> list[int | None]:
 
 
 def _state_for_player(
-    state: GameState,
+    state: Any,
     player_idx: int,
     player_names: list[str],
     match_info: dict | None = None,
@@ -275,7 +275,7 @@ class WebSocketObserver:
             "round_history": round_history,
         }
 
-    async def _send(self, event: str, data: Any, state: GameState) -> None:
+    async def _send(self, event: str, data: Any, state: Any) -> None:
         # Cache card tracker — only recompute when trick count changes
         tracker = None
         if state.phase in (Phase.TRICK_PLAY, Phase.SCORING, Phase.FINISHED):
@@ -300,13 +300,13 @@ class WebSocketObserver:
         }
         await self._ws.send_json(msg)
 
-    async def on_game_start(self, state: GameState) -> None:
+    async def on_game_start(self, state: Any) -> None:
         await self._send("game_start", {}, state)
 
-    async def on_deal(self, state: GameState) -> None:
+    async def on_deal(self, state: Any) -> None:
         await self._send("deal", {}, state)
 
-    async def on_bid(self, player: int, bid: Contract | None, state: GameState) -> None:
+    async def on_bid(self, player: int, bid: Contract | None, state: Any) -> None:
         await self._send(
             "bid",
             {
@@ -318,17 +318,17 @@ class WebSocketObserver:
         if player != self._player_idx and self.ai_delay > 0:
             await asyncio.sleep(self.ai_delay)
 
-    async def on_contract_won(self, player: int, contract: Contract, state: GameState) -> None:
+    async def on_contract_won(self, player: int, contract: Contract | None, state: Any) -> None:
         await self._send(
             "contract_won",
             {
                 "player": player,
-                "contract": contract.value,
+                "contract": contract.value if contract is not None else None,
             },
             state,
         )
 
-    async def on_king_called(self, player: int, king: Card, state: GameState) -> None:
+    async def on_king_called(self, player: int, king: Card, state: Any) -> None:
         await self._send(
             "king_called",
             {
@@ -338,7 +338,7 @@ class WebSocketObserver:
             state,
         )
 
-    async def on_talon_revealed(self, groups: list[list[Card]], state: GameState) -> None:
+    async def on_talon_revealed(self, groups: list[list[Card]], state: Any) -> None:
         await self._send(
             "talon_revealed",
             {
@@ -347,16 +347,16 @@ class WebSocketObserver:
             state,
         )
 
-    async def on_talon_exchanged(self, state: GameState, picked=None, discarded=None) -> None:
+    async def on_talon_exchanged(self, state: Any, picked=None, discarded=None) -> None:
         await self._send("talon_exchanged", {}, state)
 
-    async def on_trick_start(self, state: GameState) -> None:
+    async def on_trick_start(self, state: Any) -> None:
         await self._send("trick_start", {}, state)
 
-    async def on_talon_group_picked(self, state: GameState) -> None:
+    async def on_talon_group_picked(self, state: Any) -> None:
         await self._send("talon_group_picked", {}, state)
 
-    async def on_card_played(self, player: int, card: Card, state: GameState) -> None:
+    async def on_card_played(self, player: int, card: Card, state: Any) -> None:
         await self._send(
             "card_played",
             {
@@ -368,7 +368,7 @@ class WebSocketObserver:
         if player != self._player_idx and self.ai_delay > 0:
             await asyncio.sleep(self.ai_delay)
 
-    async def on_rule_verified(self, player: int, rule: str, state: GameState) -> None:
+    async def on_rule_verified(self, player: int, rule: str, state: Any) -> None:
         await self._send(
             "rule_verified",
             {
@@ -378,7 +378,7 @@ class WebSocketObserver:
             state,
         )
 
-    async def on_trick_won(self, trick: Trick, winner: int, state: GameState) -> None:
+    async def on_trick_won(self, trick: Any, winner: int, state: Any) -> None:
         await self._send(
             "trick_won",
             {
@@ -389,7 +389,7 @@ class WebSocketObserver:
         )
 
     async def on_game_end(
-        self, scores: dict[int, int], state: GameState, breakdown: dict | None = None
+        self, scores: dict[int, int], state: Any, breakdown: dict | None = None
     ) -> None:
         await self._send(
             "game_end",
@@ -407,7 +407,7 @@ class WebSocketObserver:
         round_history: list[dict],
         round_num: int,
         total_rounds: int,
-        state: GameState,
+        state: Any,
     ) -> None:
         """Send match progress between rounds."""
         await self._send(

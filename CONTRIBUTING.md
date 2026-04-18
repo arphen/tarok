@@ -57,7 +57,7 @@ A **pre-commit hook** runs automatically on every `git commit`. It:
 1. Runs frontend quality checks (`format:check` / `lint` if configured)
 2. Type-checks frontend (`tsc --noEmit`) and runs frontend unit tests (`vitest`)
 3. Runs backend formatting + lint checks (`ruff format --check`, `ruff check`)
-4. Runs optional backend static typing (`mypy`) when installed
+4. Runs optional backend static typing (`ty`) when enabled (`ENABLE_TY=1`) and installed
 5. Runs backend tests with coverage measurement
 6. Compares coverage to the saved baseline (`.coverage-baseline`)
 7. **Rejects the commit** if coverage decreased

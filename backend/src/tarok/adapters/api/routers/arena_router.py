@@ -297,7 +297,8 @@ def _export_checkpoint_to_torchscript(checkpoint_path: str) -> str:
     wrapper.eval()
     traced = torch.jit.trace(wrapper, torch.randn(1, 450), check_trace=False)
 
-    path = tempfile.mktemp(suffix=".pt", prefix="tarok_arena_ts_")
+    with tempfile.NamedTemporaryFile(suffix=".pt", prefix="tarok_arena_ts_", delete=False) as f:
+        path = f.name
     traced.save(path)
     return path
 
@@ -512,6 +513,8 @@ async def start_arena(req: ArenaRequest):
     async def _run_arena():
         global _arena_progress
         import numpy as np
+
+        assert _arena_progress is not None
 
         try:
             import tarok_engine as te  # type: ignore[assignment]

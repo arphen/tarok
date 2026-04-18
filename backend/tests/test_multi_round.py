@@ -1,3 +1,5 @@
+from typing import Any, cast
+
 """Tests for multi-round games, scoreboard data, and card tracking."""
 
 import asyncio
@@ -240,7 +242,7 @@ class RecordingObserver(NullObserver):
     async def on_game_start(self, state):
         self.events.append("game_start")
 
-    async def on_game_end(self, scores, state):
+    async def on_game_end(self, scores, state, breakdown=None):
         self.events.append("game_end")
         self.game_end_scores.append(dict(scores))
 
@@ -250,7 +252,7 @@ async def test_single_round_game_loop():
 
     players = [StockskisPlayer(variant="m6", name=f"P{i}") for i in range(4)]
     obs = RecordingObserver()
-    loop = GameLoop(players, observer=obs)
+    loop = GameLoop(players, observer=cast(Any, obs))
     state, scores = await loop.run(dealer=0)
 
     assert state.phase == Phase.FINISHED

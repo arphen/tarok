@@ -14,15 +14,9 @@ translated back to Rust indices.
 from __future__ import annotations
 
 import random
-from typing import TYPE_CHECKING, Any, Callable
+from typing import Any, Callable, cast
 
 import torch
-
-
-try:
-    import tarok_engine as te
-except ImportError:
-    te = None  # type: ignore[assignment]
 
 from tarok_model.encoding import (
     DecisionType,
@@ -55,6 +49,11 @@ from tarok.entities import (
 )
 from tarok.ports.observer_port import GameObserverPort
 from tarok.use_cases import rust_state as _rust_state
+
+try:
+    import tarok_engine as te
+except ImportError:
+    te = cast(Any, None)
 
 
 # Map Rust contract u8 → Python Contract enum
@@ -211,7 +210,7 @@ class RustGameLoop:
         assert te is not None, "tarok_engine Rust extension not installed"
         assert len(players) == 4
         self._players = players
-        self._observer: GameObserverPort = observer or NullObserver()  # type: ignore
+        self._observer: GameObserverPort = observer or NullObserver()
         self._rng = rng or random.Random()
         self._allow_berac = allow_berac
         self._decision_recorder = decision_recorder
@@ -673,7 +672,8 @@ class RustGameLoop:
             if chosen_card_idx not in callable_idxs:
                 chosen_card_idx = callable_idxs[0]
 
-        action_king = SUIT_TO_IDX.get(DECK[chosen_card_idx].suit, 0)
+        chosen_suit = DECK[chosen_card_idx].suit
+        action_king = SUIT_TO_IDX.get(chosen_suit, 0) if chosen_suit is not None else 0
         self._record_decision(
             player=declarer,
             actor_kind=actor_kind,
@@ -1067,13 +1067,13 @@ def _build_py_state_stub(
 # Keep adapter-level names for compatibility with older imports.
 _RUST_U8_TO_PY_CONTRACT = _rust_state._RUST_U8_TO_PY_CONTRACT
 _PY_CONTRACT_TO_RUST_U8 = _rust_state._PY_CONTRACT_TO_RUST_U8
-_build_py_state_from_rust = _rust_state._build_py_state_from_rust
-_build_py_state_stub = _rust_state._build_py_state_stub
-_is_klop = _rust_state._is_klop
-_is_solo = _rust_state._is_solo
-_is_berac = _rust_state._is_berac
-_talon_cards = _rust_state._talon_cards
-_build_talon_groups = _rust_state._build_talon_groups
+_build_py_state_from_rust: Any = _rust_state._build_py_state_from_rust
+_build_py_state_stub: Any = _rust_state._build_py_state_stub
+_is_klop: Any = _rust_state._is_klop
+_is_solo: Any = _rust_state._is_solo
+_is_berac: Any = _rust_state._is_berac
+_talon_cards: Any = _rust_state._talon_cards
+_build_talon_groups: Any = _rust_state._build_talon_groups
 
 
 # Backward-compatibility alias — all code should use RustGameLoop directly

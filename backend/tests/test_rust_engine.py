@@ -147,9 +147,10 @@ async def test_rust_game_loop_mixed_players_compatible():
     from tarok.use_cases.game_loop import RustGameLoop
     from tarok.adapters.players.stockskis_player import StockskisPlayer
 
-    agents = [NeuralPlayer(name="RL-0")]
+    rl0 = NeuralPlayer(name="RL-0")
+    agents: list[object] = [rl0]
     agents.extend(StockskisPlayer(variant="v5", name=f"Skis-{i}") for i in range(1, 4))
-    agents[0].set_training(False)
+    rl0.set_training(False)
 
     loop = RustGameLoop(agents)
     _state, scores = await loop.run()
