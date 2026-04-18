@@ -1,4 +1,4 @@
-"""Batch preparation helpers for PPO."""
+"""PPO batch preparation helpers."""
 
 from __future__ import annotations
 

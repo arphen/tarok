@@ -22,8 +22,9 @@ from tarok_model.encoding import (
 )
 from tarok_model.network import TarokNetV4
 
-from training.adapters.ppo.batching import prepare_batched, release_allocator_memory
-from training.adapters.ppo.contracts import validate_v4_contract_indices_with_rust
+from training.adapters.ppo.jsonl_human_replay import load_human_experiences, merge_experiences
+from training.adapters.ppo.ppo_batch_preparation import prepare_batched, release_allocator_memory
+from training.adapters.ppo.ppo_contract_validation import validate_v4_contract_indices_with_rust
 from training.entities import TrainingConfig
 from training.ports import PPOPort
 
@@ -125,11 +126,9 @@ class PPOAdapter(PPOPort):
         return metrics, new_weights
 
     def load_human_data(self, data_dir: str) -> dict[str, Any] | None:
-        from training.adapters.ppo.human_data import load_human_experiences
         return load_human_experiences(data_dir)
 
     def merge_experiences(self, primary: dict[str, Any], extra: dict[str, Any]) -> dict[str, Any]:
-        from training.adapters.ppo.human_data import merge_experiences
         return merge_experiences(primary, extra)
 
     def _ppo_update_batched(

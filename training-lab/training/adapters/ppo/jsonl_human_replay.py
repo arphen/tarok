@@ -1,4 +1,4 @@
-"""Human replay-data loading and merge helpers for PPO."""
+"""JSONL human replay-data loading and merge helpers for PPO."""
 
 from __future__ import annotations
 
@@ -42,7 +42,7 @@ def load_human_experiences(data_dir: str | Path) -> dict[str, Any] | None:
 
     The format mirrors what the Rust self-play engine emits so it can be merged
     directly into the self-play batch before the PPO update. Human actions get
-    ``log_prob = log(1 / n_legal)`` (uniform prior), ``value = 0``.
+    ``log_prob = log(1 / n_legal)``, ``value = 0``.
     """
     data_dir = Path(data_dir)
     files = sorted(data_dir.glob("*.jsonl"))
@@ -60,10 +60,7 @@ def load_human_experiences(data_dir: str | Path) -> dict[str, Any] | None:
     players_list: list[int] = []
     game_modes_list: list[int] = []
 
-    # scores: game_id -> {player -> final_score}
     game_scores: dict[int, dict[int, float]] = {}
-
-    # Assign synthetic integer game IDs sequentially
     file_to_gid: dict[str, int] = {}
     gid_counter = 0
 
@@ -82,7 +79,6 @@ def load_human_experiences(data_dir: str | Path) -> dict[str, Any] | None:
         if not rows:
             continue
 
-        # Use (game_id, round) as the unique game key
         first = rows[0]
         key = f"{first.get('game_id', f.stem)}_r{first.get('round', 0)}"
         if key not in file_to_gid:
@@ -90,11 +86,10 @@ def load_human_experiences(data_dir: str | Path) -> dict[str, Any] | None:
             gid_counter += 1
         gid = file_to_gid[key]
 
-        # Collect per-player final scores for this game
         for row in rows:
-            p = int(row.get("player", 0))
+            player = int(row.get("player", 0))
             score = float(row.get("final_score", 0))
-            game_scores.setdefault(gid, {})[p] = score
+            game_scores.setdefault(gid, {})[player] = score
 
         for row in rows:
             state = row.get("state")
@@ -109,7 +104,7 @@ def load_human_experiences(data_dir: str | Path) -> dict[str, Any] | None:
             state_arr = np.asarray(state, dtype=np.float32)
             mask_arr = np.asarray(legal_mask, dtype=np.float32)
             n_legal = max(int(mask_arr.sum()), 1)
-            lp = -math.log(n_legal)  # uniform log-prob over legal actions
+            lp = -math.log(n_legal)
 
             states_list.append(state_arr)
             actions_list.append(int(action))
@@ -127,9 +122,9 @@ def load_human_experiences(data_dir: str | Path) -> dict[str, Any] | None:
     n_games = gid_counter
     scores_arr = np.zeros((n_games, 4), dtype=np.float32)
     for gid, player_scores in game_scores.items():
-        for p, s in player_scores.items():
-            if 0 <= p < 4:
-                scores_arr[gid, p] = s
+        for player, score in player_scores.items():
+            if 0 <= player < 4:
+                scores_arr[gid, player] = score
 
     log.info("Loaded %d human decisions from %d games in %s", len(states_list), n_games, data_dir)
     return {
@@ -156,12 +151,12 @@ def merge_experiences(primary: dict[str, Any], extra: dict[str, Any]) -> dict[st
     extra_game_ids = np.asarray(extra["game_ids"], dtype=np.int64) + n_primary_games
     merged_scores = np.concatenate([primary["scores"], extra["scores"]], axis=0)
 
-    def _cat(k: str) -> np.ndarray:
-        a = primary[k]
-        b = extra[k] if k != "game_ids" else extra_game_ids
-        if a is None or b is None:
+    def _cat(key: str) -> np.ndarray:
+        current = primary[key]
+        incoming = extra[key] if key != "game_ids" else extra_game_ids
+        if current is None or incoming is None:
             return None  # type: ignore[return-value]
-        return np.concatenate([np.asarray(a), np.asarray(b)], axis=0)
+        return np.concatenate([np.asarray(current), np.asarray(incoming)], axis=0)
 
     return {
         "states": _cat("states"),
