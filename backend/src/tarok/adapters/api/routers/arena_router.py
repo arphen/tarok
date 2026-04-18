@@ -237,7 +237,7 @@ async def _run_arena(
             if ps["best_game_score"] is None or batch_max > ps["best_game_score"]:
                 ps["best_game_score"] = batch_max
                 ps["best_game_idx"] = games_done + batch_max_idx
-                if initial_hands is not None:
+                if initial_hands is not None and initial_talon is not None:
                     ps["best_game_hands"] = initial_hands[batch_max_idx].tolist()
                     ps["best_game_talon"] = initial_talon[batch_max_idx].tolist()
                 if traces is not None:
@@ -245,7 +245,7 @@ async def _run_arena(
             if ps["worst_game_score"] is None or batch_min < ps["worst_game_score"]:
                 ps["worst_game_score"] = batch_min
                 ps["worst_game_idx"] = games_done + batch_min_idx
-                if initial_hands is not None:
+                if initial_hands is not None and initial_talon is not None:
                     ps["worst_game_hands"] = initial_hands[batch_min_idx].tolist()
                     ps["worst_game_talon"] = initial_talon[batch_min_idx].tolist()
                 if traces is not None:

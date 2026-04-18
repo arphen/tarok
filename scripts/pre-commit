@@ -43,19 +43,11 @@ PYTHONPATH=src:../model/src $UV_CMD ruff format --check src tests
 PYTHONPATH=src:../model/src $UV_CMD ruff check src tests
 echo "  ✔ Backend lint/format OK"
 
-# ── 3. Optional backend type-check (ty) ──────
+# ── 3. Backend type-check (ty) ───────────────
 echo ""
 echo "▶ Backend static typing…"
-if [ "${ENABLE_TY:-0}" = "1" ]; then
-  if PYTHONPATH=src:../model/src $UV_CMD python -c "import importlib.util, sys; sys.exit(0 if importlib.util.find_spec('ty') else 1)"; then
-    PYTHONPATH=src:../model/src $UV_CMD ty check src/tarok
-    echo "  ✔ ty OK"
-  else
-    echo "  • ty not installed (skipped)"
-  fi
-else
-  echo "  • ty disabled (set ENABLE_TY=1 to enable)"
-fi
+PYTHONPATH=src:../model/src $UV_CMD ty check src/tarok
+echo "  ✔ ty OK"
 
 # ── 4. Backend tests with coverage ──────────
 echo ""

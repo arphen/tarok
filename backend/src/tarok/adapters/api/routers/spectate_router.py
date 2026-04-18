@@ -13,7 +13,7 @@ from tarok.adapters.api.checkpoint_utils import resolve_checkpoint
 from tarok.adapters.api.spectator_observer import SpectatorObserver, list_replays, load_replay
 from tarok.adapters.players.factory import get_player_factory
 from tarok.adapters.players.neural_player import NeuralPlayer
-from tarok.entities import DECK
+from tarok.entities import Card, DECK
 from tarok.use_cases.game_loop import RustGameLoop as GameLoop
 
 router = APIRouter(tags=["spectate"])
@@ -403,7 +403,7 @@ async def _replay_from_trace(
 
     for trick_num in range(12):
         lead = lead_player
-        trick_cards: list[tuple[int, object]] = []
+        trick_cards: list[tuple[int, Card]] = []
         gs.start_trick(lead_player)
         gs.current_player = lead_player
         await observer.on_trick_start(

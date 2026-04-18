@@ -39,6 +39,22 @@ setup:
 		. "$$HOME/.cargo/env")
 	@echo "==> Installing backend deps…"
 	cd backend && uv sync --default-index https://pypi.org/simple --extra dev
+	@echo "==> Writing .env defaults for Rust engine…"
+	@TORCH_LIB_DIR=$$(cd backend && uv run --default-index https://pypi.org/simple python -c 'import pathlib, torch; print(pathlib.Path(torch.__file__).resolve().parent / "lib")'); \
+	if [ ! -f .env ]; then \
+		echo "LIBTORCH_USE_PYTORCH=1" > .env; \
+		echo "DYLD_FALLBACK_LIBRARY_PATH=$$TORCH_LIB_DIR" >> .env; \
+		echo "Created .env with Rust engine defaults."; \
+	else \
+		if ! grep -q '^LIBTORCH_USE_PYTORCH=' .env; then \
+			echo "LIBTORCH_USE_PYTORCH=1" >> .env; \
+			echo "Added LIBTORCH_USE_PYTORCH to .env."; \
+		fi; \
+		if ! grep -q '^DYLD_FALLBACK_LIBRARY_PATH=' .env; then \
+			echo "DYLD_FALLBACK_LIBRARY_PATH=$$TORCH_LIB_DIR" >> .env; \
+			echo "Added DYLD_FALLBACK_LIBRARY_PATH to .env."; \
+		fi; \
+	fi
 	@echo "==> Installing frontend deps…"
 	cd frontend && npm install
 	@echo "==> Building Rust engine…"
