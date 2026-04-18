@@ -14,6 +14,7 @@ from training.entities.training_run import TrainingRun
 from training.ports.benchmark_port import BenchmarkPort
 from training.ports.imitation_coef_policy_port import ImitationCoefPolicyPort
 from training.ports.iteration_runner_port import IterationRunnerPort
+from training.ports.league_persistence_port import LeagueStatePersistencePort
 from training.ports.learning_rate_policy_port import LearningRatePolicyPort
 from training.ports.model_port import ModelPort
 from training.ports.presenter_port import PresenterPort
@@ -38,6 +39,7 @@ class TrainModel:
         lr_policy: LearningRatePolicyPort | None = None,
         imitation_policy: ImitationCoefPolicyPort | None = None,
         entropy_policy: DefaultEntropyCoefPolicy | EloDecayEntropyPolicy | None = None,
+        league_persistence: LeagueStatePersistencePort | None = None,
     ):
         self._iteration_runner = iteration_runner
         self._benchmark = benchmark
@@ -48,6 +50,7 @@ class TrainModel:
             imitation_policy if imitation_policy is not None else DefaultImitationCoefPolicy()
         )
         self._entropy_policy = entropy_policy if entropy_policy is not None else DefaultEntropyCoefPolicy()
+        self._league_persistence = league_persistence
 
     def execute(
         self,
@@ -91,14 +94,17 @@ class TrainModel:
 
         if config.league is None or not config.league.enabled:
             raise ValueError("TrainModel requires league.enabled=true")
+        if self._league_persistence is None:
+            raise ValueError("TrainModel requires a LeagueStatePersistencePort")
 
         pool = LeaguePool(config=config.league)
         league_maintenance = MaintainLeaguePool(
             updater=UpdateLeagueElo(),
             presenter=self._presenter,
+            persistence=self._league_persistence,
         )
         league_pool_dir = save_dir / "league_pool"
-        pool.restore(league_maintenance.state_path(league_pool_dir))
+        self._league_persistence.restore(pool, league_maintenance.state_path(league_pool_dir))
         last_snapshot_elo: float | None = league_maintenance.initial_snapshot_elo(pool)
 
         sample_seats = SampleLeagueSeats()

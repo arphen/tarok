@@ -12,6 +12,7 @@ from training.ports import (
     ConfigPort,
     ImitationCoefPolicyPort,
     IterationRunnerPort,
+    LeagueStatePersistencePort,
     LearningRatePolicyPort,
     ModelPort,
     PPOPort,
@@ -59,6 +60,11 @@ def _default_entropy_policy(config: TrainingConfig | None = None):
     return DefaultEntropyCoefPolicy()
 
 
+def _default_league_persistence() -> LeagueStatePersistencePort:
+    from training.adapters.league_persistence import JsonLeagueStatePersistence
+    return JsonLeagueStatePersistence()
+
+
 def _default_imitation_policy(config: TrainingConfig | None = None) -> ImitationCoefPolicyPort:
     if config is not None and config.imitation_schedule == "gaussian_elo":
         from training.use_cases.train_model.policies import EloGaussianILPolicy
@@ -102,6 +108,7 @@ class Container:
         model: ModelPort | None = None,
         config_loader: ConfigPort | None = None,
         presenter: PresenterPort | None = None,
+        league_persistence: LeagueStatePersistencePort | None = None,
     ):
         self._selfplay = selfplay
         self._benchmark = benchmark
@@ -112,6 +119,7 @@ class Container:
         self._model = model
         self._config_loader = config_loader
         self._presenter = presenter
+        self._league_persistence = league_persistence
 
     @property
     def selfplay(self) -> SelfPlayPort:
@@ -173,6 +181,12 @@ class Container:
             self._presenter = _default_presenter()
         return self._presenter
 
+    @property
+    def league_persistence(self) -> LeagueStatePersistencePort:
+        if self._league_persistence is None:
+            self._league_persistence = _default_league_persistence()
+        return self._league_persistence
+
     def resolve_model(self) -> ResolveModel:
         return ResolveModel(self.model)
 
@@ -188,4 +202,5 @@ class Container:
             lr_policy=self.lr_policy,
             imitation_policy=self._imitation_policy or _default_imitation_policy(config),
             entropy_policy=_default_entropy_policy(config),
+            league_persistence=self.league_persistence,
         )

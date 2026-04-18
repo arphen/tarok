@@ -7,14 +7,16 @@ from pathlib import Path
 
 from training.entities.iteration_result import IterationResult
 from training.entities.league import LeaguePool
+from training.ports.league_persistence_port import LeagueStatePersistencePort
 from training.ports.presenter_port import PresenterPort
 from training.use_cases.update_league_elo import UpdateLeagueElo
 
 
 class MaintainLeaguePool:
-    def __init__(self, updater: UpdateLeagueElo, presenter: PresenterPort):
+    def __init__(self, updater: UpdateLeagueElo, presenter: PresenterPort, persistence: LeagueStatePersistencePort):
         self._updater = updater
         self._presenter = presenter
+        self._persistence = persistence
 
     @staticmethod
     def state_path(league_pool_dir: Path) -> Path:
@@ -44,7 +46,7 @@ class MaintainLeaguePool:
         }
         elo_deltas["__learner__"] = pool.learner_elo - prev_learner_elo
         self._presenter.on_league_elo_updated(pool, elo_deltas)
-        pool.save(self.state_path(league_pool_dir))
+        self._persistence.save(pool, self.state_path(league_pool_dir))
 
         if iteration % pool.config.snapshot_interval != 0:
             return last_snapshot_elo
@@ -69,6 +71,6 @@ class MaintainLeaguePool:
             pool.entries.pop(checkpoint_indices[0])
 
         pool.add_snapshot(f"snapshot_iter_{iteration:03d}", snap_path)
-        pool.save(self.state_path(league_pool_dir))
+        self._persistence.save(pool, self.state_path(league_pool_dir))
         self._presenter.on_league_snapshot_added(iteration, snap_path)
         return pool.learner_elo

@@ -14,6 +14,7 @@ from training.entities.league import (
     LeaguePool,
     LeaguePoolEntry,
 )
+from training.adapters.league_persistence import JsonLeagueStatePersistence
 from training.use_cases.sample_league_seats import SampleLeagueSeats
 from training.use_cases.update_league_elo import UpdateLeagueElo
 
@@ -107,10 +108,11 @@ def test_league_pool_save_and_restore_preserves_snapshot_elos(tmp_path: Path) ->
     pool.entries[1].learner_outplaces = 2
 
     state_path = tmp_path / "league_pool" / "state.json"
-    pool.save(state_path)
+    persistence = JsonLeagueStatePersistence()
+    persistence.save(pool, state_path)
 
     restored = LeaguePool(config=cfg)
-    assert restored.restore(state_path) is True
+    assert persistence.restore(restored, state_path) is True
 
     assert restored.learner_elo == pytest.approx(1325.0)
     assert len(restored.entries) == 2
@@ -127,10 +129,11 @@ def test_league_pool_restore_skips_missing_snapshot_files(tmp_path: Path) -> Non
     pool = LeaguePool(config=cfg)
     pool.add_snapshot("snapshot_iter_001", str(tmp_path / "missing.pt"))
     state_path = tmp_path / "league_pool" / "state.json"
-    pool.save(state_path)
+    persistence = JsonLeagueStatePersistence()
+    persistence.save(pool, state_path)
 
     restored = LeaguePool(config=cfg)
-    restored.restore(state_path)
+    persistence.restore(restored, state_path)
 
     assert [entry.opponent.name for entry in restored.entries] == ["Anchor"]
 

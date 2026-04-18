@@ -86,6 +86,44 @@ forbidden_modules = [
     "tarok.adapters",
 ]
 
+[[tool.importlinter.contracts]]
+name = "Entities stay framework-free and side-effect-free"
+type = "forbidden"
+source_modules = [
+    "tarok.entities",
+]
+forbidden_modules = [
+    "sqlalchemy",
+    "django",
+    "flask",
+    "fastapi",
+    "starlette",
+    "requests",
+    "httpx",
+    "urllib",
+    "boto3",
+    "google",
+    "azure",
+    "celery",
+    "redis",
+    "pymongo",
+    "psycopg2",
+    "peewee",
+    "pika",
+    "kafka",
+    "pydantic",
+    "marshmallow",
+    "pandas",
+    "numpy",
+    "csv",
+    "json",
+    "xml",
+    "yaml",
+    "os",
+    "sys",
+    "socket",
+]
+
 [dependency-groups]
 dev = [
     "httpx>=0.28.1",
