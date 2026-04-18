@@ -1,0 +1,87 @@
+"""Use case: execute one iteration of the training loop."""
+
+from __future__ import annotations
+
+import time
+from dataclasses import replace as dc_replace
+
+from training.entities.training_context import TrainingContext
+from training.ports.imitation_coef_policy_port import ImitationCoefPolicyPort
+from training.ports.iteration_runner_port import IterationRunnerPort
+from training.ports.learning_rate_policy_port import LearningRatePolicyPort
+from training.ports.presenter_port import PresenterPort
+from training.use_cases.maintain_league_pool import MaintainLeaguePool
+from training.use_cases.sample_league_seats import SampleLeagueSeats
+
+
+class AdvanceIteration:
+    """Execute one full iteration of the training loop.
+
+    Single responsibility: translate the current training context and iteration
+    number into an updated context — compute hyperparameters via policy ports,
+    sample league seats, delegate to the iteration runner, update the run
+    aggregate, and advance league Elo.  All side effects flow through injected
+    ports and use cases; no infrastructure imports.
+    """
+
+    def __init__(
+        self,
+        iteration_runner: IterationRunnerPort,
+        lr_policy: LearningRatePolicyPort,
+        imitation_policy: ImitationCoefPolicyPort,
+        entropy_policy,  # DefaultEntropyCoefPolicy | EloDecayEntropyPolicy
+        presenter: PresenterPort,
+        league_maintenance: MaintainLeaguePool,
+        sample_seats: SampleLeagueSeats,
+    ) -> None:
+        self._iteration_runner = iteration_runner
+        self._lr_policy = lr_policy
+        self._imitation_policy = imitation_policy
+        self._entropy_policy = entropy_policy
+        self._presenter = presenter
+        self._league_maintenance = league_maintenance
+        self._sample_seats = sample_seats
+
+    def execute(self, ctx: TrainingContext, iteration: int) -> None:
+        config = ctx.run.config
+        identity = ctx.run.identity
+
+        elapsed = time.time() - ctx.run.start_time
+        self._presenter.on_iteration_start(iteration, config.iterations, elapsed)
+
+        iter_lr = self._lr_policy.compute(
+            config=config, iteration=iteration, learner_elo=ctx.pool.learner_elo,
+        )
+        iter_imitation_coef = self._imitation_policy.compute(
+            config=config, iteration=iteration, learner_elo=ctx.pool.learner_elo,
+        )
+        iter_entropy_coef = self._entropy_policy.compute(
+            config=config, iteration=iteration, learner_elo=ctx.pool.learner_elo,
+        )
+
+        seats_override = self._sample_seats.execute(ctx.pool)
+        prev_placement = ctx.run.placements[-1]
+
+        result = self._iteration_runner.run_iteration(
+            iteration, config, identity, ctx.ts_path, ctx.save_dir,
+            prev_placement=prev_placement,
+            iter_lr=iter_lr,
+            iter_imitation_coef=iter_imitation_coef,
+            iter_entropy_coef=iter_entropy_coef,
+            seats_override=seats_override,
+            run_benchmark=config.should_benchmark_iteration(iteration),
+        )
+        ctx.run.results.append(result)
+        self._presenter.on_iteration_done(prev_placement, result.placement, result.total_time)
+
+        result = dc_replace(result, learner_elo=ctx.pool.learner_elo)
+        ctx.run.results[-1] = result
+
+        ctx.last_snapshot_elo = self._league_maintenance.execute(
+            pool=ctx.pool,
+            result=result,
+            iteration=iteration,
+            ts_path=ctx.ts_path,
+            league_pool_dir=ctx.league_pool_dir,
+            last_snapshot_elo=ctx.last_snapshot_elo,
+        )

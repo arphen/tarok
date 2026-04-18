@@ -214,7 +214,7 @@ def test_train_model_uses_injected_imitation_policy(
 
 @patch("training.use_cases.train_model.orchestrator.UpdateLeagueElo")
 @patch("training.use_cases.train_model.orchestrator.SampleLeagueSeats")
-@patch("training.use_cases.train_model.orchestrator.shutil.copy2")
+@patch("training.use_cases.maintain_league_pool.shutil.copy2")
 def test_train_model_with_league_and_snapshots(
     mock_copy2: MagicMock,
     MockSampleSeats: MagicMock,
@@ -323,7 +323,7 @@ def test_train_model_ensures_teardown_on_error(
 
 @patch("training.use_cases.train_model.orchestrator.UpdateLeagueElo")
 @patch("training.use_cases.train_model.orchestrator.SampleLeagueSeats")
-@patch("training.use_cases.train_model.orchestrator.shutil.copy2")
+@patch("training.use_cases.maintain_league_pool.shutil.copy2")
 def test_train_model_caps_active_nn_snapshots(
     mock_copy2: MagicMock,
     MockSampleSeats: MagicMock,
@@ -389,7 +389,7 @@ def test_train_model_caps_active_nn_snapshots(
 
 @patch("training.use_cases.train_model.orchestrator.UpdateLeagueElo")
 @patch("training.use_cases.train_model.orchestrator.SampleLeagueSeats")
-@patch("training.use_cases.train_model.orchestrator.shutil.copy2")
+@patch("training.use_cases.maintain_league_pool.shutil.copy2")
 def test_train_model_snapshot_admission_requires_elo_milestone(
     mock_copy2: MagicMock,
     MockSampleSeats: MagicMock,
@@ -436,7 +436,7 @@ def test_train_model_snapshot_admission_requires_elo_milestone(
 
 @patch("training.use_cases.train_model.orchestrator.UpdateLeagueElo")
 @patch("training.use_cases.train_model.orchestrator.SampleLeagueSeats")
-@patch("training.use_cases.train_model.orchestrator.shutil.copy2")
+@patch("training.use_cases.maintain_league_pool.shutil.copy2")
 def test_train_model_snapshot_admission_uses_configured_elo_delta(
     mock_copy2: MagicMock,
     MockSampleSeats: MagicMock,
