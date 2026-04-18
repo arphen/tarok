@@ -43,6 +43,13 @@ PYTHONPATH=src:../model/src $UV_CMD ruff format --check src tests
 PYTHONPATH=src:../model/src $UV_CMD ruff check src tests
 echo "  ✔ Backend lint/format OK"
 
+# ── 2b. Clean architecture import contracts ───
+echo ""
+echo "▶ Clean architecture import contracts…"
+cd "$ROOT"
+make lint-architecture
+echo "  ✔ Import contracts OK"
+
 # ── 3. Backend type-check (ty) ───────────────
 echo ""
 echo "▶ Backend static typing…"

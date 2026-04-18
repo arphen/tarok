@@ -97,10 +97,11 @@ class TrainModel:
             updater=UpdateLeagueElo(),
             presenter=self._presenter,
         )
+        league_pool_dir = save_dir / "league_pool"
+        pool.restore(league_maintenance.state_path(league_pool_dir))
         last_snapshot_elo: float | None = league_maintenance.initial_snapshot_elo(pool)
 
         sample_seats = SampleLeagueSeats()
-        league_pool_dir = save_dir / "league_pool"
 
         try:
             for i in range(1, config.iterations + 1):

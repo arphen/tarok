@@ -22,3 +22,13 @@ Current rules:
 
 - Single game engine path: always use `run_self_play` for arena games (supports all seat types: nn, bot_v5, bot_v6, bot_m6)
 - Do NOT add `run_arena_games` as an alternative path. One implementation only.
+
+## Clean Architecture Guardrails
+
+- `tarok.use_cases` is the application core. Keep it free of direct infrastructure/data imports.
+- Do NOT import `json`, `csv`, `pickle`, `numpy`, `pandas`, or anything from `tarok.adapters` inside `tarok.use_cases`.
+- When new behavior needs I/O, serialization, storage, or integration work:
+	- define/extend a Port in `tarok.ports`
+	- implement the Port in `tarok.adapters`
+	- inject the adapter through the port interface into the use case
+- Keep business orchestration and game rules in use cases; keep framework/library details in adapters.

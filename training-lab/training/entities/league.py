@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+import json
 import math
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Literal
 
 
@@ -72,6 +74,84 @@ class LeaguePool:
         """Register an auto-generated checkpoint snapshot as a new pool entry."""
         opp = LeagueOpponent(name=name, type="nn_checkpoint", path=path)
         self.entries.append(LeaguePoolEntry(opponent=opp, elo=self.learner_elo))
+
+    def save(self, state_path: Path) -> None:
+        state_path.parent.mkdir(parents=True, exist_ok=True)
+        payload = {
+            "learner_elo": self.learner_elo,
+            "entries": [
+                {
+                    "opponent": {
+                        "name": entry.opponent.name,
+                        "type": entry.opponent.type,
+                        "path": entry.opponent.path,
+                        "initial_elo": entry.opponent.initial_elo,
+                    },
+                    "elo": entry.elo,
+                    "games_played": entry.games_played,
+                    "learner_outplaces": entry.learner_outplaces,
+                }
+                for entry in self.entries
+            ],
+        }
+        state_path.write_text(json.dumps(payload, indent=2, sort_keys=True), encoding="utf-8")
+
+    def restore(self, state_path: Path) -> bool:
+        if not state_path.exists():
+            return False
+
+        raw = json.loads(state_path.read_text(encoding="utf-8"))
+        self.learner_elo = float(raw.get("learner_elo", self.learner_elo))
+
+        restored_entries = [
+            LeaguePoolEntry(
+                opponent=LeagueOpponent(
+                    name=item["opponent"]["name"],
+                    type=item["opponent"]["type"],
+                    path=item["opponent"].get("path"),
+                    initial_elo=float(item["opponent"].get("initial_elo", item.get("elo", 1500.0))),
+                ),
+                elo=float(item.get("elo", 1500.0)),
+                games_played=int(item.get("games_played", 0)),
+                learner_outplaces=int(item.get("learner_outplaces", 0)),
+            )
+            for item in raw.get("entries", [])
+        ]
+
+        restored_by_key = {
+            self._entry_key(entry.opponent): entry
+            for entry in restored_entries
+        }
+
+        merged_entries: list[LeaguePoolEntry] = []
+        for opp in self.config.opponents:
+            restored = restored_by_key.pop(self._entry_key(opp), None)
+            if restored is None:
+                merged_entries.append(LeaguePoolEntry(opponent=opp, elo=opp.initial_elo))
+                continue
+            merged_entries.append(
+                LeaguePoolEntry(
+                    opponent=opp,
+                    elo=restored.elo,
+                    games_played=restored.games_played,
+                    learner_outplaces=restored.learner_outplaces,
+                )
+            )
+
+        for entry in restored_by_key.values():
+            if entry.opponent.type != "nn_checkpoint":
+                continue
+            snap_path = entry.opponent.path
+            if snap_path is None or not Path(snap_path).exists():
+                continue
+            merged_entries.append(entry)
+
+        self.entries = merged_entries
+        return True
+
+    @staticmethod
+    def _entry_key(opponent: LeagueOpponent) -> tuple[str, str, str | None]:
+        return opponent.name, opponent.type, opponent.path
 
     def sampling_weights(self) -> list[float]:
         """Return a weight per entry for weighted random sampling."""

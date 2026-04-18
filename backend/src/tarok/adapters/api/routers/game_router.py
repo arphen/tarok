@@ -11,6 +11,7 @@ from tarok.adapters.players.factory import get_player_factory
 from tarok.adapters.players.human_player import HumanPlayer
 from tarok.adapters.players.neural_player import NeuralPlayer
 from tarok.adapters.experience_logger import HumanPlayExperienceLogger
+from tarok.adapters.score_breakdown_parser import JsonScoreBreakdownParser
 from tarok.adapters.api.ws_observer import WebSocketObserver
 from tarok.adapters.api.schemas import NewGameRequest
 from tarok.entities import Card, Suit, SuitRank, Contract
@@ -121,6 +122,7 @@ async def game_websocket(ws: WebSocket, game_id: str):
                 agents,
                 observer=observer,
                 decision_recorder=round_decisions.append,
+                score_breakdown_parser=JsonScoreBreakdownParser(),
             )
 
             observer.set_match_info(

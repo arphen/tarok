@@ -16,6 +16,10 @@ class MaintainLeaguePool:
         self._updater = updater
         self._presenter = presenter
 
+    @staticmethod
+    def state_path(league_pool_dir: Path) -> Path:
+        return league_pool_dir / "state.json"
+
     def initial_snapshot_elo(self, pool: LeaguePool) -> float | None:
         checkpoint_elos = [e.elo for e in pool.entries if e.opponent.type == "nn_checkpoint"]
         if checkpoint_elos:
@@ -40,6 +44,7 @@ class MaintainLeaguePool:
         }
         elo_deltas["__learner__"] = pool.learner_elo - prev_learner_elo
         self._presenter.on_league_elo_updated(pool, elo_deltas)
+        pool.save(self.state_path(league_pool_dir))
 
         if iteration % pool.config.snapshot_interval != 0:
             return last_snapshot_elo
@@ -64,5 +69,6 @@ class MaintainLeaguePool:
             pool.entries.pop(checkpoint_indices[0])
 
         pool.add_snapshot(f"snapshot_iter_{iteration:03d}", snap_path)
+        pool.save(self.state_path(league_pool_dir))
         self._presenter.on_league_snapshot_added(iteration, snap_path)
         return pool.learner_elo

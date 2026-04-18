@@ -13,6 +13,7 @@ from tarok.adapters.api.checkpoint_utils import resolve_checkpoint
 from tarok.adapters.api.spectator_observer import SpectatorObserver, list_replays, load_replay
 from tarok.adapters.players.factory import get_player_factory
 from tarok.adapters.players.neural_player import NeuralPlayer
+from tarok.adapters.score_breakdown_parser import JsonScoreBreakdownParser
 from tarok.entities import Card, DECK
 from tarok.use_cases.game_loop import RustGameLoop as GameLoop
 
@@ -167,7 +168,12 @@ async def spectate_websocket(ws: WebSocket, game_id: str):
             )
         else:
             assert agents is not None
-            game_loop = GameLoop(agents, observer=observer, allow_berac=False)
+            game_loop = GameLoop(
+                agents,
+                observer=observer,
+                allow_berac=False,
+                score_breakdown_parser=JsonScoreBreakdownParser(),
+            )
             preset_hands = game_info.get("preset_hands")
             preset_talon = game_info.get("preset_talon")
             dealer = game_info.get("dealer", 0)

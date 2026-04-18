@@ -39,6 +39,7 @@ from tarok.entities import (
     PlayerRole,
 )
 from tarok.ports.observer_port import GameObserverPort
+from tarok.ports.score_breakdown_parser_port import ScoreBreakdownParserPort
 from tarok.use_cases import rust_state as _rust_state
 
 try:
@@ -182,6 +183,14 @@ class _PyBid:
         self.contract = contract
 
 
+class _EmptyScoreBreakdownParser:
+    """Fallback parser used when no concrete parser is injected."""
+
+    def parse(self, payload: str) -> dict[str, Any]:
+        _ = payload
+        return {}
+
+
 class RustGameLoop:
     """Plays a full game of Tarok using the Rust engine.
 
@@ -197,6 +206,7 @@ class RustGameLoop:
         rng: random.Random | None = None,
         allow_berac: bool = True,
         decision_recorder: Callable[[dict[str, Any]], None] | None = None,
+        score_breakdown_parser: ScoreBreakdownParserPort | None = None,
     ):
         assert te is not None, "tarok_engine Rust extension not installed"
         assert len(players) == 4
@@ -206,6 +216,9 @@ class RustGameLoop:
         self._allow_berac = allow_berac
         self._decision_recorder = decision_recorder
         self._decision_step = 0
+        self._score_breakdown_parser: ScoreBreakdownParserPort = (
+            score_breakdown_parser or _EmptyScoreBreakdownParser()
+        )
 
     def _record_decision(
         self,
@@ -331,7 +344,7 @@ class RustGameLoop:
         if declarer is not None and not _is_klop(contract) and not _is_berac(contract):
             gs.phase = te.PHASE_ANNOUNCEMENTS
             # Simplified: skip announcements in Rust loop for now
-            # (random play / early training rarely uses them)
+            # (current gameplay loops do not rely on announcement handling here)
             gs.phase = te.PHASE_TRICK_PLAY
 
         # === TRICK PLAY ===
@@ -434,7 +447,7 @@ class RustGameLoop:
         scores_arr = gs.score_game()
         scores = {i: int(scores_arr[i]) for i in range(4)}
 
-        # Build a minimal Python GameState for compatibility with trainer
+        # Build a minimal Python GameState for observer/API compatibility.
         py_state = _build_py_state_stub(
             dealer,
             py_contract,
@@ -447,31 +460,21 @@ class RustGameLoop:
         py_state.scores = scores
 
         # Scoring breakdown — computed entirely in Rust, no Python scoring
-        import json as _json
+        breakdown_json = gs.score_game_breakdown_json()
+        raw = self._score_breakdown_parser.parse(breakdown_json)
+        breakdown = {
+            "breakdown": {
+                "contract": raw.get("contract"),
+                "mode": raw.get("mode"),
+                "declarer_won": raw.get("declarer_won"),
+                "declarer_points": raw.get("declarer_points"),
+                "opponent_points": raw.get("opponent_points"),
+                "lines": raw.get("lines", []),
+            },
+            "trick_summary": raw.get("trick_summary", []),
+        }
 
-        breakdown = None
-        try:
-            breakdown_json = gs.score_game_breakdown_json()
-            raw = _json.loads(breakdown_json)
-            breakdown = {
-                "breakdown": {
-                    "contract": raw.get("contract"),
-                    "mode": raw.get("mode"),
-                    "declarer_won": raw.get("declarer_won"),
-                    "declarer_points": raw.get("declarer_points"),
-                    "opponent_points": raw.get("opponent_points"),
-                    "lines": raw.get("lines", []),
-                },
-                "trick_summary": raw.get("trick_summary", []),
-            }
-        except Exception:
-            pass
-
-        try:
-            await self._observer.on_game_end(scores, py_state, breakdown=breakdown)
-        except TypeError:
-            # Observer doesn't accept breakdown kwarg (e.g. legacy/test observers)
-            await self._observer.on_game_end(scores, py_state)
+        await self._observer.on_game_end(scores, py_state, breakdown=breakdown)
 
         return py_state, scores
 
@@ -1011,7 +1014,7 @@ def _build_py_state_stub(
     completed_tricks: list[_RustTrickSnapshot],
     bid_history: list[_PyBid],
 ) -> GameState:
-    """Build a minimal Python GameState with fields the trainer needs."""
+    """Build a minimal Python GameState with fields runtime consumers need."""
     state = GameState.__new__(GameState)
     state.dealer = dealer
     state.contract = contract

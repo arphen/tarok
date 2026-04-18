@@ -3,9 +3,10 @@ include .env
 export
 endif
 
+
 .PHONY: run backend frontend test train clean install test-e2e setup setup-hooks \
 	test-backend test-lab test-frontend test-frontend-unit test-coverage test-coverage-backend test-coverage-lab check-coverage test-lookahead \
-	pipeline imitation-pretrain generate-expert-data build-engine ensure-engine kill stop \
+	lint-architecture pipeline imitation-pretrain generate-expert-data build-engine ensure-engine kill stop \
 	train-with-humans ec2-train ec2-attach ec2-logs ec2-pull ec2-terminate
 
 UV_RUN = cd backend && PYTHONPATH=src:../model/src uv run --default-index https://pypi.org/simple
@@ -98,7 +99,25 @@ frontend:
 test: test-backend test-lab test-frontend test-frontend-unit
 
 test-backend:
+	$(MAKE) lint-architecture
 	$(UV_RUN) python -m pytest tests/ -v
+
+lint-architecture:
+	@echo "==> Running Clean Architecture import contracts..."
+	@cd backend && PYTHONPATH=src:../model/src uv run --default-index https://pypi.org/simple --extra dev lint-imports || { \
+		echo ""; \
+		echo "Clean Architecture guard failed."; \
+		echo "Rule: tarok.use_cases is application logic and must not import infrastructure/data libraries (json/csv/pickle/numpy/pandas) or tarok.adapters."; \
+		echo "Where code should go:"; \
+		echo "  - put I/O and framework integrations in tarok.adapters"; \
+		echo "  - define abstractions in tarok.ports"; \
+		echo "  - keep orchestration and game rules in tarok.use_cases"; \
+		echo "How to extend safely:"; \
+		echo "  1) add/extend a Port in tarok.ports"; \
+		echo "  2) implement it in tarok.adapters"; \
+		echo "  3) inject the adapter into the use case via the port interface"; \
+		exit 1; \
+	}
 
 test-lab: ensure-engine
 	$(UV_RUN_LAB) python -m pytest ../training-lab/tests/ -v

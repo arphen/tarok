@@ -26,6 +26,7 @@ dev = [
     "pytest-cov>=6.0",
     "hypothesis>=6.100",
     "ruff>=0.7",
+    "import-linter>=2.3",
     "ty",
     "maturin>=1.7",
 ]
@@ -47,6 +48,43 @@ line-length = 100
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 asyncio_mode = "auto"
+
+[tool.importlinter]
+root_package = "tarok"
+include_external_packages = true
+
+[[tool.importlinter.contracts]]
+name = "Use cases stay pure: do not import stdlib data/serialization modules"
+type = "forbidden"
+source_modules = [
+    "tarok.use_cases",
+]
+forbidden_modules = [
+    "json",
+    "csv",
+    "pickle",
+]
+
+[[tool.importlinter.contracts]]
+name = "Use cases do not import data-science stacks directly"
+type = "forbidden"
+source_modules = [
+    "tarok.use_cases",
+]
+forbidden_modules = [
+    "numpy",
+    "pandas",
+]
+
+[[tool.importlinter.contracts]]
+name = "Use cases depend on ports/entities, not adapters"
+type = "forbidden"
+source_modules = [
+    "tarok.use_cases",
+]
+forbidden_modules = [
+    "tarok.adapters",
+]
 
 [dependency-groups]
 dev = [

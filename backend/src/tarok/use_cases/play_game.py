@@ -7,8 +7,6 @@ what contract type was bid or whether a declarer exists.  It just asks
 
 from __future__ import annotations
 
-import json
-
 from pydantic import BaseModel, ConfigDict
 
 import tarok_engine as te
@@ -23,6 +21,7 @@ from tarok.entities import (
 )
 from tarok.ports.observer_port import GameObserverPort
 from tarok.ports.player_port import PlayerPort
+from tarok.ports.score_breakdown_parser_port import ScoreBreakdownParserPort
 
 
 # ---------------------------------------------------------------------------
@@ -55,7 +54,6 @@ _U8_TO_PHASE: dict[int, Phase] = {
 }
 
 _U8_TO_ROLE = {0: PlayerRole.DECLARER, 1: PlayerRole.PARTNER, 2: PlayerRole.OPPONENT}
-
 
 # ---------------------------------------------------------------------------
 # Snapshot types (read-only views for observers / PlayerPort)
@@ -96,11 +94,13 @@ class _Session:
         players: list[PlayerPort],
         observer: GameObserverPort,
         allow_berac: bool,
+        score_breakdown_parser: ScoreBreakdownParserPort | None,
     ):
         self.gs = gs
         self.players = players
         self.observer = observer
         self.allow_berac = allow_berac
+        self.score_breakdown_parser = score_breakdown_parser
 
         self.tricks: list[TrickResult] = []
         self.bids: list[_Bid] = []
@@ -359,8 +359,10 @@ class _Session:
         return py_state, scores
 
     def breakdown(self) -> dict | None:
+        if self.score_breakdown_parser is None:
+            return None
         try:
-            raw = json.loads(self.gs.score_game_breakdown_json())
+            raw = self.score_breakdown_parser.parse(self.gs.score_game_breakdown_json())
             return {
                 "breakdown": {
                     "contract": raw.get("contract"),
@@ -438,6 +440,7 @@ async def play_game(
     dealer: int = 0,
     observer: GameObserverPort | None = None,
     allow_berac: bool = True,
+    score_breakdown_parser: ScoreBreakdownParserPort | None = None,
     preset_hands: list[list[int]] | None = None,
     preset_talon: list[int] | None = None,
 ) -> tuple[GameState, dict[int, int]]:
@@ -451,7 +454,13 @@ async def play_game(
     else:
         gs.deal()
 
-    session = _Session(gs, players, observer or NullObserver(), allow_berac)
+    session = _Session(
+        gs,
+        players,
+        observer or NullObserver(),
+        allow_berac,
+        score_breakdown_parser,
+    )
 
     await session.deal()
 

@@ -11,6 +11,7 @@ from pydantic import BaseModel
 from tarok.adapters.players.neural_player import NeuralPlayer
 from tarok.adapters.players.factory import get_player_factory
 from tarok.adapters.api.checkpoint_utils import resolve_checkpoint_or_default
+from tarok.adapters.score_breakdown_parser import JsonScoreBreakdownParser
 
 from tarok.use_cases.game_loop import RustGameLoop as GameLoop
 
@@ -88,7 +89,7 @@ async def tournament_match(req: TournamentMatchRequest):
     game_results: list[dict[str, int]] = []
 
     for _ in range(max(1, min(req.num_games, 100))):
-        loop = GameLoop(agents)
+        loop = GameLoop(agents, score_breakdown_parser=JsonScoreBreakdownParser())
         _state, scores = await loop.run()
         for pid, pts in scores.items():
             cumulative[pid] += pts
@@ -127,7 +128,7 @@ async def _simulate_single_tournament(
 
         cumulative: dict[int, int] = {0: 0, 1: 0, 2: 0, 3: 0}
         for _ in range(max(1, min(games_per_round, 100))):
-            loop = GameLoop(agents)
+            loop = GameLoop(agents, score_breakdown_parser=JsonScoreBreakdownParser())
             _state, scores = await loop.run()
             for pid, pts in scores.items():
                 cumulative[pid] += pts

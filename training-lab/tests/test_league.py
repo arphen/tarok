@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import math
+from pathlib import Path
 from unittest.mock import patch
 
 import pytest
@@ -85,6 +86,53 @@ def test_league_pool_add_snapshot() -> None:
     assert len(pool.entries) == 1
     assert pool.entries[0].elo == 1600.0
     assert pool.entries[0].opponent.path == "checkpoints/snap1.pt"
+
+
+def test_league_pool_save_and_restore_preserves_snapshot_elos(tmp_path: Path) -> None:
+    snapshot_path = tmp_path / "league_pool" / "iter_005.pt"
+    snapshot_path.parent.mkdir(parents=True, exist_ok=True)
+    snapshot_path.write_bytes(b"checkpoint")
+
+    cfg = LeagueConfig(
+        enabled=True,
+        opponents=(LeagueOpponent(name="Anchor", type="bot_v1", initial_elo=900.0),),
+    )
+    pool = LeaguePool(config=cfg)
+    pool.learner_elo = 1325.0
+    pool.entries[0].games_played = 8
+    pool.entries[0].learner_outplaces = 5
+    pool.add_snapshot("snapshot_iter_005", str(snapshot_path))
+    pool.entries[1].elo = 1280.0
+    pool.entries[1].games_played = 4
+    pool.entries[1].learner_outplaces = 2
+
+    state_path = tmp_path / "league_pool" / "state.json"
+    pool.save(state_path)
+
+    restored = LeaguePool(config=cfg)
+    assert restored.restore(state_path) is True
+
+    assert restored.learner_elo == pytest.approx(1325.0)
+    assert len(restored.entries) == 2
+    assert restored.entries[0].opponent.name == "Anchor"
+    assert restored.entries[0].games_played == 8
+    assert restored.entries[0].learner_outplaces == 5
+    assert restored.entries[1].opponent.name == "snapshot_iter_005"
+    assert restored.entries[1].elo == pytest.approx(1280.0)
+    assert restored.entries[1].opponent.path == str(snapshot_path)
+
+
+def test_league_pool_restore_skips_missing_snapshot_files(tmp_path: Path) -> None:
+    cfg = LeagueConfig(enabled=True, opponents=(LeagueOpponent(name="Anchor", type="bot_v1"),))
+    pool = LeaguePool(config=cfg)
+    pool.add_snapshot("snapshot_iter_001", str(tmp_path / "missing.pt"))
+    state_path = tmp_path / "league_pool" / "state.json"
+    pool.save(state_path)
+
+    restored = LeaguePool(config=cfg)
+    restored.restore(state_path)
+
+    assert [entry.opponent.name for entry in restored.entries] == ["Anchor"]
 
 
 # ---------------------------------------------------------------------------

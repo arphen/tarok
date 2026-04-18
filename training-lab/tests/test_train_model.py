@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from dataclasses import replace
 from pathlib import Path
 from unittest.mock import MagicMock, patch
@@ -458,6 +459,95 @@ def test_train_model_snapshot_admission_uses_configured_elo_delta(
     # +20 Elo gains clear configured +10 gate each iteration.
     assert mock_copy2.call_count == 3
     assert mock_presenter.on_league_snapshot_added.call_count == 3
+
+
+@patch("training.use_cases.train_model.orchestrator.UpdateLeagueElo")
+@patch("training.use_cases.train_model.orchestrator.SampleLeagueSeats")
+def test_train_model_restores_persisted_league_state(
+    MockSampleSeats: MagicMock,
+    MockUpdateElo: MagicMock,
+    mock_iteration_runner: MagicMock,
+    mock_benchmark: MagicMock,
+    mock_model_port: MagicMock,
+    mock_presenter: MagicMock,
+    base_config: TrainingConfig,
+    identity: ModelIdentity,
+) -> None:
+    cfg = replace(
+        base_config,
+        iterations=1,
+        league=LeagueConfig(
+            enabled=True,
+            opponents=(LeagueOpponent(name="Anchor", type="bot_v1", initial_elo=900.0),),
+        ),
+    )
+
+    save_dir = Path(cfg.save_dir)
+    league_pool_dir = save_dir / "league_pool"
+    snapshot_path = league_pool_dir / "iter_005.pt"
+    league_pool_dir.mkdir(parents=True, exist_ok=True)
+    snapshot_path.write_bytes(b"checkpoint")
+    (league_pool_dir / "state.json").write_text(
+        json.dumps(
+            {
+                "learner_elo": 1444.0,
+                "entries": [
+                    {
+                        "opponent": {
+                            "name": "Anchor",
+                            "type": "bot_v1",
+                            "path": None,
+                            "initial_elo": 900.0,
+                        },
+                        "elo": 900.0,
+                        "games_played": 10,
+                        "learner_outplaces": 6,
+                    },
+                    {
+                        "opponent": {
+                            "name": "snapshot_iter_005",
+                            "type": "nn_checkpoint",
+                            "path": str(snapshot_path),
+                            "initial_elo": 1410.0,
+                        },
+                        "elo": 1410.0,
+                        "games_played": 4,
+                        "learner_outplaces": 2,
+                    },
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    mock_sampler = MockSampleSeats.return_value
+
+    def _capture_pool(pool) -> str:
+        assert pool.learner_elo == pytest.approx(1444.0)
+        assert [entry.opponent.name for entry in pool.entries] == ["Anchor", "snapshot_iter_005"]
+        assert pool.entries[1].elo == pytest.approx(1410.0)
+        return "nn,bot_v1,nn,nn"
+
+    mock_sampler.execute.side_effect = _capture_pool
+
+    use_case = TrainModel(
+        iteration_runner=mock_iteration_runner,
+        benchmark=mock_benchmark,
+        model=mock_model_port,
+        presenter=mock_presenter,
+    )
+
+    use_case.execute(config=cfg, identity=identity, weights={}, device="cpu")
+
+    first_lr_call = mock_iteration_runner.run_iteration.call_args_list[0]
+    assert first_lr_call.kwargs["iter_lr"] == pytest.approx(cfg.lr)
+
+    persisted = json.loads((league_pool_dir / "state.json").read_text(encoding="utf-8"))
+    assert persisted["learner_elo"] == pytest.approx(1444.0)
+    assert [entry["opponent"]["name"] for entry in persisted["entries"]] == [
+        "Anchor",
+        "snapshot_iter_005",
+    ]
 
 
 @patch("training.use_cases.train_model.orchestrator.UpdateLeagueElo")
