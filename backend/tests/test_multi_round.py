@@ -1,9 +1,7 @@
-from typing import Any, cast
-
 """Tests for multi-round games, scoreboard data, and card tracking."""
 
-import asyncio
 import random
+from typing import Any, cast
 
 import pytest
 from httpx import ASGITransport, AsyncClient
@@ -12,13 +10,11 @@ from tarok.adapters.api.server import app
 from tarok.adapters.api.ws_observer import _build_card_tracker, _state_for_player
 from tarok.entities import (
     Card,
-    CardType,
     Suit,
     SuitRank,
     DECK,
     GameState,
     Phase,
-    Contract,
     Trick,
     tarok,
     suit_card,

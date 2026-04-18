@@ -1,7 +1,5 @@
 """Tests for per-opponent model selection in game creation."""
 
-import asyncio
-
 import pytest
 from httpx import ASGITransport, AsyncClient
 

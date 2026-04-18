@@ -1,14 +1,14 @@
 """Tests for the WebSocket observer card tracker caching."""
 
 import pytest
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock
 
 from tarok.adapters.api.ws_observer import (
     WebSocketObserver,
     _build_card_tracker,
     _state_for_player,
 )
-from tarok.entities import Card, CardType, Suit, SuitRank, DECK, GameState, Phase, Contract, Trick
+from tarok.entities import GameState, Phase, Contract
 from tarok.use_cases.deal import deal
 
 

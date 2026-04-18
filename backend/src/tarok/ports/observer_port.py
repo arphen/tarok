@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Any, Protocol
 
-from tarok.entities import Card, Contract, GameState, Trick
+from tarok.entities import Card, Contract, GameState
 
 
 class GameObserverPort(Protocol):

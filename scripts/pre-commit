@@ -60,12 +60,29 @@ fi
 # ── 4. Backend tests with coverage ──────────
 echo ""
 echo "▶ Backend tests + coverage…"
+TORCH_LIB_DIR=$(PYTHONPATH=src:../model/src $UV_CMD python -c "import pathlib, torch; print(pathlib.Path(torch.__file__).resolve().parent / 'lib')")
+export DYLD_FALLBACK_LIBRARY_PATH="$TORCH_LIB_DIR:${DYLD_FALLBACK_LIBRARY_PATH:-}"
+
+if ! PYTHONPATH=src:../model/src $UV_CMD python -c "import tarok_engine" >/dev/null 2>&1; then
+  echo "  • tarok_engine missing, building Rust extension..."
+  LIBTORCH_USE_PYTORCH=1 $UV_CMD maturin develop --release --manifest-path ../engine-rs/Cargo.toml
+fi
+
 PYTHONPATH=src:../model/src PYTHONHASHSEED=0 $UV_CMD \
   python -m pytest tests/ -q \
     -p no:randomly --hypothesis-seed=0 \
     --cov=tarok \
     --cov-report=term-missing:skip-covered \
     --cov-report=json:coverage.json
+
+# ── 4b. Training-lab tests ───────────────────
+echo ""
+echo "▶ Training-lab tests…"
+cd "$ROOT/backend"
+PYTHONHASHSEED=0 PYTHONPATH=src:../model/src:../training-lab $UV_CMD \
+  python -m pytest ../training-lab/tests/ -q \
+    -p no:randomly --hypothesis-seed=0
+echo "  ✔ Training-lab OK"
 
 NEW_PCT=$(python3 -c "import json; print(round(json.load(open('coverage.json'))['totals']['percent_covered'], 2))")
 echo "  Current coverage: ${NEW_PCT}%"

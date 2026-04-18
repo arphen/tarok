@@ -25,25 +25,16 @@ from tarok_model.encoding import (
     BID_TO_IDX,
     KING_ACTIONS,
     SUIT_TO_IDX,
-    CARD_TO_IDX,
-    ANNOUNCE_PASS,
-    ANNOUNCE_IDX_TO_ANN,
-    KONTRA_IDX_TO_KEY,
     encode_bid_mask,
     encode_king_mask,
     encode_talon_mask,
-    encode_announce_mask,
-    card_idx_to_card,
 )
 from tarok.entities import (
     Card,
     CardType,
-    Suit,
     DECK,
-    Announcement,
     Contract,
     GameState,
-    KontraLevel,
     Phase,
     PlayerRole,
 )
@@ -259,10 +250,6 @@ class RustGameLoop:
         completed_tricks: list[_RustTrickSnapshot] = []
         bid_history: list[_PyBid] = []
 
-        # Build a thin Python GameState for observer callbacks (optional)
-        # Only populated when we actually have observer callbacks
-        has_observer = not isinstance(self._observer, NullObserver)
-
         await self._observer.on_game_start(
             _build_py_state_from_rust(gs, completed_tricks, bids=bid_history)
         )
@@ -352,7 +339,6 @@ class RustGameLoop:
         lead_player = (
             declarer if (_is_berac(contract) and declarer is not None) else (dealer + 1) % 4
         )
-        berac_early = False
         for trick_num in range(12):
             lead = lead_player
             trick_cards: list[tuple[int, Card]] = []
@@ -441,7 +427,6 @@ class RustGameLoop:
 
             # Berač early termination: declarer wins a trick → instant loss
             if _is_berac(contract) and declarer is not None and winner == declarer:
-                berac_early = True
                 break
 
         # === SCORING ===

@@ -21,8 +21,11 @@ sys.path.insert(0, str(ROOT / "model" / "src"))
 # exercises only the isolated PPO update path and does not need the extension.
 sys.modules.setdefault("tarok_engine", types.ModuleType("tarok_engine"))
 
-from tarok_model.encoding import DecisionType
-from tarok_model.network import ORACLE_STATE_SIZE, STATE_SIZE, TarokNetV4
+DecisionType = importlib.import_module("tarok_model.encoding").DecisionType
+_network = importlib.import_module("tarok_model.network")
+ORACLE_STATE_SIZE = _network.ORACLE_STATE_SIZE
+STATE_SIZE = _network.STATE_SIZE
+TarokNetV4 = _network.TarokNetV4
 
 CpuBackend = importlib.import_module("training.adapters.compute.cpu_backend").CpuBackend
 PPOAdapter = importlib.import_module("training.adapters.ppo").PPOAdapter

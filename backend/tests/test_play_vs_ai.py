@@ -18,7 +18,6 @@ from tarok.adapters.players.neural_player import NeuralPlayer
 from tarok.adapters.players.human_player import HumanPlayer
 from tarok.adapters.api.ws_observer import _state_for_player
 from tarok.entities import (
-    Card,
     CardType,
     Suit,
     SuitRank,

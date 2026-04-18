@@ -11,7 +11,7 @@ from typing import Any
 
 from fastapi import WebSocket
 
-from tarok.entities import Card, Contract, GameState, Trick
+from tarok.entities import Card, Contract, GameState
 
 
 BACKEND_ROOT = Path(__file__).resolve().parents[4]

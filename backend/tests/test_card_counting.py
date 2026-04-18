@@ -1,10 +1,7 @@
 """Unit tests for card counting edge cases in compute_card_points."""
 
-import pytest
-
 from tarok.entities import (
     Card,
-    CardType,
     Suit,
     SuitRank,
     tarok,

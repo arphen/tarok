@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from pathlib import Path
 
 from fastapi import APIRouter
 from pydantic import BaseModel
@@ -50,6 +49,10 @@ def _build_agent(cfg: dict, idx: int):
     checkpoint = cfg.get("checkpoint")
 
     registry = get_player_factory()
+
+    # Legacy alias used by tests/UI: random is now mapped to stockskis_m6.
+    if agent_type == "random":
+        agent_type = "stockskis_m6"
 
     # Check registry first (stockskis_*, nn, human)
     if registry.has(agent_type):

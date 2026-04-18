@@ -2,7 +2,6 @@
 
 import random
 
-import pytest
 from pytest_bdd import scenarios, given, when, then, parsers
 
 from tarok.entities import GameState, Phase

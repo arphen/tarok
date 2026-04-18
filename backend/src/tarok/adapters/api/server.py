@@ -13,7 +13,7 @@ from pydantic import BaseModel
 
 from tarok.adapters.players.neural_player import NeuralPlayer
 from tarok.adapters.players.factory import get_player_factory
-from tarok.adapters.api.checkpoint_utils import resolve_checkpoint, resolve_checkpoint_or_default
+from tarok.adapters.api.checkpoint_utils import resolve_checkpoint
 from tarok.adapters.players.human_player import HumanPlayer
 from tarok.adapters.api.experience_logger import HumanPlayExperienceLogger
 from tarok.adapters.api.spectator_observer import SpectatorObserver, list_replays, load_replay
@@ -22,7 +22,7 @@ from tarok.adapters.api.schemas import (
     NewGameRequest,
     TrainingRequest,
 )
-from tarok.entities import Card, CardType, Suit, SuitRank, DECK, Contract
+from tarok.entities import Card, Suit, SuitRank, DECK, Contract
 from tarok.entities.game_types import suit_card
 from tarok.use_cases.game_loop import RustGameLoop as GameLoop
 from tarok.use_cases.rust_state import _RUST_U8_TO_PY_CONTRACT
@@ -150,11 +150,32 @@ async def list_checkpoints():
     import torch as _torch
 
     root_ckpt_dir = Path("../data/checkpoints")
+    legacy_ckpt_dirs = [Path("checkpoints"), Path("../checkpoints")]
     hof_dir = root_ckpt_dir / "hall_of_fame"
     result = []
+    seen_filenames: set[str] = set()
 
     if not root_ckpt_dir.exists():
+        # Still return legacy checkpoints even when the new canonical dir is absent.
+        for legacy_dir in legacy_ckpt_dirs:
+            if not legacy_dir.exists():
+                continue
+            for f in sorted(legacy_dir.glob("*.pt")):
+                if f.name in seen_filenames:
+                    continue
+                seen_filenames.add(f.name)
+                result.append(_load_checkpoint_meta(f, legacy_dir))
         return {"checkpoints": result}
+
+    # 0. Legacy flat checkpoint dirs (backward compatibility for older tests/tools)
+    for legacy_dir in legacy_ckpt_dirs:
+        if not legacy_dir.exists():
+            continue
+        for f in sorted(legacy_dir.glob("*.pt")):
+            if f.name in seen_filenames:
+                continue
+            seen_filenames.add(f.name)
+            result.append(_load_checkpoint_meta(f, legacy_dir))
 
     # 1. HOF files (manually placed, committed to git)
     hof_files = sorted(hof_dir.glob("*.pt")) if hof_dir.exists() else []
@@ -174,8 +195,10 @@ async def list_checkpoints():
                     "is_hof": True,
                 }
             )
+            seen_filenames.add(f.name)
         except Exception:
             result.append({"filename": f"hall_of_fame/{f.name}", "is_hof": True, "episode": 0})
+            seen_filenames.add(f.name)
 
     # 2. Persona subdirectories — expose _current.pt for each
     for persona_dir in sorted(root_ckpt_dir.iterdir()):
@@ -200,6 +223,7 @@ async def list_checkpoints():
                     "is_hof": False,
                 }
             )
+            seen_filenames.add(f"{persona_name}/_current.pt")
         except Exception:
             result.append(
                 {
@@ -209,6 +233,7 @@ async def list_checkpoints():
                     "episode": 0,
                 }
             )
+            seen_filenames.add(f"{persona_name}/_current.pt")
 
     return {"checkpoints": result}
 
@@ -812,7 +837,6 @@ async def _replay_from_trace(
                 # Fallback
                 legal = gs.legal_plays(player)
                 card_idx = legal[0] if legal else 0
-                trace_player = player
 
             gs.play_card(player, card_idx)
             trick_cards.append((player, DECK[card_idx]))

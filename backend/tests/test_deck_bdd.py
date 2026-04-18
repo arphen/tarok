@@ -1,6 +1,5 @@
 """BDD steps for deck.feature"""
 
-import pytest
 from pytest_bdd import scenarios, given, then
 
 from tarok.entities import DECK, CardType, Suit, SuitRank, PAGAT, MOND, SKIS, compute_card_points

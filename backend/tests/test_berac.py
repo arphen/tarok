@@ -5,7 +5,6 @@ awarding -70 to the declarer. If the declarer survives all 12 tricks
 without winning one, they get +70.
 """
 
-import asyncio
 import random
 from typing import Any, cast
 
@@ -15,24 +14,18 @@ from tarok.adapters.players.neural_player import NeuralPlayer
 from tarok.adapters.players.stockskis_player import StockskisPlayer
 
 from tarok.entities import (
-    Card,
     CardType,
     Suit,
     SuitRank,
-    DECK,
-    Bid,
     Contract,
     GameState,
     Phase,
-    PlayerRole,
     Trick,
     score_game,
     suit_card,
     tarok,
 )
 from tarok.use_cases.game_loop import RustGameLoop as GameLoop, NullObserver
-from tarok.use_cases.deal import deal
-from tarok.use_cases.play_trick import start_trick, play_card
 
 
 # ---------------------------------------------------------------------------

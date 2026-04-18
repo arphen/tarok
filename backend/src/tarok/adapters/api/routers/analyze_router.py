@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-from pathlib import Path
 
 from fastapi import APIRouter
 from pydantic import BaseModel
@@ -108,7 +107,6 @@ async def analyze_hand(req: AnalyzeRequest):
     # Parse cards
     hand = [_parse_card(c) for c in req.hand]
     trick_cards = [_parse_card(c) for c in req.trick]
-    played = [_parse_card(c) for c in req.played_cards]
 
     # Build a synthetic game state for the agent
     state = GameState(phase=Phase.TRICK_PLAY)
@@ -206,7 +204,6 @@ async def analyze_bid(req: AnalyzeBidRequest):
     from tarok_model.encoding import (
         encode_state,
         encode_bid_mask,
-        BID_ACTIONS,
         BID_TO_IDX,
         DecisionType,
     )
@@ -301,13 +298,6 @@ async def analyze_bid(req: AnalyzeBidRequest):
 @router.post("/api/analyze-king")
 async def analyze_king(req: AnalyzeKingRequest):
     """Given a hand and contract, recommend which king to call."""
-    from tarok_model.encoding import (
-        encode_state,
-        encode_king_mask,
-        KING_ACTIONS,
-        SUIT_TO_IDX,
-        DecisionType,
-    )
     import torch
 
     hand = [_parse_card(c) for c in req.hand]

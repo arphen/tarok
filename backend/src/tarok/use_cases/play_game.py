@@ -8,7 +8,6 @@ what contract type was bid or whether a declarer exists.  It just asks
 from __future__ import annotations
 
 import json
-import random
 
 from pydantic import BaseModel, ConfigDict
 

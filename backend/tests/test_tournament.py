@@ -1,8 +1,6 @@
 """Tests for tournament endpoints."""
 
 import asyncio
-import os
-import tempfile
 
 import pytest
 from httpx import ASGITransport, AsyncClient
@@ -319,7 +317,6 @@ async def test_multi_tournament_num_clamped(client):
 async def test_checkpoints_includes_root_level(client, tmp_path, monkeypatch):
     """Checkpoints endpoint should list files from ../checkpoints/ too."""
     import torch
-    from pathlib import Path
 
     # Create backend/checkpoints/ and ../checkpoints/ relative to a temp CWD
     backend_dir = tmp_path / "backend"
@@ -345,7 +342,6 @@ async def test_checkpoints_includes_root_level(client, tmp_path, monkeypatch):
 async def test_checkpoints_deduplicates(client, tmp_path, monkeypatch):
     """If same filename exists in both dirs, only one should appear."""
     import torch
-    from pathlib import Path
 
     backend_dir = tmp_path / "backend"
     backend_dir.mkdir()

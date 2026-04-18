@@ -73,7 +73,7 @@ class StockskisPlayer(PlayerPort):
         if gs is None:
             return []
 
-        idxs = self._call("choose_discards", gs, player_idx)
+        idxs = self._call("choose_discards", gs, player_idx, must_discard)
         if must_discard <= 0:
             return []
 

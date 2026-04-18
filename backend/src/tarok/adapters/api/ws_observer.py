@@ -7,7 +7,7 @@ from typing import Any
 
 from fastapi import WebSocket
 
-from tarok.entities import Card, CardType, DECK, Contract, GameState, Phase, Trick
+from tarok.entities import Card, CardType, DECK, Contract, GameState, Phase
 
 
 def _card_to_dict(card: Card) -> dict:
