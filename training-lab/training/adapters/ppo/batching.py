@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import gc
 from typing import Any
 
 import numpy as np
@@ -82,3 +83,14 @@ def prepare_batched(raw: dict[str, Any], gamma: float = 0.99, gae_lambda: float 
         "oracle_states": torch.from_numpy(oracle_states_np) if oracle_states_np is not None else None,
         "game_modes": game_modes_np,
     }
+
+
+def release_allocator_memory() -> None:
+    gc.collect()
+    if torch.cuda.is_available():
+        torch.cuda.empty_cache()
+    if hasattr(torch, "mps") and hasattr(torch.mps, "empty_cache"):
+        try:
+            torch.mps.empty_cache()
+        except Exception:
+            pass

@@ -22,7 +22,7 @@ from tarok_model.encoding import (
 )
 from tarok_model.network import TarokNetV4
 
-from training.adapters.ppo.batching import prepare_batched
+from training.adapters.ppo.batching import prepare_batched, release_allocator_memory
 from training.adapters.ppo.contracts import validate_v4_contract_indices_with_rust
 from training.entities import TrainingConfig
 from training.ports import PPOPort
@@ -121,6 +121,7 @@ class PPOAdapter(PPOPort):
 
         new_weights = {k: v.cpu() for k, v in self._network.state_dict().items()}
         del prepped
+        release_allocator_memory()
         return metrics, new_weights
 
     def _ppo_update_batched(
