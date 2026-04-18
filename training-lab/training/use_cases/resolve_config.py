@@ -18,6 +18,7 @@ def _parse_league(raw: dict[str, Any]) -> LeagueConfig | None:
             name=o["name"],
             type=o["type"],
             path=o.get("path"),
+            initial_elo=float(o.get("initial_elo", 1500.0)),
         )
         for o in raw.get("opponents", [])
     )
@@ -28,6 +29,8 @@ def _parse_league(raw: dict[str, Any]) -> LeagueConfig | None:
         sampling=raw.get("sampling", "pfsp"),
         pfsp_alpha=raw.get("pfsp_alpha", 1.5),
         snapshot_interval=raw.get("snapshot_interval", 5),
+        snapshot_elo_delta=float(raw.get("snapshot_elo_delta", 50.0)),
+        max_active_snapshots=max(0, int(raw.get("max_active_snapshots", 3))),
     )
 
 
@@ -47,11 +50,11 @@ class ResolveConfig:
         raw_bench_checkpoints = merged.get("benchmark_checkpoints", [0, 4, 7])
         bench_checkpoints = tuple(sorted({int(x) for x in raw_bench_checkpoints if int(x) >= 0}))
         metric = str(merged.get("best_model_metric", "loss")).strip().lower()
-        if metric not in {"loss", "placement"}:
+        if metric not in {"loss", "placement", "elo"}:
             metric = "loss"
 
         return TrainingConfig(
-            seats=merged.get("seats", "nn,bot_v5,bot_v5,bot_v5"),
+            seats=merged.get("seats", "nn,nn,nn,nn"),
             bench_seats=merged.get("bench_seats"),
             iterations=merged.get("iterations", 10),
             games=merged.get("games", 10_000),
@@ -61,17 +64,20 @@ class ResolveConfig:
             ppo_epochs=merged.get("ppo_epochs", 6),
             batch_size=merged.get("batch_size", 8192),
             lr=merged.get("lr", 3e-4),
-            lr_schedule=merged.get("lr_schedule", "constant"),
+            lr_schedule=str(merged.get("lr_schedule", "constant")),
             lr_min=merged.get("lr_min"),
             explore_rate=merged.get("explore_rate", 0.10),
             device=merged.get("device", "auto"),
             save_dir=merged.get("save_dir", "data/checkpoints/training_run"),
             concurrency=merged.get("concurrency", 128),
             imitation_coef=merged.get("imitation_coef", 0.3),
-            imitation_schedule=merged.get("imitation_schedule", "constant"),
+            imitation_schedule=str(merged.get("imitation_schedule", "constant")),
             imitation_coef_min=merged.get("imitation_coef_min", 0.0),
-            memory_telemetry=bool(merged.get("memory_telemetry", True)),
-            memory_telemetry_every=max(1, int(merged.get("memory_telemetry_every", 1))),
+            imitation_center_elo=float(merged.get("imitation_center_elo", 1500.0)),
+            imitation_width_elo=float(merged.get("imitation_width_elo", 250.0)),
+            entropy_coef=merged.get("entropy_coef", 0.01),
+            entropy_schedule=merged.get("entropy_schedule", "constant"),
+            entropy_coef_min=float(merged.get("entropy_coef_min", 0.005)),
             iteration_runner_mode=str(merged.get("iteration_runner_mode", "in-process")),
             iteration_runner_restart_every=max(1, int(merged.get("iteration_runner_restart_every", 10))),
             model_arch=merged.get("model_arch", "v4"),

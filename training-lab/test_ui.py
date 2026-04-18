@@ -17,17 +17,3 @@ print(f"  ② PPO update   6ep  batch=8192")
 print(f"      Result: loss=1.2345  (π=0.123 v=1.111)  [{_format_time(10.0)}]")
 
 print()
-# Simulate memory stats table
-stats = {"rss_mb": 745, "footprint_mb": 3994, "py_heap_mb": 4, "py_heap_peak_mb": 852, "mps_alloc_mb": 15, "mps_driver_mb": 62}
-deltas = {"rss_mb": -71, "footprint_mb": 102, "py_heap_mb": 0, "py_heap_peak_mb": 0, "mps_alloc_mb": 0, "mps_driver_mb": -51}
-
-print("  Memory ──────────────────────────────────────────")
-row = []
-for k in stats:
-    d = deltas.get(k, 0)
-    dstr = f"({d:+.0f})" if d != 0 else ""
-    row.append(f"{k.replace('_mb', '')}: {stats[k]:.0f}MB{dstr}")
-
-for i in range(0, len(row), 4):
-    print(f"    {' │ '.join(f'{item:<18}' for item in row[i:i+4])}")
-print()

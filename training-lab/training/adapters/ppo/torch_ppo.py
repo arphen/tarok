@@ -88,6 +88,9 @@ class PPOAdapter(PPOPort):
         self._network = self._compute.prepare_network(self._network)
         self._optimizer = optim.Adam(self._network.parameters(), lr=config.lr)
 
+    def set_entropy_coef(self, coef: float) -> None:
+        self._entropy_coef = float(coef)
+
     def set_lr(self, lr: float) -> None:
         assert self._optimizer is not None
         for param_group in self._optimizer.param_groups:

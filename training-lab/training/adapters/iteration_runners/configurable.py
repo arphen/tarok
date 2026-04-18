@@ -73,6 +73,7 @@ class ConfigurableIterationRunner(IterationRunnerPort):
         prev_placement: float,
         iter_lr: float | None,
         iter_imitation_coef: float | None,
+        iter_entropy_coef: float | None,
         seats_override: str | None,
         run_benchmark: bool,
     ) -> IterationResult:
@@ -88,6 +89,7 @@ class ConfigurableIterationRunner(IterationRunnerPort):
             prev_placement=prev_placement,
             iter_lr=iter_lr,
             iter_imitation_coef=iter_imitation_coef,
+            iter_entropy_coef=iter_entropy_coef,
             seats_override=seats_override,
             run_benchmark=run_benchmark,
         )

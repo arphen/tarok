@@ -21,6 +21,7 @@ class IterationResult:
     mean_scores: tuple[float, float, float, float] = (0.0, 0.0, 0.0, 0.0)
     # Per-opponent-seat game outcomes: {seat_idx: (learner_wins, opp_wins, draws)}
     seat_outcomes: dict[int, tuple[int, int, int]] = field(default_factory=dict)
+    learner_elo: float = 0.0
 
     @property
     def total_time(self) -> float:

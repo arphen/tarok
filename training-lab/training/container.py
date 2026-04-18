@@ -6,10 +6,13 @@ Swap any adapter here to change behavior (e.g. mock presenter for tests).
 
 from __future__ import annotations
 
+from training.entities.training_config import TrainingConfig
 from training.ports import (
     BenchmarkPort,
     ConfigPort,
+    ImitationCoefPolicyPort,
     IterationRunnerPort,
+    LearningRatePolicyPort,
     ModelPort,
     PPOPort,
     PresenterPort,
@@ -48,6 +51,27 @@ def _default_presenter() -> PresenterPort:
     return TerminalPresenter()
 
 
+def _default_entropy_policy(config: TrainingConfig | None = None):
+    if config is not None and config.entropy_schedule == "elo":
+        from training.use_cases.train_model.policies import EloDecayEntropyPolicy
+        return EloDecayEntropyPolicy()
+    from training.use_cases.train_model.policies import DefaultEntropyCoefPolicy
+    return DefaultEntropyCoefPolicy()
+
+
+def _default_imitation_policy(config: TrainingConfig | None = None) -> ImitationCoefPolicyPort:
+    if config is not None and config.imitation_schedule == "gaussian_elo":
+        from training.use_cases.train_model.policies import EloGaussianILPolicy
+        return EloGaussianILPolicy()
+    from training.adapters.imitation_coef_policy import ScheduledImitationCoefPolicy
+    return ScheduledImitationCoefPolicy()
+
+
+def _default_lr_policy() -> LearningRatePolicyPort:
+    from training.adapters.learning_rate_policy import LeagueEloLearningRatePolicy
+    return LeagueEloLearningRatePolicy()
+
+
 def _default_iteration_runner(
     selfplay: SelfPlayPort,
     ppo: PPOPort,
@@ -73,6 +97,8 @@ class Container:
         benchmark: BenchmarkPort | None = None,
         ppo: PPOPort | None = None,
         iteration_runner: IterationRunnerPort | None = None,
+        imitation_policy: ImitationCoefPolicyPort | None = None,
+        lr_policy: LearningRatePolicyPort | None = None,
         model: ModelPort | None = None,
         config_loader: ConfigPort | None = None,
         presenter: PresenterPort | None = None,
@@ -81,6 +107,8 @@ class Container:
         self._benchmark = benchmark
         self._ppo = ppo
         self._iteration_runner = iteration_runner
+        self._imitation_policy = imitation_policy
+        self._lr_policy = lr_policy
         self._model = model
         self._config_loader = config_loader
         self._presenter = presenter
@@ -122,6 +150,18 @@ class Container:
         return self._model
 
     @property
+    def lr_policy(self) -> LearningRatePolicyPort:
+        if self._lr_policy is None:
+            self._lr_policy = _default_lr_policy()
+        return self._lr_policy
+
+    @property
+    def imitation_policy(self) -> ImitationCoefPolicyPort:
+        if self._imitation_policy is None:
+            self._imitation_policy = _default_imitation_policy()
+        return self._imitation_policy
+
+    @property
     def config_loader(self) -> ConfigPort:
         if self._config_loader is None:
             self._config_loader = _default_config()
@@ -139,10 +179,13 @@ class Container:
     def resolve_config(self) -> ResolveConfig:
         return ResolveConfig(self.config_loader)
 
-    def train_model(self) -> TrainModel:
+    def train_model(self, config: TrainingConfig | None = None) -> TrainModel:
         return TrainModel(
             iteration_runner=self.iteration_runner,
             benchmark=self.benchmark,
             model=self.model,
             presenter=self.presenter,
+            lr_policy=self.lr_policy,
+            imitation_policy=self._imitation_policy or _default_imitation_policy(config),
+            entropy_policy=_default_entropy_policy(config),
         )

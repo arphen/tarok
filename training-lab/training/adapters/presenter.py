@@ -117,10 +117,12 @@ class TerminalPresenter(PresenterPort):
         config: TrainingConfig,
         iter_lr: float | None = None,
         iter_imitation_coef: float | None = None,
+        iter_entropy_coef: float | None = None,
     ) -> None:
         lr_tag = f"  lr={iter_lr:.1e}" if iter_lr is not None and config.lr_schedule != "constant" else ""
         il_tag = f"  il={iter_imitation_coef:.4f}" if iter_imitation_coef is not None else ""
-        print(f"  ② PPO update   {config.ppo_epochs}ep  batch={config.batch_size}{lr_tag}{il_tag}")
+        ent_tag = f"  ent={iter_entropy_coef:.5f}" if iter_entropy_coef is not None and config.entropy_schedule != "constant" else ""
+        print(f"  ② PPO update   {config.ppo_epochs}ep  batch={config.batch_size}{lr_tag}{il_tag}{ent_tag}")
         print("      stats: ", end="", flush=True)
 
     def on_ppo_done(self, metrics: dict[str, float], elapsed: float) -> None:
@@ -178,50 +180,6 @@ class TerminalPresenter(PresenterPort):
 
     def on_league_snapshot_added(self, iteration: int, path: str) -> None:
         print(f"  📸 snapshot saved → {path}")
-
-    # ── Memory ────────────────────────────────────────────────────────────
-
-    def on_memory_stats(
-        self,
-        iteration: int,
-        stats: dict[str, float],
-        deltas: dict[str, float] | None = None,
-    ) -> None:
-        del iteration
-
-        def _fmt(name: str, with_delta: bool = True) -> str:
-            v = stats.get(name)
-            if v is None:
-                return ""
-            short = name.replace("_mb", "").replace("py_heap", "heap").replace("mps_alloc", "mps_a").replace("mps_driver", "mps_d")
-            if not with_delta or deltas is None or name not in deltas:
-                return f"{short}: {v:.0f}MB"
-            d = deltas[name]
-            dstr = f"{d:+.0f}" if d != 0 else "+0"
-            return f"{short}: {v:.0f}MB({dstr})"
-
-        parts = [
-            _fmt("rss_mb"),
-            _fmt("footprint_mb"),
-            _fmt("compressed_mb"),
-            _fmt("py_heap_mb"),
-            _fmt("py_heap_peak_mb", with_delta=False),
-        ]
-        for extra in ("mps_alloc_mb", "mps_driver_mb", "cuda_alloc_mb", "cuda_reserved_mb"):
-            if extra in stats:
-                parts.append(_fmt(extra))
-
-        parts = [p for p in parts if p]
-        if parts:
-            print("  mem │ ", end="")
-            for i, p in enumerate(parts):
-                if i > 0 and i % 4 == 0:
-                    print("\n      │ ", end="")
-                elif i > 0:
-                    print("   ", end="")
-                print(f"{p:<22}", end="")
-            print()
-        print()
 
     # ── Completion ────────────────────────────────────────────────────────
 

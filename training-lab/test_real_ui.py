@@ -17,6 +17,3 @@ p.on_benchmark_start(cfg)
 p.on_benchmark_done(2.532, 4.2)
 p.on_iteration_done(2.600, 2.532, 65.2)
 
-stats = {"rss_mb": 745, "footprint_mb": 3994, "py_heap_mb": 4, "py_heap_peak_mb": 852, "mps_alloc_mb": 15, "mps_driver_mb": 62}
-deltas = {"rss_mb": -71, "footprint_mb": 102, "py_heap_mb": 0, "py_heap_peak_mb": 0, "mps_alloc_mb": 0, "mps_driver_mb": -51}
-p.on_memory_stats(2, stats, deltas)

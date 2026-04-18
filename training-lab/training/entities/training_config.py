@@ -29,16 +29,18 @@ class TrainingConfig:
     save_dir: str = "data/checkpoints/training_run"
     concurrency: int = 128
     imitation_coef: float = 0.3
-    imitation_schedule: str = "constant"  # constant | linear | cosine
+    imitation_schedule: str = "constant"  # constant | linear | cosine | gaussian_elo
     imitation_coef_min: float = 0.0
+    imitation_center_elo: float = 1500.0   # gaussian_elo: bell curve centre
+    imitation_width_elo: float = 250.0     # gaussian_elo: bell curve σ
     # PPO hyperparams (all have sensible defaults)
     gamma: float = 0.99
     gae_lambda: float = 0.95
     clip_epsilon: float = 0.2
     value_coef: float = 0.5
     entropy_coef: float = 0.01
-    memory_telemetry: bool = True
-    memory_telemetry_every: int = 1
+    entropy_schedule: str = "constant"  # constant | linear | cosine
+    entropy_coef_min: float = 0.005
     iteration_runner_mode: str = "in-process"
     iteration_runner_restart_every: int = 10
     model_arch: str = "v4"
@@ -69,23 +71,14 @@ class TrainingConfig:
     def effective_lr_min(self) -> float:
         return self.lr_min if self.lr_min is not None else self.lr / 10
 
-    def scheduled_imitation_coef(self, iteration_1based: int) -> float:
-        """Imitation/oracle-distillation coef for a 1-based training iteration."""
-        return scheduled_coef(
-            iteration=max(0, iteration_1based - 1),
-            total_iterations=self.iterations,
-            coef_max=self.imitation_coef,
-            coef_min=self.imitation_coef_min,
-            schedule=self.imitation_schedule,
-        )
-
 
 def scheduled_lr(
     iteration: int, total_iterations: int,
     lr_max: float, lr_min: float, schedule: str,
 ) -> float:
     """Compute learning rate for a given iteration."""
-    if schedule == "constant" or total_iterations <= 1:
+    # "elo" means the elo-based decay policy handles the schedule; use constant base.
+    if schedule in ("constant", "elo") or total_iterations <= 1:
         return lr_max
     frac = iteration / (total_iterations - 1)  # 0.0 → 1.0
     if schedule == "linear":

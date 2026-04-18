@@ -58,6 +58,19 @@ def test_league_pool_creates_entries_from_config() -> None:
     assert pool.entries[0].elo == 1500.0
 
 
+def test_league_pool_uses_opponent_initial_elo() -> None:
+    cfg = LeagueConfig(
+        enabled=True,
+        opponents=(
+            LeagueOpponent(name="StockSkis", type="bot_v1", initial_elo=800.0),
+            LeagueOpponent(name="M6", type="bot_m6", initial_elo=2000.0),
+        ),
+    )
+    pool = LeaguePool(config=cfg)
+
+    assert [e.elo for e in pool.entries] == [800.0, 2000.0]
+
+
 def test_league_pool_entry_outplace_rate_default_is_half() -> None:
     # With 0 games played, outplace_rate defaults to 0.5 (neutral prior).
     entry = LeaguePoolEntry(opponent=LeagueOpponent("A", "bot_v1"))
@@ -128,6 +141,38 @@ def test_sampling_weights_pfsp_math() -> None:
         LeaguePoolEntry(opponent=LeagueOpponent("B", "bot_v5"), elo=1700.0),
     ]
     raw = [math.exp(alpha * (e.elo - 1500.0) / 400.0) for e in pool.entries]
+    expected = [w / sum(raw) for w in raw]
+
+    weights = pool.sampling_weights()
+    assert weights == pytest.approx(expected, rel=1e-6)
+
+
+def test_sampling_weights_matchmaking_prefers_near_learner() -> None:
+    cfg = LeagueConfig(sampling="matchmaking")
+    pool = LeaguePool(config=cfg)
+    pool.learner_elo = 1200.0
+    pool.entries = [
+        LeaguePoolEntry(opponent=LeagueOpponent("Near", "bot_v1"), elo=1200.0),
+        LeaguePoolEntry(opponent=LeagueOpponent("Mid", "bot_v5"), elo=1400.0),
+        LeaguePoolEntry(opponent=LeagueOpponent("Far", "bot_m6"), elo=2000.0),
+    ]
+
+    weights = pool.sampling_weights()
+    assert weights[0] > weights[1] > weights[2]
+    assert sum(weights) == pytest.approx(1.0)
+
+
+def test_sampling_weights_matchmaking_math() -> None:
+    cfg = LeagueConfig(sampling="matchmaking")
+    pool = LeaguePool(config=cfg)
+    pool.learner_elo = 1500.0
+    pool.entries = [
+        LeaguePoolEntry(opponent=LeagueOpponent("A", "bot_v1"), elo=1500.0),
+        LeaguePoolEntry(opponent=LeagueOpponent("B", "bot_v5"), elo=1700.0),
+    ]
+
+    window = 200.0
+    raw = [math.exp(-(((e.elo - pool.learner_elo) ** 2) / (2 * (window ** 2)))) for e in pool.entries]
     expected = [w / sum(raw) for w in raw]
 
     weights = pool.sampling_weights()
@@ -220,7 +265,7 @@ def test_update_league_elo_learner_wins_all() -> None:
     )
 
     assert pool.learner_elo > 1500.0
-    assert pool.entries[0].elo < 1500.0
+    assert pool.entries[0].elo == 1500.0
     assert pool.entries[0].games_played == 10
     assert pool.entries[0].learner_outplaces == 10
     assert pool.entries[0].outplace_rate == 1.0
@@ -246,8 +291,8 @@ def test_update_league_elo_learner_loses_to_multiple_seats() -> None:
     assert pool.entries[1].games_played == 10
     assert pool.entries[0].outplace_rate == 0.0
     assert pool.entries[1].outplace_rate == 0.0
-    assert pool.entries[0].elo > 1500.0
-    assert pool.entries[1].elo > 1500.0
+    assert pool.entries[0].elo == 1500.0
+    assert pool.entries[1].elo == 1500.0
     assert pool.learner_elo < 1500.0
 
 
@@ -300,7 +345,7 @@ def test_update_league_elo_exact_k_factor() -> None:
     )
 
     assert pool.learner_elo == pytest.approx(1516.0, abs=1e-4)
-    assert pool.entries[0].elo == pytest.approx(1484.0, abs=1e-4)
+    assert pool.entries[0].elo == pytest.approx(1500.0, abs=1e-4)
 
 
 def test_update_league_elo_ignores_unknown_token() -> None:

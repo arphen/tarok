@@ -142,19 +142,6 @@ Examples:
         help="Final imitation coefficient for linear/cosine schedules",
     )
     parser.add_argument(
-        "--memory-telemetry",
-        type=str,
-        choices=["true", "false"],
-        default=None,
-        help="Enable per-iteration memory telemetry output",
-    )
-    parser.add_argument(
-        "--memory-telemetry-every",
-        type=int,
-        default=None,
-        help="Print memory telemetry every N iterations",
-    )
-    parser.add_argument(
         "--iteration-runner-mode",
         type=str,
         choices=["in-process", "spawn"],
@@ -200,12 +187,6 @@ def main() -> None:
         "human_data_dir": _resolve_path(getattr(args, "human_data", None)),
         "imitation_schedule": getattr(args, "imitation_schedule", None),
         "imitation_coef_min": getattr(args, "imitation_coef_min", None),
-        "memory_telemetry": (
-            True if args.memory_telemetry == "true"
-            else False if args.memory_telemetry == "false"
-            else None
-        ),
-        "memory_telemetry_every": getattr(args, "memory_telemetry_every", None),
         "iteration_runner_mode": getattr(args, "iteration_runner_mode", None),
         "iteration_runner_restart_every": getattr(args, "iteration_runner_restart_every", None),
     }
@@ -247,11 +228,14 @@ def main() -> None:
                 device=config.device,
                 save_dir=config.save_dir,
                 concurrency=config.concurrency,
+                entropy_coef=config.entropy_coef,
                 imitation_coef=config.imitation_coef,
                 imitation_schedule=config.imitation_schedule,
                 imitation_coef_min=config.imitation_coef_min,
-                memory_telemetry=config.memory_telemetry,
-                memory_telemetry_every=config.memory_telemetry_every,
+                imitation_center_elo=config.imitation_center_elo,
+                imitation_width_elo=config.imitation_width_elo,
+                entropy_schedule=config.entropy_schedule,
+                entropy_coef_min=config.entropy_coef_min,
                 iteration_runner_mode=config.iteration_runner_mode,
                 iteration_runner_restart_every=config.iteration_runner_restart_every,
                 model_arch=identity.model_arch,
@@ -291,11 +275,14 @@ def main() -> None:
         device=config.device,
         save_dir=save_dir,
         concurrency=config.concurrency,
+        entropy_coef=config.entropy_coef,
         imitation_coef=config.imitation_coef,
         imitation_schedule=config.imitation_schedule,
         imitation_coef_min=config.imitation_coef_min,
-        memory_telemetry=config.memory_telemetry,
-        memory_telemetry_every=config.memory_telemetry_every,
+        imitation_center_elo=config.imitation_center_elo,
+        imitation_width_elo=config.imitation_width_elo,
+        entropy_schedule=config.entropy_schedule,
+        entropy_coef_min=config.entropy_coef_min,
         iteration_runner_mode=config.iteration_runner_mode,
         iteration_runner_restart_every=config.iteration_runner_restart_every,
         model_arch=config.model_arch,
@@ -306,7 +293,7 @@ def main() -> None:
     device = _detect_device(config.device)
 
     # ── Run ─────────────────────────────────────────────────────────
-    container.train_model().execute(config, identity, weights, device)
+    container.train_model(config).execute(config, identity, weights, device)
 
 
 if __name__ == "__main__":

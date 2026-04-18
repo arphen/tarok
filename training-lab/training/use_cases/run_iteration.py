@@ -45,6 +45,7 @@ class RunIteration:
         prev_placement: float,
         iter_lr: float | None = None,
         iter_imitation_coef: float | None = None,
+        iter_entropy_coef: float | None = None,
         seats_override: str | None = None,
         run_benchmark: bool = True,
     ) -> tuple[IterationResult, dict]:
@@ -110,7 +111,9 @@ class RunIteration:
             self._ppo.set_lr(iter_lr)
         if iter_imitation_coef is not None:
             self._ppo.set_imitation_coef(iter_imitation_coef)
-        self._presenter.on_ppo_start(config, iter_lr=iter_lr, iter_imitation_coef=iter_imitation_coef)
+        if iter_entropy_coef is not None:
+            self._ppo.set_entropy_coef(iter_entropy_coef)
+        self._presenter.on_ppo_start(config, iter_lr=iter_lr, iter_imitation_coef=iter_imitation_coef, iter_entropy_coef=iter_entropy_coef)
         t0 = time.time()
         metrics, new_weights = self._ppo.update(raw, nn_seats)
         ppo_time = time.time() - t0

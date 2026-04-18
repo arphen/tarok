@@ -51,6 +51,7 @@ class _IterationTask:
     prev_placement: float
     iter_lr: float | None
     iter_imitation_coef: float | None
+    iter_entropy_coef: float | None
     seats_override: str | None
     run_benchmark: bool
 
@@ -95,8 +96,8 @@ class _QueuePresenter(PresenterPort):
     def on_selfplay_done(self, n_total, n_learner, elapsed):
         self._send("on_selfplay_done", n_total, n_learner, elapsed)
 
-    def on_ppo_start(self, config, iter_lr=None, iter_imitation_coef=None):
-        self._send("on_ppo_start", config, iter_lr=iter_lr, iter_imitation_coef=iter_imitation_coef)
+    def on_ppo_start(self, config, iter_lr=None, iter_imitation_coef=None, iter_entropy_coef=None):
+        self._send("on_ppo_start", config, iter_lr=iter_lr, iter_imitation_coef=iter_imitation_coef, iter_entropy_coef=iter_entropy_coef)
 
     def on_ppo_done(self, metrics, elapsed):
         self._send("on_ppo_done", metrics, elapsed)
@@ -115,9 +116,6 @@ class _QueuePresenter(PresenterPort):
 
     def on_training_complete(self, run):
         pass
-
-    def on_memory_stats(self, iteration, stats, deltas=None):
-        self._send("on_memory_stats", iteration, stats, deltas)
 
 
 def _worker_main(
@@ -151,6 +149,7 @@ def _worker_main(
                 prev_placement=task.prev_placement,
                 iter_lr=task.iter_lr,
                 iter_imitation_coef=task.iter_imitation_coef,
+                iter_entropy_coef=task.iter_entropy_coef,
                 seats_override=task.seats_override,
                 run_benchmark=task.run_benchmark,
             )
@@ -202,6 +201,7 @@ class SpawnIterationRunner(IterationRunnerPort):
         prev_placement: float,
         iter_lr: float | None,
         iter_imitation_coef: float | None,
+        iter_entropy_coef: float | None,
         seats_override: str | None,
         run_benchmark: bool,
     ) -> IterationResult:
@@ -221,6 +221,7 @@ class SpawnIterationRunner(IterationRunnerPort):
                 prev_placement=prev_placement,
                 iter_lr=iter_lr,
                 iter_imitation_coef=iter_imitation_coef,
+                iter_entropy_coef=iter_entropy_coef,
                 seats_override=seats_override,
                 run_benchmark=run_benchmark,
             )

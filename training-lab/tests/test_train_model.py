@@ -9,10 +9,11 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 from training.entities.iteration_result import IterationResult
-from training.entities.league import LeagueConfig
+from training.entities.league import LeagueConfig, LeagueOpponent
 from training.entities.model_identity import ModelIdentity
-from training.entities.training_config import TrainingConfig
+from training.entities.training_config import TrainingConfig, scheduled_lr
 from training.use_cases.train_model import TrainModel
+from training.use_cases.train_model.policies import EloDecayEntropyPolicy, EloGaussianILPolicy, elo_based_lr
 
 
 @pytest.fixture
@@ -60,8 +61,7 @@ def base_config(tmp_path: Path) -> TrainingConfig:
         iterations=2,
         bench_games=10,
         benchmark_checkpoints=(),
-        memory_telemetry=False,
-        league=None,
+        league=LeagueConfig(enabled=True),
     )
 
 
@@ -76,9 +76,7 @@ def identity() -> ModelIdentity:
     )
 
 
-@patch("training.use_cases.train_model._collect_memory_stats")
 def test_train_model_basic_execution_flow(
-    mock_mem_stats: MagicMock,
     mock_iteration_runner: MagicMock,
     mock_benchmark: MagicMock,
     mock_model_port: MagicMock,
@@ -86,7 +84,7 @@ def test_train_model_basic_execution_flow(
     base_config: TrainingConfig,
     identity: ModelIdentity,
 ) -> None:
-    """Verifies setup -> benchmark -> iterations -> teardown flow without league."""
+    """Verifies setup -> benchmark -> iterations -> teardown flow."""
     use_case = TrainModel(
         iteration_runner=mock_iteration_runner,
         benchmark=mock_benchmark,
@@ -110,21 +108,99 @@ def test_train_model_basic_execution_flow(
     assert mock_iteration_runner.run_iteration.call_count == 2
     assert len(run_result.results) == 2
 
-    # No memory telemetry calls (disabled in fixture)
-    mock_mem_stats.assert_not_called()
-
     # Always tears down and finalizes run
     mock_iteration_runner.teardown.assert_called_once()
     mock_model_port.copy_best.assert_called_once()
     mock_presenter.on_training_complete.assert_called_once_with(run_result)
 
 
-@patch("training.use_cases.train_model.UpdateLeagueElo")
-@patch("training.use_cases.train_model.SampleLeagueSeats")
-@patch("training.use_cases.train_model.shutil.copy2")
-@patch("training.use_cases.train_model._collect_memory_stats")
+def test_train_model_requires_enabled_league(
+    mock_iteration_runner: MagicMock,
+    mock_benchmark: MagicMock,
+    mock_model_port: MagicMock,
+    mock_presenter: MagicMock,
+    base_config: TrainingConfig,
+    identity: ModelIdentity,
+) -> None:
+    use_case = TrainModel(
+        iteration_runner=mock_iteration_runner,
+        benchmark=mock_benchmark,
+        model=mock_model_port,
+        presenter=mock_presenter,
+    )
+
+    cfg = replace(base_config, league=None)
+    with pytest.raises(ValueError, match="requires league.enabled=true"):
+        use_case.execute(config=cfg, identity=identity, weights={}, device="cpu")
+
+    mock_iteration_runner.teardown.assert_not_called()
+
+
+def test_train_model_uses_injected_lr_policy(
+    mock_iteration_runner: MagicMock,
+    mock_benchmark: MagicMock,
+    mock_model_port: MagicMock,
+    mock_presenter: MagicMock,
+    base_config: TrainingConfig,
+    identity: ModelIdentity,
+) -> None:
+    lr_policy = MagicMock()
+    lr_policy.compute.return_value = 1.23e-4
+
+    use_case = TrainModel(
+        iteration_runner=mock_iteration_runner,
+        benchmark=mock_benchmark,
+        model=mock_model_port,
+        presenter=mock_presenter,
+        lr_policy=lr_policy,
+    )
+
+    use_case.execute(config=base_config, identity=identity, weights={}, device="cpu")
+
+    assert lr_policy.compute.call_count == 2
+    first_call = lr_policy.compute.call_args_list[0]
+    assert first_call.kwargs["config"] == base_config
+    assert first_call.kwargs["iteration"] == 1
+    assert first_call.kwargs["learner_elo"] == pytest.approx(800.0)
+
+    first_iter_call = mock_iteration_runner.run_iteration.call_args_list[0]
+    assert first_iter_call.kwargs["iter_lr"] == pytest.approx(1.23e-4)
+
+
+def test_train_model_uses_injected_imitation_policy(
+    mock_iteration_runner: MagicMock,
+    mock_benchmark: MagicMock,
+    mock_model_port: MagicMock,
+    mock_presenter: MagicMock,
+    base_config: TrainingConfig,
+    identity: ModelIdentity,
+) -> None:
+    imitation_policy = MagicMock()
+    imitation_policy.compute.return_value = 0.77
+
+    use_case = TrainModel(
+        iteration_runner=mock_iteration_runner,
+        benchmark=mock_benchmark,
+        model=mock_model_port,
+        presenter=mock_presenter,
+        imitation_policy=imitation_policy,
+    )
+
+    use_case.execute(config=base_config, identity=identity, weights={}, device="cpu")
+
+    assert imitation_policy.compute.call_count == 2
+    first_call = imitation_policy.compute.call_args_list[0]
+    assert first_call.kwargs["config"] == base_config
+    assert first_call.kwargs["iteration"] == 1
+
+    first_iter_call = mock_iteration_runner.run_iteration.call_args_list[0]
+    assert first_iter_call.kwargs["iter_imitation_coef"] == pytest.approx(0.77)
+
+
+@patch("training.use_cases.train_model.orchestrator.UpdateLeagueElo")
+@patch("training.use_cases.train_model.orchestrator.SampleLeagueSeats")
+@patch("training.use_cases.train_model.orchestrator.shutil.copy2")
 def test_train_model_with_league_and_snapshots(
-    mock_mem_stats: MagicMock,
     mock_copy2: MagicMock,
     MockSampleSeats: MagicMock,
     MockUpdateElo: MagicMock,
@@ -196,12 +272,9 @@ def test_train_model_with_league_and_snapshots(
 
     # Teardown still called in successful path.
     mock_iteration_runner.teardown.assert_called_once()
-    mock_mem_stats.assert_not_called()
 
 
-@patch("training.use_cases.train_model._collect_memory_stats")
 def test_train_model_ensures_teardown_on_error(
-    mock_mem_stats: MagicMock,
     mock_iteration_runner: MagicMock,
     mock_benchmark: MagicMock,
     mock_model_port: MagicMock,
@@ -227,4 +300,306 @@ def test_train_model_ensures_teardown_on_error(
     # No successful completion path after crash.
     mock_model_port.copy_best.assert_not_called()
     mock_presenter.on_training_complete.assert_not_called()
-    mock_mem_stats.assert_not_called()
+
+
+@patch("training.use_cases.train_model.orchestrator.UpdateLeagueElo")
+@patch("training.use_cases.train_model.orchestrator.SampleLeagueSeats")
+@patch("training.use_cases.train_model.orchestrator.shutil.copy2")
+def test_train_model_caps_active_nn_snapshots(
+    mock_copy2: MagicMock,
+    MockSampleSeats: MagicMock,
+    MockUpdateElo: MagicMock,
+    mock_iteration_runner: MagicMock,
+    mock_benchmark: MagicMock,
+    mock_model_port: MagicMock,
+    mock_presenter: MagicMock,
+    base_config: TrainingConfig,
+    identity: ModelIdentity,
+) -> None:
+    cfg = replace(
+        base_config,
+        iterations=5,
+        league=LeagueConfig(
+            enabled=True,
+            snapshot_interval=1,
+            max_active_snapshots=2,
+            opponents=(LeagueOpponent(name="Anchor", type="bot_v1"),),
+        ),
+    )
+
+    sampled_checkpoint_counts: list[int] = []
+    sampled_total_counts: list[int] = []
+
+    mock_sampler = MockSampleSeats.return_value
+    mock_updater = MockUpdateElo.return_value
+
+    def _bump_elo(pool, _seat_config_used, _seat_outcomes) -> None:
+        pool.learner_elo += 60.0
+
+    mock_updater.execute.side_effect = _bump_elo
+
+    def _capture_pool(pool) -> str:
+        sampled_total_counts.append(len(pool.entries))
+        sampled_checkpoint_counts.append(
+            sum(1 for entry in pool.entries if entry.opponent.type == "nn_checkpoint")
+        )
+        return "nn,bot_v1,nn,nn"
+
+    mock_sampler.execute.side_effect = _capture_pool
+
+    use_case = TrainModel(
+        iteration_runner=mock_iteration_runner,
+        benchmark=mock_benchmark,
+        model=mock_model_port,
+        presenter=mock_presenter,
+    )
+
+    use_case.execute(config=cfg, identity=identity, weights={}, device="cpu")
+
+    # Pool seen before each iteration should cap checkpoints at configured max,
+    # the heuristic anchor remains present.
+    assert sampled_checkpoint_counts == [0, 1, 2, 2, 2]
+    assert sampled_total_counts == [1, 2, 3, 3, 3]
+
+    assert mock_updater.execute.call_count == 5
+    assert mock_copy2.call_count == 5
+    assert mock_presenter.on_league_snapshot_added.call_count == 5
+
+
+@patch("training.use_cases.train_model.orchestrator.UpdateLeagueElo")
+@patch("training.use_cases.train_model.orchestrator.SampleLeagueSeats")
+@patch("training.use_cases.train_model.orchestrator.shutil.copy2")
+def test_train_model_snapshot_admission_requires_elo_milestone(
+    mock_copy2: MagicMock,
+    MockSampleSeats: MagicMock,
+    MockUpdateElo: MagicMock,
+    mock_iteration_runner: MagicMock,
+    mock_benchmark: MagicMock,
+    mock_model_port: MagicMock,
+    mock_presenter: MagicMock,
+    base_config: TrainingConfig,
+    identity: ModelIdentity,
+) -> None:
+    cfg = replace(
+        base_config,
+        iterations=4,
+        league=LeagueConfig(
+            enabled=True,
+            snapshot_interval=1,
+            opponents=(LeagueOpponent(name="Anchor", type="bot_v1"),),
+        ),
+    )
+
+    mock_sampler = MockSampleSeats.return_value
+    mock_sampler.execute.return_value = "nn,bot_v1,nn,nn"
+
+    # Simulate plateau: learner Elo does not improve after first admission.
+    mock_updater = MockUpdateElo.return_value
+    mock_updater.execute.side_effect = lambda *_args, **_kwargs: None
+
+    use_case = TrainModel(
+        iteration_runner=mock_iteration_runner,
+        benchmark=mock_benchmark,
+        model=mock_model_port,
+        presenter=mock_presenter,
+    )
+
+    use_case.execute(config=cfg, identity=identity, weights={}, device="cpu")
+
+    # First snapshot is admitted (no baseline yet), then blocked by +50 Elo gate.
+    assert mock_copy2.call_count == 1
+    assert mock_presenter.on_league_snapshot_added.call_count == 1
+
+
+@patch("training.use_cases.train_model.orchestrator.UpdateLeagueElo")
+@patch("training.use_cases.train_model.orchestrator.SampleLeagueSeats")
+@patch("training.use_cases.train_model.orchestrator.shutil.copy2")
+def test_train_model_snapshot_admission_uses_configured_elo_delta(
+    mock_copy2: MagicMock,
+    MockSampleSeats: MagicMock,
+    MockUpdateElo: MagicMock,
+    mock_iteration_runner: MagicMock,
+    mock_benchmark: MagicMock,
+    mock_model_port: MagicMock,
+    mock_presenter: MagicMock,
+    base_config: TrainingConfig,
+    identity: ModelIdentity,
+) -> None:
+    cfg = replace(
+        base_config,
+        iterations=3,
+        league=LeagueConfig(
+            enabled=True,
+            snapshot_interval=1,
+            snapshot_elo_delta=10.0,
+            opponents=(LeagueOpponent(name="Anchor", type="bot_v1"),),
+        ),
+    )
+
+    mock_sampler = MockSampleSeats.return_value
+    mock_sampler.execute.return_value = "nn,bot_v1,nn,nn"
+
+    mock_updater = MockUpdateElo.return_value
+
+    def _bump_elo(pool, _seat_config_used, _seat_outcomes) -> None:
+        pool.learner_elo += 20.0
+
+    mock_updater.execute.side_effect = _bump_elo
+
+    use_case = TrainModel(
+        iteration_runner=mock_iteration_runner,
+        benchmark=mock_benchmark,
+        model=mock_model_port,
+        presenter=mock_presenter,
+    )
+
+    use_case.execute(config=cfg, identity=identity, weights={}, device="cpu")
+
+    # +20 Elo gains clear configured +10 gate each iteration.
+    assert mock_copy2.call_count == 3
+    assert mock_presenter.on_league_snapshot_added.call_count == 3
+
+
+@patch("training.use_cases.train_model.orchestrator.UpdateLeagueElo")
+@patch("training.use_cases.train_model.orchestrator.SampleLeagueSeats")
+def test_train_model_elo_based_lr_decays_smoothly(
+    MockSampleSeats: MagicMock,
+    MockUpdateElo: MagicMock,
+    mock_iteration_runner: MagicMock,
+    mock_benchmark: MagicMock,
+    mock_model_port: MagicMock,
+    mock_presenter: MagicMock,
+    base_config: TrainingConfig,
+    identity: ModelIdentity,
+) -> None:
+    cfg = replace(
+        base_config,
+        iterations=3,
+        league=LeagueConfig(
+            enabled=True,
+            snapshot_interval=999,
+            opponents=(LeagueOpponent(name="Anchor", type="bot_v1"),),
+        ),
+    )
+
+    mock_sampler = MockSampleSeats.return_value
+    mock_sampler.execute.return_value = "nn,bot_v1,nn,nn"
+
+    mock_updater = MockUpdateElo.return_value
+
+    def _bump_elo(pool, _seat_config_used, _seat_outcomes) -> None:
+        pool.learner_elo += 600.0
+
+    mock_updater.execute.side_effect = _bump_elo
+
+    use_case = TrainModel(
+        iteration_runner=mock_iteration_runner,
+        benchmark=mock_benchmark,
+        model=mock_model_port,
+        presenter=mock_presenter,
+    )
+
+    use_case.execute(config=cfg, identity=identity, weights={}, device="cpu")
+
+    lrs = [call.kwargs["iter_lr"] for call in mock_iteration_runner.run_iteration.call_args_list]
+    assert len(lrs) == 3
+    assert lrs[0] == pytest.approx(cfg.lr, rel=1e-9)
+    assert lrs[0] > lrs[1] > lrs[2]
+    assert lrs[2] == pytest.approx(cfg.effective_lr_min, rel=1e-9)
+
+
+def test_elo_based_lr_hits_expected_floor_and_ceiling_values() -> None:
+    assert elo_based_lr(current_elo=800.0, base_lr=0.0003, min_lr=0.00001) == pytest.approx(0.0003)
+    assert elo_based_lr(current_elo=2000.0, base_lr=0.0003, min_lr=0.00001) == pytest.approx(0.00001)
+
+
+def test_scheduled_lr_elo_is_passthrough() -> None:
+    # Guard against accidental double-decay: elo schedule must not apply iteration decay.
+    lr0 = scheduled_lr(iteration=0, total_iterations=100, lr_max=0.0003, lr_min=0.00001, schedule="elo")
+    lr50 = scheduled_lr(iteration=50, total_iterations=100, lr_max=0.0003, lr_min=0.00001, schedule="elo")
+    lr99 = scheduled_lr(iteration=99, total_iterations=100, lr_max=0.0003, lr_min=0.00001, schedule="elo")
+
+    assert lr0 == pytest.approx(0.0003, rel=1e-12)
+    assert lr50 == pytest.approx(0.0003, rel=1e-12)
+    assert lr99 == pytest.approx(0.0003, rel=1e-12)
+
+
+# ---------------------------------------------------------------------------
+# EloGaussianILPolicy
+# ---------------------------------------------------------------------------
+
+
+def test_elo_gaussian_il_peaks_at_centre() -> None:
+    cfg = TrainingConfig(imitation_coef=0.05, imitation_center_elo=1500.0, imitation_width_elo=250.0)
+    policy = EloGaussianILPolicy(floor=0.0)
+    coef = policy.compute(config=cfg, iteration=1, learner_elo=1500.0)
+    assert coef == pytest.approx(0.05, rel=1e-6)
+
+
+def test_elo_gaussian_il_near_zero_at_floor_elo() -> None:
+    # At 800 Elo (700 below centre, width=250) the Gaussian value is negligible.
+    cfg = TrainingConfig(imitation_coef=0.05, imitation_center_elo=1500.0, imitation_width_elo=250.0)
+    policy = EloGaussianILPolicy(floor=0.001)
+    coef = policy.compute(config=cfg, iteration=1, learner_elo=800.0)
+    assert coef == 0.0  # below floor → hard zero
+
+
+def test_elo_gaussian_il_is_symmetric() -> None:
+    cfg = TrainingConfig(imitation_coef=0.05, imitation_center_elo=1500.0, imitation_width_elo=250.0)
+    policy = EloGaussianILPolicy(floor=0.0)
+    below = policy.compute(config=cfg, iteration=1, learner_elo=1250.0)
+    policy2 = EloGaussianILPolicy(floor=0.0)
+    above = policy2.compute(config=cfg, iteration=1, learner_elo=1750.0)
+    assert below == pytest.approx(above, rel=1e-6)
+
+
+def test_elo_gaussian_il_ema_smooths_spike() -> None:
+    # A sudden Elo spike should be dampened by EMA (alpha=0.05).
+    cfg = TrainingConfig(imitation_coef=0.05, imitation_center_elo=1500.0, imitation_width_elo=250.0)
+    policy = EloGaussianILPolicy(alpha=0.05, floor=0.0)
+    # Prime EMA at 1500 (peak)
+    first = policy.compute(config=cfg, iteration=1, learner_elo=1500.0)
+    # Next call with Elo jumping to 2500 — smoothed_elo should still be near 1500
+    second = policy.compute(config=cfg, iteration=2, learner_elo=2500.0)
+    assert second > 0.0           # not floored — EMA held near centre
+    assert second < first         # moved away from peak but not collapsed
+
+
+# ---------------------------------------------------------------------------
+# EloDecayEntropyPolicy
+# ---------------------------------------------------------------------------
+
+
+def test_elo_decay_entropy_max_at_floor_elo() -> None:
+    policy = EloDecayEntropyPolicy()
+    cfg = TrainingConfig(entropy_coef=0.05, entropy_coef_min=0.0005)
+    coef = policy.compute(config=cfg, iteration=1, learner_elo=800.0)
+    assert coef == pytest.approx(0.05, rel=1e-6)
+
+
+def test_elo_decay_entropy_min_at_ceiling_elo() -> None:
+    policy = EloDecayEntropyPolicy()
+    cfg = TrainingConfig(entropy_coef=0.05, entropy_coef_min=0.0005)
+    coef = policy.compute(config=cfg, iteration=1, learner_elo=2000.0)
+    assert coef == pytest.approx(0.0005, rel=1e-6)
+
+
+def test_elo_decay_entropy_monotone_decreasing() -> None:
+    cfg = TrainingConfig(entropy_coef=0.05, entropy_coef_min=0.0005)
+    elos = [800.0, 1000.0, 1300.0, 1600.0, 2000.0]
+    coefs = []
+    for elo in elos:
+        p = EloDecayEntropyPolicy()  # fresh instance per point (no EMA carry-over)
+        coefs.append(p.compute(config=cfg, iteration=1, learner_elo=elo))
+    assert coefs == sorted(coefs, reverse=True)  # strictly decreasing
+
+
+def test_elo_decay_entropy_ema_smooths_spike() -> None:
+    policy = EloDecayEntropyPolicy(alpha=0.05)
+    cfg = TrainingConfig(entropy_coef=0.05, entropy_coef_min=0.0005)
+    # Prime at 800 (max entropy)
+    first = policy.compute(config=cfg, iteration=1, learner_elo=800.0)
+    # Sudden jump to 2000 — EMA should hold smoothed_elo near 800
+    second = policy.compute(config=cfg, iteration=2, learner_elo=2000.0)
+    assert second > cfg.entropy_coef_min   # EMA kept it high
+    assert second < first                  # but nudged down

@@ -45,6 +45,13 @@ class TrainingRun:
         return best.iteration
 
     @property
+    def best_elo_iteration(self) -> int:
+        if not self.results:
+            return 0
+        best = max(self.results, key=lambda r: r.learner_elo)
+        return best.iteration
+
+    @property
     def total_time(self) -> float:
         return self.end_time - self.start_time
 

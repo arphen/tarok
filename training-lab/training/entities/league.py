@@ -14,8 +14,9 @@ from typing import Literal
 @dataclass(frozen=True)
 class LeagueOpponent:
     name: str
-    type: Literal["nn_checkpoint", "bot_v1", "bot_v5", "bot_v6", "bot_m6"]
+    type: Literal["nn_checkpoint", "bot_v1", "bot_v3", "bot_v5", "bot_v6", "bot_m6"]
     path: str | None = None  # required when type == "nn_checkpoint"
+    initial_elo: float = 1500.0
 
     def seat_token(self) -> str:
         """The string passed to run_self_play's seat_config for this opponent."""
@@ -31,9 +32,11 @@ class LeagueConfig:
     enabled: bool = False
     opponents: tuple[LeagueOpponent, ...] = ()
     min_nn_per_game: int = 1  # learner seat 0 counts as 1
-    sampling: Literal["uniform", "pfsp", "hardest"] = "pfsp"
+    sampling: Literal["uniform", "pfsp", "hardest", "matchmaking"] = "pfsp"
     pfsp_alpha: float = 1.5
     snapshot_interval: int = 5  # save snapshot every N iterations
+    snapshot_elo_delta: float = 50.0
+    max_active_snapshots: int = 3
 
 
 # ---------------------------------------------------------------------------
@@ -59,11 +62,11 @@ class LeaguePoolEntry:
 class LeaguePool:
     config: LeagueConfig
     entries: list[LeaguePoolEntry] = field(default_factory=list)
-    learner_elo: float = 1500.0
+    learner_elo: float = 800.0
 
     def __post_init__(self) -> None:
         for opp in self.config.opponents:
-            self.entries.append(LeaguePoolEntry(opponent=opp))
+            self.entries.append(LeaguePoolEntry(opponent=opp, elo=opp.initial_elo))
 
     def add_snapshot(self, name: str, path: str) -> None:
         """Register an auto-generated checkpoint snapshot as a new pool entry."""
@@ -81,6 +84,17 @@ class LeaguePool:
             # Only the entry with the highest Elo gets all the weight
             max_elo = max(e.elo for e in self.entries)
             return [1.0 if e.elo == max_elo else 0.0 for e in self.entries]
+        if sampling == "matchmaking":
+            # Gaussian window around learner Elo prefers similarly rated opponents.
+            window = 200.0
+            raw = []
+            for e in self.entries:
+                distance = e.elo - self.learner_elo
+                raw.append(math.exp(-((distance ** 2) / (2 * (window ** 2)))))
+            total = sum(raw)
+            if total == 0:
+                return [1.0 / len(self.entries)] * len(self.entries)
+            return [w / total for w in raw]
         # pfsp: weight_i = exp(alpha * (elo_i - 1500) / 400)
         # Higher alpha concentrates on higher-Elo (harder) opponents.
         alpha = self.config.pfsp_alpha

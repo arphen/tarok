@@ -28,9 +28,3 @@ print("────────────────────────�
 print(f"  placement  2.600 → 2.532  (▲ 0.068 better)    took {_format_time(65.2)}")
 
 print()
-# Simulate memory stats table
-stats = {"rss_mb": 745, "footprint_mb": 3994, "py_heap_mb": 4, "py_heap_peak_mb": 852, "mps_alloc_mb": 15, "mps_driver_mb": 62}
-deltas = {"rss_mb": -71, "footprint_mb": 102, "py_heap_mb": 0, "py_heap_peak_mb": 0, "mps_alloc_mb": 0, "mps_driver_mb": -51}
-
-print("  mem │ rrs: 745(+0)   footprint: 3994(+102)  py_heap: 4        py_peak: 852")
-print("      │ mps_a: 15      mps_d: 62")

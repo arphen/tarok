@@ -44,6 +44,7 @@ class PresenterPort(ABC):
         config: TrainingConfig,
         iter_lr: float | None = None,
         iter_imitation_coef: float | None = None,
+        iter_entropy_coef: float | None = None,
     ) -> None: ...
 
     @abstractmethod
@@ -69,11 +70,3 @@ class PresenterPort(ABC):
 
     def on_league_snapshot_added(self, iteration: int, path: str) -> None:
         """Called when a checkpoint snapshot is added to the league pool. Optional."""
-
-    def on_memory_stats(
-        self,
-        iteration: int,
-        stats: dict[str, float],
-        deltas: dict[str, float] | None = None,
-    ) -> None:
-        """Called after an iteration to report process/device memory telemetry. Optional."""
