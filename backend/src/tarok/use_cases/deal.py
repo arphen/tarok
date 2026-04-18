@@ -22,10 +22,9 @@ def deal(state: GameState, rng: random.Random | None = None) -> GameState:
     gs.deal()
 
     snap = _build_py_state_from_rust(gs, completed_tricks=[], bids=[])
-    snap._legacy_tricks = []
-    snap._legacy_current_trick = None
-    snap._legacy_talon_revealed = None
-    snap._legacy_bid_passed = [False] * 4
-    snap._legacy_bid_highest = None
-    snap._legacy_bid_winner = None
+    snap._trick_in_progress = None
+    snap._talon_groups = None
+    snap._bid_passed = [False] * 4
+    snap._bid_highest = None
+    snap._bid_winner = None
     return snap

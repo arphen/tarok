@@ -326,48 +326,83 @@ class Trick:
 class GameState:
     """Lightweight state view passed to observers and player ports."""
 
-    def __init__(self, **kwargs) -> None:
-        self.dealer: int = kwargs.get("dealer", 0)
-        self.num_players: int = kwargs.get("num_players", 4)
-        self.phase: Phase = kwargs.get("phase", Phase.DEALING)
-        self.hands: list[list[Card]] = kwargs.get("hands", [[] for _ in range(4)])
-        self.contract: Contract | None = kwargs.get("contract", None)
-        self.declarer: int | None = kwargs.get("declarer", None)
-        self.partner: int | None = kwargs.get("partner", None)
-        self.called_king: Card | None = kwargs.get("called_king", None)
-        self.talon: list[Card] = kwargs.get("talon", [])
-        self.talon_revealed: list[list[Card]] = kwargs.get("talon_revealed", [])
-        self.put_down: list[Card] = kwargs.get("put_down", [])
-        self.bids: list = kwargs.get("bids", [])
-        self.tricks: list = kwargs.get("tricks", [])
-        self.current_trick: object | None = kwargs.get("current_trick", None)
-        self.announcements: dict = kwargs.get("announcements", {})
-        self.kontra_levels: dict = kwargs.get("kontra_levels", {})
-        self.roles: dict = kwargs.get("roles", {})
-        self.scores: dict = kwargs.get("scores", {})
-        self.current_player: int = kwargs.get("current_player", 0)
-        self.current_bidder: int | None = kwargs.get("current_bidder", self.current_player)
-        self.initial_tarok_counts: dict = kwargs.get("initial_tarok_counts", {})
-
+    def __init__(
+        self,
+        *,
+        dealer: int = 0,
+        num_players: int = 4,
+        phase: Phase = Phase.DEALING,
+        hands: list[list[Card]] | None = None,
+        contract: Contract | None = None,
+        declarer: int | None = None,
+        partner: int | None = None,
+        called_king: Card | None = None,
+        talon: list[Card] | None = None,
+        talon_revealed: list[list[Card]] | None = None,
+        put_down: list[Card] | None = None,
+        bids: list | None = None,
+        tricks: list | None = None,
+        current_trick: object | None = None,
+        announcements: dict | None = None,
+        kontra_levels: dict | None = None,
+        roles: dict | None = None,
+        scores: dict | None = None,
+        current_player: int = 0,
+        current_bidder: int | None = None,
+        initial_tarok_counts: dict | None = None,
         # Rust-backed dynamic helpers populated by bridge code.
-        self.legal_bids: Callable[[int], list[int | None]] = kwargs.get(
-            "legal_bids", lambda _player_idx: []
-        )
-        self.legal_plays: Callable[[int], list[Card]] = kwargs.get(
-            "legal_plays", lambda _player_idx: []
-        )
-        self.callable_kings: Callable[[], list[Card]] = kwargs.get("callable_kings", lambda: [])
-
-        # Legacy snapshot compatibility fields used across use-case wrappers.
-        self._legacy_tricks: list = kwargs.get("_legacy_tricks", [])
-        self._legacy_current_trick: Any = kwargs.get("_legacy_current_trick", None)
-        self._legacy_talon_revealed: Any = kwargs.get("_legacy_talon_revealed", None)
-        self._legacy_bid_passed: list[bool] = kwargs.get("_legacy_bid_passed", [False] * 4)
-        self._legacy_bid_highest: Any = kwargs.get("_legacy_bid_highest", None)
-        self._legacy_bid_winner: Any = kwargs.get("_legacy_bid_winner", None)
-
+        legal_bids: Callable[[int], list[int | None]] | None = None,
+        legal_plays: Callable[[int], list[Card]] | None = None,
+        callable_kings: Callable[[], list[Card]] | None = None,
+        # Snapshot carry-forward fields — internal state threaded between functional wrappers.
+        _trick_in_progress: Any = None,
+        _talon_groups: Any = None,
+        _bid_passed: list[bool] | None = None,
+        _bid_highest: Any = None,
+        _bid_winner: Any = None,
         # Link to underlying Rust game state when available.
-        self._rust_gs: Any = kwargs.get("_rust_gs", None)
+        _rust_gs: Any = None,
+    ) -> None:
+        self.dealer = dealer
+        self.num_players = num_players
+        self.phase = phase
+        self.hands: list[list[Card]] = hands if hands is not None else [[] for _ in range(4)]
+        self.contract = contract
+        self.declarer = declarer
+        self.partner = partner
+        self.called_king = called_king
+        self.talon: list[Card] = talon if talon is not None else []
+        self.talon_revealed: list[list[Card]] = talon_revealed if talon_revealed is not None else []
+        self.put_down: list[Card] = put_down if put_down is not None else []
+        self.bids: list = bids if bids is not None else []
+        self.tricks: list = tricks if tricks is not None else []
+        self.current_trick = current_trick
+        self.announcements: dict = announcements if announcements is not None else {}
+        self.kontra_levels: dict = kontra_levels if kontra_levels is not None else {}
+        self.roles: dict = roles if roles is not None else {}
+        self.scores: dict = scores if scores is not None else {}
+        self.current_player = current_player
+        self.current_bidder: int | None = (
+            current_bidder if current_bidder is not None else current_player
+        )
+        self.initial_tarok_counts: dict = (
+            initial_tarok_counts if initial_tarok_counts is not None else {}
+        )
+        self.legal_bids: Callable[[int], list[int | None]] = (
+            legal_bids if legal_bids is not None else lambda _: []
+        )
+        self.legal_plays: Callable[[int], list[Card]] = (
+            legal_plays if legal_plays is not None else lambda _: []
+        )
+        self.callable_kings: Callable[[], list[Card]] = (
+            callable_kings if callable_kings is not None else lambda: []
+        )
+        self._trick_in_progress = _trick_in_progress
+        self._talon_groups = _talon_groups
+        self._bid_passed: list[bool] = _bid_passed if _bid_passed is not None else [False] * 4
+        self._bid_highest = _bid_highest
+        self._bid_winner = _bid_winner
+        self._rust_gs = _rust_gs
 
     # -- derived properties (pure lookups, no game logic) ------------------
 

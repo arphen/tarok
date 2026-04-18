@@ -11,14 +11,13 @@ def call_king(state: GameState, king: Card) -> GameState:
     gs.apply_king_call(king._idx)
     snap = _build_py_state_from_rust(
         gs,
-        completed_tricks=list(getattr(state, "_legacy_tricks", [])),
+        completed_tricks=list(state.tricks),
         bids=list(getattr(state, "bids", [])),
-        talon_revealed=getattr(state, "_legacy_talon_revealed", None),
+        talon_revealed=getattr(state, "_talon_groups", None),
     )
-    snap._legacy_tricks = list(getattr(state, "_legacy_tricks", []))
-    snap._legacy_current_trick = getattr(state, "_legacy_current_trick", None)
-    snap._legacy_talon_revealed = getattr(state, "_legacy_talon_revealed", None)
-    snap._legacy_bid_passed = list(getattr(state, "_legacy_bid_passed", [False] * 4))
-    snap._legacy_bid_highest = getattr(state, "_legacy_bid_highest", None)
-    snap._legacy_bid_winner = getattr(state, "_legacy_bid_winner", None)
+    snap._trick_in_progress = getattr(state, "_trick_in_progress", None)
+    snap._talon_groups = getattr(state, "_talon_groups", None)
+    snap._bid_passed = list(getattr(state, "_bid_passed", [False] * 4))
+    snap._bid_highest = getattr(state, "_bid_highest", None)
+    snap._bid_winner = getattr(state, "_bid_winner", None)
     return snap

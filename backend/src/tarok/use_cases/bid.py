@@ -22,9 +22,9 @@ def place_bid(state: GameState, player_idx: int, bid: Contract | None) -> GameSt
     """Apply one bid action and return an updated snapshot."""
     gs = state._rust_gs
     bids = list(getattr(state, "bids", []))
-    passed = list(getattr(state, "_legacy_bid_passed", [False] * 4))
-    highest = getattr(state, "_legacy_bid_highest", None)
-    winner = getattr(state, "_legacy_bid_winner", None)
+    passed = list(getattr(state, "_bid_passed", [False] * 4))
+    highest = getattr(state, "_bid_highest", None)
+    winner = getattr(state, "_bid_winner", None)
 
     gs.current_player = player_idx
 
@@ -58,15 +58,14 @@ def place_bid(state: GameState, player_idx: int, bid: Contract | None) -> GameSt
 
     snap = _build_py_state_from_rust(
         gs,
-        completed_tricks=list(getattr(state, "_legacy_tricks", [])),
+        completed_tricks=list(state.tricks),
         bids=bids,
         current_bidder=current_bidder,
-        talon_revealed=getattr(state, "_legacy_talon_revealed", None),
+        talon_revealed=getattr(state, "_talon_groups", None),
     )
-    snap._legacy_tricks = list(getattr(state, "_legacy_tricks", []))
-    snap._legacy_current_trick = getattr(state, "_legacy_current_trick", None)
-    snap._legacy_talon_revealed = getattr(state, "_legacy_talon_revealed", None)
-    snap._legacy_bid_passed = passed
-    snap._legacy_bid_highest = highest
-    snap._legacy_bid_winner = winner
+    snap._trick_in_progress = getattr(state, "_trick_in_progress", None)
+    snap._talon_groups = getattr(state, "_talon_groups", None)
+    snap._bid_passed = passed
+    snap._bid_highest = highest
+    snap._bid_winner = winner
     return snap

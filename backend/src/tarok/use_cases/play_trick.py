@@ -7,12 +7,11 @@ from tarok.entities import Card, GameState, Trick
 
 
 def _carry_meta(prev: GameState, snap: GameState) -> GameState:
-    snap._legacy_tricks = list(getattr(prev, "_legacy_tricks", []))
-    snap._legacy_current_trick = getattr(prev, "_legacy_current_trick", None)
-    snap._legacy_talon_revealed = getattr(prev, "_legacy_talon_revealed", None)
-    snap._legacy_bid_passed = list(getattr(prev, "_legacy_bid_passed", [False] * 4))
-    snap._legacy_bid_highest = getattr(prev, "_legacy_bid_highest", None)
-    snap._legacy_bid_winner = getattr(prev, "_legacy_bid_winner", None)
+    snap._trick_in_progress = getattr(prev, "_trick_in_progress", None)
+    snap._talon_groups = getattr(prev, "_talon_groups", None)
+    snap._bid_passed = list(getattr(prev, "_bid_passed", [False] * 4))
+    snap._bid_highest = getattr(prev, "_bid_highest", None)
+    snap._bid_winner = getattr(prev, "_bid_winner", None)
     return snap
 
 
@@ -24,13 +23,13 @@ def start_trick(state: GameState) -> GameState:
 
     snap = _build_py_state_from_rust(
         gs,
-        completed_tricks=list(getattr(state, "_legacy_tricks", [])),
+        completed_tricks=list(state.tricks),
         bids=list(getattr(state, "bids", [])),
         current_trick=(lead, []),
-        talon_revealed=getattr(state, "_legacy_talon_revealed", None),
+        talon_revealed=getattr(state, "_talon_groups", None),
     )
     snap = _carry_meta(state, snap)
-    snap._legacy_current_trick = (lead, [])
+    snap._trick_in_progress = (lead, [])
     return snap
 
 
@@ -39,11 +38,11 @@ def play_card(state: GameState, player_idx: int, card: Card) -> GameState:
     gs = state._rust_gs
     gs.play_card(player_idx, card._idx)
 
-    lead, cards = getattr(state, "_legacy_current_trick", (player_idx, []))
+    lead, cards = getattr(state, "_trick_in_progress", (player_idx, []))
     cards = list(cards)
     cards.append((player_idx, card))
 
-    completed = list(getattr(state, "_legacy_tricks", []))
+    completed = list(state.tricks)
     current_trick = (lead, cards)
 
     if len(cards) == 4:
@@ -56,9 +55,8 @@ def play_card(state: GameState, player_idx: int, card: Card) -> GameState:
         completed_tricks=completed,
         bids=list(getattr(state, "bids", [])),
         current_trick=current_trick,
-        talon_revealed=getattr(state, "_legacy_talon_revealed", None),
+        talon_revealed=getattr(state, "_talon_groups", None),
     )
     snap = _carry_meta(state, snap)
-    snap._legacy_tricks = completed
-    snap._legacy_current_trick = current_trick
+    snap._trick_in_progress = current_trick
     return snap
