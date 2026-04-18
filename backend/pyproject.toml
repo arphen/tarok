@@ -54,26 +54,43 @@ root_package = "tarok"
 include_external_packages = true
 
 [[tool.importlinter.contracts]]
-name = "Use cases stay pure: do not import stdlib data/serialization modules"
+name = "Use cases stay pure: no infrastructure, I/O, or serialization imports"
 type = "forbidden"
 source_modules = [
     "tarok.use_cases",
 ]
 forbidden_modules = [
-    "json",
-    "csv",
-    "pickle",
-]
-
-[[tool.importlinter.contracts]]
-name = "Use cases do not import data-science stacks directly"
-type = "forbidden"
-source_modules = [
-    "tarok.use_cases",
-]
-forbidden_modules = [
-    "numpy",
+    "sqlalchemy",
+    "django",
+    "flask",
+    "fastapi",
+    "starlette",
+    "werkzeug",
+    "requests",
+    "httpx",
+    "urllib",
+    "boto3",
+    "google",
+    "azure",
+    "celery",
+    "redis",
+    "pymongo",
+    "psycopg2",
+    "peewee",
+    "pika",
+    "kafka",
+    "pydantic",
+    "marshmallow",
     "pandas",
+    "numpy",
+    "csv",
+    "json",
+    "xml",
+    "yaml",
+    "os",
+    "sys",
+    "socket",
+    "pickle",
 ]
 
 [[tool.importlinter.contracts]]

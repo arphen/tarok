@@ -7,7 +7,7 @@ what contract type was bid or whether a declarer exists.  It just asks
 
 from __future__ import annotations
 
-from pydantic import BaseModel, ConfigDict
+from dataclasses import dataclass
 
 import tarok_engine as te
 
@@ -60,9 +60,8 @@ _U8_TO_ROLE = {0: PlayerRole.DECLARER, 1: PlayerRole.PARTNER, 2: PlayerRole.OPPO
 # ---------------------------------------------------------------------------
 
 
-class TrickResult(BaseModel):
-    model_config = ConfigDict(arbitrary_types_allowed=True)
-
+@dataclass
+class TrickResult:
     lead_player: int
     cards: list[tuple[int, Card]]
     winner_player: int
@@ -72,7 +71,8 @@ class TrickResult(BaseModel):
         return self.winner_player
 
 
-class _Bid(BaseModel):
+@dataclass
+class _Bid:
     player: int
     contract: Contract | None
 
