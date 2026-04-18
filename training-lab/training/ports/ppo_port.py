@@ -28,3 +28,11 @@ class PPOPort(ABC):
     @abstractmethod
     def update(self, raw_experiences: dict[str, Any], nn_seats: list[int]) -> tuple[dict[str, float], dict]:
         """Run PPO update on learner (nn) seats only. Return (metrics_dict, new_weights)."""
+
+    @abstractmethod
+    def load_human_data(self, data_dir: str) -> dict[str, Any] | None:
+        """Load human replay data from directory. Returns None if no data found."""
+
+    @abstractmethod
+    def merge_experiences(self, primary: dict[str, Any], extra: dict[str, Any]) -> dict[str, Any]:
+        """Merge two experience dicts (e.g. self-play + human replay) into one."""

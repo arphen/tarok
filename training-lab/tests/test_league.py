@@ -14,7 +14,7 @@ from training.entities.league import (
     LeaguePool,
     LeaguePoolEntry,
 )
-from training.adapters.league_persistence import JsonLeagueStatePersistence
+from training.adapters.persistence import JsonLeagueStatePersistence
 from training.use_cases.sample_league_seats import SampleLeagueSeats
 from training.use_cases.update_league_elo import UpdateLeagueElo
 

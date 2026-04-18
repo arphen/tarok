@@ -23,12 +23,12 @@ from training.use_cases import ResolveConfig, ResolveModel, TrainModel
 
 
 def _default_selfplay() -> SelfPlayPort:
-    from training.adapters.selfplay import RustSelfPlay
+    from training.adapters.self_play import RustSelfPlay
     return RustSelfPlay()
 
 
 def _default_benchmark() -> BenchmarkPort:
-    from training.adapters.benchmark import SessionBenchmark
+    from training.adapters.evaluation import SessionBenchmark
     return SessionBenchmark()
 
 
@@ -38,17 +38,17 @@ def _default_ppo() -> PPOPort:
 
 
 def _default_model() -> ModelPort:
-    from training.adapters.model import TorchModelAdapter
+    from training.adapters.modeling import TorchModelAdapter
     return TorchModelAdapter()
 
 
 def _default_config() -> ConfigPort:
-    from training.adapters.config import YAMLConfigLoader
+    from training.adapters.configuration import YAMLConfigLoader
     return YAMLConfigLoader()
 
 
 def _default_presenter() -> PresenterPort:
-    from training.adapters.presenter import TerminalPresenter
+    from training.adapters.presentation import TerminalPresenter
     return TerminalPresenter()
 
 
@@ -61,7 +61,7 @@ def _default_entropy_policy(config: TrainingConfig | None = None):
 
 
 def _default_league_persistence() -> LeagueStatePersistencePort:
-    from training.adapters.league_persistence import JsonLeagueStatePersistence
+    from training.adapters.persistence import JsonLeagueStatePersistence
     return JsonLeagueStatePersistence()
 
 
@@ -69,12 +69,12 @@ def _default_imitation_policy(config: TrainingConfig | None = None) -> Imitation
     if config is not None and config.imitation_schedule == "gaussian_elo":
         from training.use_cases.train_model.policies import EloGaussianILPolicy
         return EloGaussianILPolicy()
-    from training.adapters.imitation_coef_policy import ScheduledImitationCoefPolicy
+    from training.adapters.policies import ScheduledImitationCoefPolicy
     return ScheduledImitationCoefPolicy()
 
 
 def _default_lr_policy() -> LearningRatePolicyPort:
-    from training.adapters.learning_rate_policy import LeagueEloLearningRatePolicy
+    from training.adapters.policies import LeagueEloLearningRatePolicy
     return LeagueEloLearningRatePolicy()
 
 

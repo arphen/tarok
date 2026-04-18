@@ -1,4 +1,4 @@
-from training.adapters.presenter import TerminalPresenter, _format_time
+from training.adapters.presentation import TerminalPresenter, _format_time
 from training.entities.training_config import TrainingConfig
 cfg = TrainingConfig(iterations=100, games=10000, seats='nn,nn,nn,nn', ppo_epochs=6,
     batch_size=8192, lr=0.0001, gamma=0.995, gae_lambda=0.98, explore_rate=0.05,

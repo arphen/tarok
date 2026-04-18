@@ -39,7 +39,7 @@ if str(TRAINING_LAB_ROOT) not in sys.path:
 te = pytest.importorskip("tarok_engine")
 
 from tarok_model.network import TarokNetV4
-from training.adapters.model import TorchModelAdapter
+from training.adapters.modeling import TorchModelAdapter
 from training.adapters.ppo import PPOAdapter
 from training.entities import TrainingConfig
 

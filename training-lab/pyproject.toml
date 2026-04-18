@@ -8,3 +8,39 @@ filterwarnings = [
     "ignore:`torch.jit.trace` is deprecated:DeprecationWarning",
     "ignore:`torch.jit.trace_method` is deprecated:DeprecationWarning",
 ]
+
+[tool.importlinter]
+root_package = "training"
+include_external_packages = true
+
+[[tool.importlinter.contracts]]
+name = "Use cases stay pure: no infrastructure, I/O, or serialization imports"
+type = "forbidden"
+source_modules = ["training.use_cases"]
+forbidden_modules = [
+    "sqlalchemy", "django", "flask", "fastapi", "starlette", "werkzeug",
+    "requests", "httpx", "urllib", "boto3", "google", "azure",
+    "celery", "redis", "pymongo", "psycopg2", "peewee", "pika", "kafka",
+    "pydantic", "marshmallow", "pandas", "numpy",
+    "csv", "json", "xml", "yaml",
+    "os", "sys", "socket", "pickle",
+]
+
+[[tool.importlinter.contracts]]
+name = "Use cases depend on ports/entities, not adapters"
+type = "forbidden"
+source_modules = ["training.use_cases"]
+forbidden_modules = ["training.adapters"]
+
+[[tool.importlinter.contracts]]
+name = "Entities stay framework-free and side-effect-free"
+type = "forbidden"
+source_modules = ["training.entities"]
+forbidden_modules = [
+    "sqlalchemy", "django", "flask", "fastapi", "starlette", "werkzeug",
+    "requests", "httpx", "urllib", "boto3", "google", "azure",
+    "celery", "redis", "pymongo", "psycopg2", "peewee", "pika", "kafka",
+    "pydantic", "marshmallow", "pandas", "numpy",
+    "csv", "json", "xml", "yaml",
+    "os", "sys", "socket", "pickle",
+]

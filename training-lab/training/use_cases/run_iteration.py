@@ -6,10 +6,8 @@ import gc
 import time
 from pathlib import Path
 
-import numpy as np
 import torch
 
-from training.adapters.ppo import load_human_experiences, merge_experiences
 from training.entities.iteration_result import IterationResult
 from training.entities.model_identity import ModelIdentity
 from training.entities.training_config import TrainingConfig
@@ -70,41 +68,19 @@ class RunIteration:
         # and value come from a different model.
         seat_labels = [s.strip() for s in effective_seats.split(",")]
         nn_seats = [i for i, s in enumerate(seat_labels) if s == "nn"]
-        players_np = np.asarray(raw["players"])
-        n_total = len(players_np)
-        n_learner = int(sum(np.sum(players_np == s) for s in nn_seats))
+        n_total = len(raw["players"])
         sp_time = time.time() - t0
-        self._presenter.on_selfplay_done(n_total, n_learner, sp_time)
 
         # Compute per-seat mean scores as early as possible, then allow
         # large self-play tensors to be released right after PPO.
-        scores_arr = raw.get("scores")  # shape (n_games, 4) or None
-        if scores_arr is not None and len(scores_arr) > 0:
-            scores_np = np.asarray(scores_arr)
-            ms = np.mean(scores_np, axis=0)
-            mean_scores: tuple[float, float, float, float] = (
-                float(ms[0]), float(ms[1]), float(ms[2]), float(ms[3])
-            )
-            # Per-game outcomes: compare learner (seat 0) vs each opponent seat
-            seat_outcomes: dict[int, tuple[int, int, int]] = {}
-            learner_scores = scores_np[:, 0]
-            for si in range(1, 4):
-                if seat_labels[si] == "nn":
-                    continue  # learner vs learner — skip
-                opp_scores = scores_np[:, si]
-                wins = int(np.sum(learner_scores > opp_scores))
-                losses = int(np.sum(learner_scores < opp_scores))
-                draws = int(np.sum(learner_scores == opp_scores))
-                seat_outcomes[si] = (wins, losses, draws)
-        else:
-            mean_scores = (0.0, 0.0, 0.0, 0.0)
-            seat_outcomes = {}
+        n_learner, mean_scores, seat_outcomes = self._selfplay.compute_run_stats(raw, seat_labels)
+        self._presenter.on_selfplay_done(n_total, n_learner, sp_time)
 
         # Merge human experiences (replay forever — every iteration)
         if config.human_data_dir:
-            human_raw = load_human_experiences(config.human_data_dir)
+            human_raw = self._ppo.load_human_data(config.human_data_dir)
             if human_raw is not None:
-                raw = merge_experiences(raw, human_raw)
+                raw = self._ppo.merge_experiences(raw, human_raw)
 
         # PPO update
         if iter_lr is not None:

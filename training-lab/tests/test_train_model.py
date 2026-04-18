@@ -9,6 +9,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
+from training.adapters.persistence import JsonLeagueStatePersistence
 from training.entities.iteration_result import IterationResult
 from training.entities.league import LeagueConfig, LeagueOpponent
 from training.entities.model_identity import ModelIdentity
@@ -55,6 +56,11 @@ def mock_presenter() -> MagicMock:
 
 
 @pytest.fixture
+def mock_league_persistence() -> MagicMock:
+    return MagicMock()
+
+
+@pytest.fixture
 def base_config(tmp_path: Path) -> TrainingConfig:
     return TrainingConfig(
         model_arch="v4",
@@ -84,6 +90,7 @@ def test_train_model_basic_execution_flow(
     mock_presenter: MagicMock,
     base_config: TrainingConfig,
     identity: ModelIdentity,
+    mock_league_persistence: MagicMock,
 ) -> None:
     """Verifies setup -> benchmark -> iterations -> teardown flow."""
     use_case = TrainModel(
@@ -91,6 +98,7 @@ def test_train_model_basic_execution_flow(
         benchmark=mock_benchmark,
         model=mock_model_port,
         presenter=mock_presenter,
+        league_persistence=mock_league_persistence,
     )
 
     run_result = use_case.execute(
@@ -122,12 +130,14 @@ def test_train_model_requires_enabled_league(
     mock_presenter: MagicMock,
     base_config: TrainingConfig,
     identity: ModelIdentity,
+    mock_league_persistence: MagicMock,
 ) -> None:
     use_case = TrainModel(
         iteration_runner=mock_iteration_runner,
         benchmark=mock_benchmark,
         model=mock_model_port,
         presenter=mock_presenter,
+        league_persistence=mock_league_persistence,
     )
 
     cfg = replace(base_config, league=None)
@@ -144,6 +154,7 @@ def test_train_model_uses_injected_lr_policy(
     mock_presenter: MagicMock,
     base_config: TrainingConfig,
     identity: ModelIdentity,
+    mock_league_persistence: MagicMock,
 ) -> None:
     lr_policy = MagicMock()
     lr_policy.compute.return_value = 1.23e-4
@@ -154,6 +165,7 @@ def test_train_model_uses_injected_lr_policy(
         model=mock_model_port,
         presenter=mock_presenter,
         lr_policy=lr_policy,
+        league_persistence=mock_league_persistence,
     )
 
     use_case.execute(config=base_config, identity=identity, weights={}, device="cpu")
@@ -175,6 +187,7 @@ def test_train_model_uses_injected_imitation_policy(
     mock_presenter: MagicMock,
     base_config: TrainingConfig,
     identity: ModelIdentity,
+    mock_league_persistence: MagicMock,
 ) -> None:
     imitation_policy = MagicMock()
     imitation_policy.compute.return_value = 0.77
@@ -185,6 +198,7 @@ def test_train_model_uses_injected_imitation_policy(
         model=mock_model_port,
         presenter=mock_presenter,
         imitation_policy=imitation_policy,
+        league_persistence=mock_league_persistence,
     )
 
     use_case.execute(config=base_config, identity=identity, weights={}, device="cpu")
@@ -211,6 +225,7 @@ def test_train_model_with_league_and_snapshots(
     mock_presenter: MagicMock,
     base_config: TrainingConfig,
     identity: ModelIdentity,
+    mock_league_persistence: MagicMock,
 ) -> None:
     """Verifies league sampling, Elo updates, and snapshot cadence behavior."""
     cfg = replace(base_config, league=LeagueConfig(enabled=True, snapshot_interval=2))
@@ -255,6 +270,7 @@ def test_train_model_with_league_and_snapshots(
         benchmark=mock_benchmark,
         model=mock_model_port,
         presenter=mock_presenter,
+        league_persistence=mock_league_persistence,
     )
 
     use_case.execute(config=cfg, identity=identity, weights={}, device="cpu")
@@ -282,6 +298,7 @@ def test_train_model_ensures_teardown_on_error(
     mock_presenter: MagicMock,
     base_config: TrainingConfig,
     identity: ModelIdentity,
+    mock_league_persistence: MagicMock,
 ) -> None:
     """Verifies teardown is always called if an iteration raises."""
     use_case = TrainModel(
@@ -289,6 +306,7 @@ def test_train_model_ensures_teardown_on_error(
         benchmark=mock_benchmark,
         model=mock_model_port,
         presenter=mock_presenter,
+        league_persistence=mock_league_persistence,
     )
 
     mock_iteration_runner.run_iteration.side_effect = RuntimeError("CUDA Out of Memory")
@@ -316,6 +334,7 @@ def test_train_model_caps_active_nn_snapshots(
     mock_presenter: MagicMock,
     base_config: TrainingConfig,
     identity: ModelIdentity,
+    mock_league_persistence: MagicMock,
 ) -> None:
     cfg = replace(
         base_config,
@@ -353,6 +372,7 @@ def test_train_model_caps_active_nn_snapshots(
         benchmark=mock_benchmark,
         model=mock_model_port,
         presenter=mock_presenter,
+        league_persistence=mock_league_persistence,
     )
 
     use_case.execute(config=cfg, identity=identity, weights={}, device="cpu")
@@ -380,6 +400,7 @@ def test_train_model_snapshot_admission_requires_elo_milestone(
     mock_presenter: MagicMock,
     base_config: TrainingConfig,
     identity: ModelIdentity,
+    mock_league_persistence: MagicMock,
 ) -> None:
     cfg = replace(
         base_config,
@@ -403,6 +424,7 @@ def test_train_model_snapshot_admission_requires_elo_milestone(
         benchmark=mock_benchmark,
         model=mock_model_port,
         presenter=mock_presenter,
+        league_persistence=mock_league_persistence,
     )
 
     use_case.execute(config=cfg, identity=identity, weights={}, device="cpu")
@@ -425,6 +447,7 @@ def test_train_model_snapshot_admission_uses_configured_elo_delta(
     mock_presenter: MagicMock,
     base_config: TrainingConfig,
     identity: ModelIdentity,
+    mock_league_persistence: MagicMock,
 ) -> None:
     cfg = replace(
         base_config,
@@ -452,6 +475,7 @@ def test_train_model_snapshot_admission_uses_configured_elo_delta(
         benchmark=mock_benchmark,
         model=mock_model_port,
         presenter=mock_presenter,
+        league_persistence=mock_league_persistence,
     )
 
     use_case.execute(config=cfg, identity=identity, weights={}, device="cpu")
@@ -535,6 +559,7 @@ def test_train_model_restores_persisted_league_state(
         benchmark=mock_benchmark,
         model=mock_model_port,
         presenter=mock_presenter,
+        league_persistence=JsonLeagueStatePersistence(),
     )
 
     use_case.execute(config=cfg, identity=identity, weights={}, device="cpu")
@@ -561,6 +586,7 @@ def test_train_model_elo_based_lr_decays_smoothly(
     mock_presenter: MagicMock,
     base_config: TrainingConfig,
     identity: ModelIdentity,
+    mock_league_persistence: MagicMock,
 ) -> None:
     cfg = replace(
         base_config,
@@ -587,6 +613,7 @@ def test_train_model_elo_based_lr_decays_smoothly(
         benchmark=mock_benchmark,
         model=mock_model_port,
         presenter=mock_presenter,
+        league_persistence=mock_league_persistence,
     )
 
     use_case.execute(config=cfg, identity=identity, weights={}, device="cpu")

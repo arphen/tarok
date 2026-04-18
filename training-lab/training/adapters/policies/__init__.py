@@ -1,0 +1,4 @@
+from training.adapters.policies.league_elo_learning_rate_policy import LeagueEloLearningRatePolicy
+from training.adapters.policies.scheduled_imitation_coef_policy import ScheduledImitationCoefPolicy
+
+__all__ = ["LeagueEloLearningRatePolicy", "ScheduledImitationCoefPolicy"]

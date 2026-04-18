@@ -124,6 +124,14 @@ class PPOAdapter(PPOPort):
         release_allocator_memory()
         return metrics, new_weights
 
+    def load_human_data(self, data_dir: str) -> dict[str, Any] | None:
+        from training.adapters.ppo.human_data import load_human_experiences
+        return load_human_experiences(data_dir)
+
+    def merge_experiences(self, primary: dict[str, Any], extra: dict[str, Any]) -> dict[str, Any]:
+        from training.adapters.ppo.human_data import merge_experiences
+        return merge_experiences(primary, extra)
+
     def _ppo_update_batched(
         self,
         *,

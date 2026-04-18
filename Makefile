@@ -108,18 +108,39 @@ lint-architecture:
 		echo ""; \
 		echo "Clean Architecture guard failed."; \
 		echo "Rule: tarok.use_cases is application logic and must not import infrastructure/data libraries (json/csv/pickle/numpy/pandas) or tarok.adapters."; \
-		echo "Where code should go:"; \
-		echo "  - put I/O and framework integrations in tarok.adapters"; \
-		echo "  - define abstractions in tarok.ports"; \
-		echo "  - keep orchestration and game rules in tarok.use_cases"; \
-		echo "How to extend safely:"; \
-		echo "  1) add/extend a Port in tarok.ports"; \
-		echo "  2) implement it in tarok.adapters"; \
-		echo "  3) inject the adapter into the use case via the port interface"; \
+		echo "Teaching mode: build bounded contexts, not adapter wastelands."; \
+		echo "Design guide:"; \
+		echo "  - define/extend a Port in tarok.ports first"; \
+		echo "  - implement adapters in focused domain modules (not catch-all files)"; \
+		echo "  - keep orchestration and rules in tarok.use_cases"; \
+		echo "Naming guide:"; \
+		echo "  - prefer explicit names like <tech>_<purpose>_adapter.py"; \
+		echo "  - avoid vague files like misc.py, helpers.py, utils.py in adapters"; \
+		echo "Definition of done:"; \
+		echo "  1) Port contract added/updated"; \
+		echo "  2) Adapter implemented in a cohesive domain module"; \
+		echo "  3) Use case depends only on Port"; \
+		exit 1; \
+	}
+	@cd training-lab && PYTHONPATH=../backend/src:../model/src:. ../backend/.venv/bin/lint-imports || { \
+		echo ""; \
+		echo "Clean Architecture guard failed (training-lab)."; \
+		echo "Rule: training.use_cases must not import infrastructure/data libraries or training.adapters."; \
+		echo "Teaching mode: leave architecture cleaner than you found it."; \
+		echo "Current adapter structure is domain-driven:"; \
+		echo "  - self_play, evaluation, modeling, configuration, presentation, persistence, policies"; \
+		echo "Placement guide:"; \
+		echo "  - add behavior to the right domain module; do not create flat adapter dumps"; \
+		echo "  - keep file names explicit (e.g. rust_self_play_adapter.py, json_league_state_persistence.py)"; \
+		echo "  - add/extend a Port in training.ports before wiring adapter code"; \
+		echo "Definition of done:"; \
+		echo "  1) Port contract added/updated"; \
+		echo "  2) Adapter implemented in the correct domain package"; \
+		echo "  3) Use case imports only ports/entities"; \
 		exit 1; \
 	}
 
-test-lab: ensure-engine
+
 	$(UV_RUN_LAB) python -m pytest ../training-lab/tests/ -v
 
 test-quick:

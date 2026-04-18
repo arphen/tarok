@@ -51,8 +51,7 @@ class TrainModel:
         )
         self._entropy_policy = entropy_policy if entropy_policy is not None else DefaultEntropyCoefPolicy()
         if league_persistence is None:
-            from training.adapters.league_persistence import JsonLeagueStatePersistence
-            league_persistence = JsonLeagueStatePersistence()
+            raise ValueError("league_persistence must be provided — wire JsonLeagueStatePersistence via the container")
         self._league_persistence: LeagueStatePersistencePort = league_persistence
 
     def execute(

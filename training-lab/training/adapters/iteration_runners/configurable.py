@@ -101,9 +101,9 @@ class ConfigurableIterationRunner(IterationRunnerPort):
 
     def _adapter_factory_for_spawn(self) -> tuple[SelfPlayPort, PPOPort, BenchmarkPort, ModelPort]:
         # Worker must own fresh adapters in its own process.
-        from training.adapters.benchmark import SessionBenchmark
-        from training.adapters.model import TorchModelAdapter
+        from training.adapters.evaluation import SessionBenchmark
+        from training.adapters.modeling import TorchModelAdapter
         from training.adapters.ppo import PPOAdapter
-        from training.adapters.selfplay import RustSelfPlay
+        from training.adapters.self_play import RustSelfPlay
 
         return RustSelfPlay(), PPOAdapter(), SessionBenchmark(), TorchModelAdapter()
