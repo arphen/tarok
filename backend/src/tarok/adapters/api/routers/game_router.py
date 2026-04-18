@@ -11,7 +11,7 @@ from tarok.adapters.api.checkpoint_utils import resolve_checkpoint
 from tarok.adapters.players.factory import get_player_factory
 from tarok.adapters.players.human_player import HumanPlayer
 from tarok.adapters.players.neural_player import NeuralPlayer
-from tarok.adapters.api.experience_logger import HumanPlayExperienceLogger
+from tarok.adapters.experience_logger import HumanPlayExperienceLogger
 from tarok.adapters.api.ws_observer import WebSocketObserver
 from tarok.adapters.api.schemas import NewGameRequest
 from tarok.entities import Card, Suit, SuitRank, Contract
