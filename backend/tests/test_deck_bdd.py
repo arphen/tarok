@@ -113,7 +113,9 @@ def pips_1(deck):
 
 @then("plain taroks should be worth 1 point")
 def plain_taroks_1(deck):
-    plain = [c for c in deck if c.card_type == CardType.TAROK and c.value not in (PAGAT, MOND, SKIS)]
+    plain = [
+        c for c in deck if c.card_type == CardType.TAROK and c.value not in (PAGAT, MOND, SKIS)
+    ]
     assert len(plain) == 19
     for t in plain:
         assert t.points == 1

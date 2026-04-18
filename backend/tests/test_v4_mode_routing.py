@@ -24,13 +24,15 @@ def test_mode_from_contract_idx_expected_mapping() -> None:
 
 def test_infer_modes_from_state_uses_contract_slice_correctly() -> None:
     net = TarokNetV4(hidden_size=32, oracle_critic=False)
-    states = torch.stack([
-        _state_with_contract_idx(TarokNetV4._KLOP_IDX),
-        _state_with_contract_idx(TarokNetV4._SOLO_THREE_IDX),
-        _state_with_contract_idx(TarokNetV4._BERAC_IDX),
-        _state_with_contract_idx(TarokNetV4._BARVNI_VALAT_IDX),
-        torch.zeros(STATE_SIZE, dtype=torch.float32),  # no contract -> default partner
-    ])
+    states = torch.stack(
+        [
+            _state_with_contract_idx(TarokNetV4._KLOP_IDX),
+            _state_with_contract_idx(TarokNetV4._SOLO_THREE_IDX),
+            _state_with_contract_idx(TarokNetV4._BERAC_IDX),
+            _state_with_contract_idx(TarokNetV4._BARVNI_VALAT_IDX),
+            torch.zeros(STATE_SIZE, dtype=torch.float32),  # no contract -> default partner
+        ]
+    )
 
     modes = net._infer_modes_from_state(states)
     assert modes == [

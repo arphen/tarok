@@ -31,6 +31,7 @@ from tarok.adapters.api.routers.analyze_router import router as analyze_router
 from tarok.adapters.api.routers.tournament_router import router as tournament_router
 from tarok.adapters.api.routers.arena_router import router as arena_router
 
+
 def _card_from_dict(c: dict) -> Card:
     """Reconstruct a Card from a frontend card dict using the Rust index."""
     if c.get("card_type") == "tarok" or c.get("card_type") == 0:
@@ -72,6 +73,7 @@ app.include_router(arena_router)
 
 # ---- Training endpoints ----
 
+
 @app.post("/api/training/start")
 async def start_training(req: TrainingRequest):
     del req
@@ -109,6 +111,7 @@ _checkpoint_cache: dict[str, tuple[float, dict]] = {}
 def _load_checkpoint_meta(fpath: Path, ckpt_dir: Path) -> dict:
     """Load checkpoint metadata, using cache when file hasn't changed."""
     import torch as _torch
+
     fstr = str(fpath)
     mtime = fpath.stat().st_mtime
     cached = _checkpoint_cache.get(fstr)
@@ -159,16 +162,18 @@ async def list_checkpoints():
         try:
             meta = _torch.load(f, map_location="cpu", weights_only=False)
             model_name = meta.get("model_name") or meta.get("display_name") or f.stem
-            result.append({
-                "filename": f"hall_of_fame/{f.name}",
-                "persona": meta.get("persona") or f.stem,
-                "model_name": model_name,
-                "episode": meta.get("episode", 0),
-                "session": meta.get("session", 0),
-                "win_rate": meta.get("metrics", {}).get("win_rate", 0),
-                "avg_reward": meta.get("metrics", {}).get("avg_reward", 0),
-                "is_hof": True,
-            })
+            result.append(
+                {
+                    "filename": f"hall_of_fame/{f.name}",
+                    "persona": meta.get("persona") or f.stem,
+                    "model_name": model_name,
+                    "episode": meta.get("episode", 0),
+                    "session": meta.get("session", 0),
+                    "win_rate": meta.get("metrics", {}).get("win_rate", 0),
+                    "avg_reward": meta.get("metrics", {}).get("avg_reward", 0),
+                    "is_hof": True,
+                }
+            )
         except Exception:
             result.append({"filename": f"hall_of_fame/{f.name}", "is_hof": True, "episode": 0})
 
@@ -183,18 +188,27 @@ async def list_checkpoints():
         try:
             meta = _torch.load(current, map_location="cpu", weights_only=False)
             model_name = meta.get("model_name") or meta.get("display_name") or persona_name
-            result.append({
-                "filename": f"{persona_name}/_current.pt",
-                "persona": persona_name,
-                "model_name": model_name,
-                "episode": meta.get("episode", 0),
-                "session": meta.get("session", 0),
-                "win_rate": meta.get("metrics", {}).get("win_rate", 0),
-                "avg_reward": meta.get("metrics", {}).get("avg_reward", 0),
-                "is_hof": False,
-            })
+            result.append(
+                {
+                    "filename": f"{persona_name}/_current.pt",
+                    "persona": persona_name,
+                    "model_name": model_name,
+                    "episode": meta.get("episode", 0),
+                    "session": meta.get("session", 0),
+                    "win_rate": meta.get("metrics", {}).get("win_rate", 0),
+                    "avg_reward": meta.get("metrics", {}).get("avg_reward", 0),
+                    "is_hof": False,
+                }
+            )
         except Exception:
-            result.append({"filename": f"{persona_name}/_current.pt", "persona": persona_name, "is_hof": False, "episode": 0})
+            result.append(
+                {
+                    "filename": f"{persona_name}/_current.pt",
+                    "persona": persona_name,
+                    "is_hof": False,
+                    "episode": 0,
+                }
+            )
 
     return {"checkpoints": result}
 
@@ -204,6 +218,7 @@ def _resolve_checkpoint_path(token: str) -> Path | None:
 
 
 # ---- Game endpoints ----
+
 
 def _load_opponent(choice: str, index: int):
     """Load a single AI opponent from a choice string.
@@ -225,6 +240,7 @@ def _load_opponent(choice: str, index: int):
     if path and path.exists():
         try:
             import torch as _torch
+
             meta = _torch.load(path, map_location="cpu", weights_only=False)
             if meta.get("display_name"):
                 name = meta["display_name"]
@@ -281,8 +297,8 @@ async def game_websocket(ws: WebSocket, game_id: str):
 
     # Match-level state
     cumulative_scores = {i: 0 for i in range(4)}
-    caller_counts = {i: 0 for i in range(4)}   # times as declarer
-    called_counts = {i: 0 for i in range(4)}    # times as partner
+    caller_counts = {i: 0 for i in range(4)}  # times as declarer
+    called_counts = {i: 0 for i in range(4)}  # times as partner
     round_history: list[dict] = []
 
     async def run_match():
@@ -316,13 +332,15 @@ async def game_websocket(ws: WebSocket, game_id: str):
             if state.partner is not None:
                 called_counts[state.partner] += 1
 
-            round_history.append({
-                "round": round_num + 1,
-                "scores": dict(scores),
-                "contract": state.contract.value if state.contract else None,
-                "declarer": state.declarer,
-                "partner": state.partner,
-            })
+            round_history.append(
+                {
+                    "round": round_num + 1,
+                    "scores": dict(scores),
+                    "contract": state.contract.value if state.contract else None,
+                    "declarer": state.declarer,
+                    "partner": state.partner,
+                }
+            )
 
             # Persist supervised data from all seats (human and bots).
             try:
@@ -346,14 +364,23 @@ async def game_websocket(ws: WebSocket, game_id: str):
             # Send match progress after each round
             if round_num < num_rounds - 1:
                 await observer.send_match_update(
-                    cumulative_scores, caller_counts, called_counts,
-                    round_history, round_num + 1, num_rounds, state,
+                    cumulative_scores,
+                    caller_counts,
+                    called_counts,
+                    round_history,
+                    round_num + 1,
+                    num_rounds,
+                    state,
                 )
 
         # Final match end
         await observer.send_match_end(
-            cumulative_scores, caller_counts, called_counts,
-            round_history, num_rounds, state,
+            cumulative_scores,
+            caller_counts,
+            called_counts,
+            round_history,
+            num_rounds,
+            state,
         )
 
     game_task = asyncio.create_task(run_match())
@@ -476,13 +503,15 @@ async def list_agents():
     bots = registry.list_players()
 
     # Also include "latest" as a virtual entry for the NN checkpoint
-    bots.append({
-        "id": "latest",
-        "name": "Latest trained model",
-        "description": "Most recent PPO-trained neural network checkpoint",
-        "category": "neural",
-        "version": None,
-    })
+    bots.append(
+        {
+            "id": "latest",
+            "name": "Latest trained model",
+            "description": "Most recent PPO-trained neural network checkpoint",
+            "category": "neural",
+            "version": None,
+        }
+    )
 
     return {"agents": bots}
 
@@ -500,7 +529,9 @@ async def new_spectate(req: SpectateRequest):
 
     # Fill remaining slots with RL agents
     while len(agents) < 4:
-        ckpt_path = _resolve_checkpoint_path("training_run") or Path("../data/checkpoints/training_run/_current.pt")
+        ckpt_path = _resolve_checkpoint_path("training_run") or Path(
+            "../data/checkpoints/training_run/_current.pt"
+        )
         if ckpt_path.exists():
             agent = NeuralPlayer.from_checkpoint(ckpt_path, name=f"Agent-{len(agents)}")
         else:
@@ -593,8 +624,8 @@ async def spectate_websocket(ws: WebSocket, game_id: str):
 
 class ArenaReplayRequest(BaseModel):
     hands: list[list[int]]  # [[card_idx...] x 12] x 4
-    talon: list[int]        # [card_idx...] x 6
-    agents: list[dict]      # [{name, type, checkpoint?}] x 4
+    talon: list[int]  # [card_idx...] x 6
+    agents: list[dict]  # [{name, type, checkpoint?}] x 4
     dealer: int = 0
     delay: float = 0.6
     trace: dict | None = None  # Game trace for deterministic replay
@@ -667,7 +698,8 @@ async def _replay_from_trace(
 
         py_contract = _RUST_U8_TO_PY_CONTRACT.get(contract)
         await observer.on_contract_won(
-            declarer, py_contract,
+            declarer,
+            py_contract,
             _build_py_state_from_rust(gs, completed_tricks, bids=bid_history),
         )
     else:
@@ -677,7 +709,8 @@ async def _replay_from_trace(
             gs.set_role(i, 2)
         py_contract = _RUST_U8_TO_PY_CONTRACT.get(0)
         await observer.on_contract_won(
-            0, py_contract,
+            0,
+            py_contract,
             _build_py_state_from_rust(gs, completed_tricks, bids=bid_history),
         )
 
@@ -707,7 +740,8 @@ async def _replay_from_trace(
                         gs.set_role(p, 1)  # Partner
                         break
             await observer.on_king_called(
-                declarer, DECK[chosen_idx],
+                declarer,
+                DECK[chosen_idx],
                 _build_py_state_from_rust(gs, completed_tricks, bids=bid_history),
             )
 
@@ -722,7 +756,9 @@ async def _replay_from_trace(
         talon_revealed = [[DECK[idx] for idx in g] for g in groups]
         await observer.on_talon_revealed(
             talon_revealed,
-            _build_py_state_from_rust(gs, completed_tricks, bids=bid_history, talon_revealed=groups),
+            _build_py_state_from_rust(
+                gs, completed_tricks, bids=bid_history, talon_revealed=groups
+            ),
         )
 
         # Pick group
@@ -759,7 +795,9 @@ async def _replay_from_trace(
         gs.start_trick(lead_player)
         gs.current_player = lead_player
         await observer.on_trick_start(
-            _build_py_state_from_rust(gs, completed_tricks, bids=bid_history, current_trick=(lead, trick_cards)),
+            _build_py_state_from_rust(
+                gs, completed_tricks, bids=bid_history, current_trick=(lead, trick_cards)
+            ),
         )
 
         for offset in range(4):
@@ -782,7 +820,9 @@ async def _replay_from_trace(
             await observer.on_card_played(
                 player,
                 DECK[card_idx],
-                _build_py_state_from_rust(gs, completed_tricks, bids=bid_history, current_trick=(lead, trick_cards)),
+                _build_py_state_from_rust(
+                    gs, completed_tricks, bids=bid_history, current_trick=(lead, trick_cards)
+                ),
             )
 
         # Finish trick
@@ -802,7 +842,12 @@ async def _replay_from_trace(
         lead_player = winner
 
         # Berač early exit
-        if contract is not None and _is_berac(contract) and declarer is not None and winner == declarer:
+        if (
+            contract is not None
+            and _is_berac(contract)
+            and declarer is not None
+            and winner == declarer
+        ):
             break
 
     # === SCORING ===
@@ -811,14 +856,21 @@ async def _replay_from_trace(
     scores = {i: int(scores_arr[i]) for i in range(4)}
 
     from tarok.use_cases.rust_state import _build_py_state_stub
+
     py_state = _build_py_state_stub(
-        dealer, py_contract, declarer,
-        gs, {}, completed_tricks, bid_history,
+        dealer,
+        py_contract,
+        declarer,
+        gs,
+        {},
+        completed_tricks,
+        bid_history,
     )
     py_state.scores = scores
 
     # Scoring breakdown — computed entirely in Rust
     import json as _json
+
     breakdown = None
     try:
         raw = _json.loads(gs.score_game_breakdown_json())
@@ -897,16 +949,19 @@ async def training_websocket(ws: WebSocket):
     try:
         while True:
             if _latest_metrics:
-                await ws.send_json({
-                    "event": "metrics",
-                    "data": _latest_metrics,
-                })
+                await ws.send_json(
+                    {
+                        "event": "metrics",
+                        "data": _latest_metrics,
+                    }
+                )
             await asyncio.sleep(1)
     except WebSocketDisconnect:
         pass
 
 
 # ---- Health check ----
+
 
 @app.get("/api/health")
 async def health():

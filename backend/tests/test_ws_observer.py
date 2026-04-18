@@ -15,6 +15,7 @@ from tarok.use_cases.deal import deal
 def _make_trick_play_state() -> GameState:
     """Create a minimal GameState in trick_play phase by dealing cards."""
     import random
+
     rng = random.Random(42)
     state = GameState()
     state = deal(state, rng=rng)

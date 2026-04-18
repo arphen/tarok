@@ -41,27 +41,33 @@ def _resolve_replay_path(name: str) -> Path:
 def list_replays() -> list[dict[str, Any]]:
     _ensure_replays_dir()
     items: list[dict[str, Any]] = []
-    for replay_file in sorted(REPLAYS_DIR.glob("*.json"), key=lambda item: item.stat().st_mtime, reverse=True):
+    for replay_file in sorted(
+        REPLAYS_DIR.glob("*.json"), key=lambda item: item.stat().st_mtime, reverse=True
+    ):
         try:
             payload = json.loads(replay_file.read_text())
             timeline = payload.get("timeline") or []
-            items.append({
-                "filename": replay_file.name,
-                "created_at": payload.get("created_at", replay_file.stat().st_mtime),
-                "source": payload.get("source", "spectate"),
-                "label": payload.get("label", replay_file.stem),
-                "player_names": payload.get("player_names", []),
-                "events": len(timeline),
-            })
+            items.append(
+                {
+                    "filename": replay_file.name,
+                    "created_at": payload.get("created_at", replay_file.stat().st_mtime),
+                    "source": payload.get("source", "spectate"),
+                    "label": payload.get("label", replay_file.stem),
+                    "player_names": payload.get("player_names", []),
+                    "events": len(timeline),
+                }
+            )
         except Exception:
-            items.append({
-                "filename": replay_file.name,
-                "created_at": replay_file.stat().st_mtime,
-                "source": "unknown",
-                "label": replay_file.stem,
-                "player_names": [],
-                "events": 0,
-            })
+            items.append(
+                {
+                    "filename": replay_file.name,
+                    "created_at": replay_file.stat().st_mtime,
+                    "source": "unknown",
+                    "label": replay_file.stem,
+                    "player_names": [],
+                    "events": 0,
+                }
+            )
     return items
 
 
@@ -84,10 +90,7 @@ def _full_state(state: GameState, player_names: list[str]) -> dict:
     """Return the complete game state with all hands visible."""
     return {
         "phase": state.phase.value,
-        "hands": [
-            [_card_to_dict(c) for c in state.hands[i]]
-            for i in range(4)
-        ],
+        "hands": [[_card_to_dict(c) for c in state.hands[i]] for i in range(4)],
         "hand_sizes": [len(h) for h in state.hands],
         "talon_groups": (
             [[_card_to_dict(c) for c in g] for g in state.talon_revealed]
@@ -129,7 +132,9 @@ def _full_state(state: GameState, player_names: list[str]) -> dict:
             for k, v in (state.announcements or {}).items()
         },
         "kontra_levels": {
-            (k.value if hasattr(k, "value") else str(k)): (v.value if hasattr(v, "value") else str(v))
+            (k.value if hasattr(k, "value") else str(k)): (
+                v.value if hasattr(v, "value") else str(v)
+            )
             for k, v in (state.kontra_levels or {}).items()
         },
         "put_down": [_card_to_dict(c) for c in state.put_down] if state.put_down else [],
@@ -195,32 +200,50 @@ class SpectatorObserver:
         await self._broadcast("deal", {}, state)
 
     async def on_bid(self, player: int, bid: Contract | None, state: GameState) -> None:
-        await self._broadcast("bid", {
-            "player": player,
-            "contract": bid.value if bid else None,
-        }, state)
+        await self._broadcast(
+            "bid",
+            {
+                "player": player,
+                "contract": bid.value if bid else None,
+            },
+            state,
+        )
 
     async def on_contract_won(self, player: int, contract: Contract, state: GameState) -> None:
-        await self._broadcast("contract_won", {
-            "player": player,
-            "contract": contract.value,
-        }, state)
+        await self._broadcast(
+            "contract_won",
+            {
+                "player": player,
+                "contract": contract.value,
+            },
+            state,
+        )
 
     async def on_king_called(self, player: int, king: Card, state: GameState) -> None:
-        await self._broadcast("king_called", {
-            "player": player,
-            "king": _card_to_dict(king),
-        }, state)
+        await self._broadcast(
+            "king_called",
+            {
+                "player": player,
+                "king": _card_to_dict(king),
+            },
+            state,
+        )
 
     async def on_talon_revealed(self, groups: list[list[Card]], state: GameState) -> None:
-        await self._broadcast("talon_revealed", {
-            "groups": [[_card_to_dict(c) for c in g] for g in groups],
-        }, state)
+        await self._broadcast(
+            "talon_revealed",
+            {
+                "groups": [[_card_to_dict(c) for c in g] for g in groups],
+            },
+            state,
+        )
 
     async def on_talon_group_picked(self, state: GameState) -> None:
         await self._broadcast("talon_group_picked", {}, state)
 
-    async def on_talon_exchanged(self, state: GameState, picked: list | None = None, discarded: list | None = None) -> None:
+    async def on_talon_exchanged(
+        self, state: GameState, picked: list | None = None, discarded: list | None = None
+    ) -> None:
         data: dict = {}
         if picked:
             data["picked"] = [_card_to_dict(c) for c in picked]
@@ -229,26 +252,38 @@ class SpectatorObserver:
         await self._broadcast("talon_exchanged", data, state)
 
     async def on_card_played(self, player: int, card: Card, state: GameState) -> None:
-        await self._broadcast("card_played", {
-            "player": player,
-            "card": _card_to_dict(card),
-        }, state)
+        await self._broadcast(
+            "card_played",
+            {
+                "player": player,
+                "card": _card_to_dict(card),
+            },
+            state,
+        )
 
     async def on_trick_start(self, state: GameState) -> None:
         await self._broadcast("trick_start", {}, state)
 
     async def on_rule_verified(self, player: int, rule: str, state: GameState) -> None:
-        await self._broadcast("rule_verified", {
-            "player": player,
-            "rule": rule,
-        }, state)
+        await self._broadcast(
+            "rule_verified",
+            {
+                "player": player,
+                "rule": rule,
+            },
+            state,
+        )
 
     async def on_trick_won(self, trick: Trick, winner: int, state: GameState) -> None:
-        await self._broadcast("trick_won", {
-            "winner": winner,
-            "cards": [(p, _card_to_dict(c)) for p, c in trick.cards],
-        }, state)
-        
+        await self._broadcast(
+            "trick_won",
+            {
+                "winner": winner,
+                "cards": [(p, _card_to_dict(c)) for p, c in trick.cards],
+            },
+            state,
+        )
+
         if self._delay < 0:
             # Manual mode: Wait for spectator action
             self.next_trick_event.clear()
@@ -260,7 +295,9 @@ class SpectatorObserver:
             # Auto mode but extra delay for end of trick
             await asyncio.sleep(self._delay)
 
-    async def on_game_end(self, scores: dict[int, int], state: GameState, breakdown: dict | None = None) -> None:
+    async def on_game_end(
+        self, scores: dict[int, int], state: GameState, breakdown: dict | None = None
+    ) -> None:
         data: dict = {"scores": {str(k): v for k, v in scores.items()}}
         if breakdown is not None:
             data["breakdown"] = breakdown.get("breakdown") or breakdown

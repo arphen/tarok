@@ -82,7 +82,9 @@ class PlayerFactory:
         version_variants = {"v5": 5}
         for variant, version in version_variants.items():
             bot_id = f"stockskis_{variant}"
-            desc = _STOCKSKIS_DESCRIPTIONS.get(version, f"StockSkis heuristic bot version {version}")
+            desc = _STOCKSKIS_DESCRIPTIONS.get(
+                version, f"StockSkis heuristic bot version {version}"
+            )
             self.register(
                 PlayerTypeInfo(
                     id=bot_id,
@@ -91,7 +93,9 @@ class PlayerFactory:
                     category="heuristic",
                     version=version,
                 ),
-                lambda name=f"StockSkis-v{version}", v=variant, **kw: StockskisPlayer(variant=v, name=name),
+                lambda name=f"StockSkis-v{version}", v=variant, **kw: StockskisPlayer(
+                    variant=v, name=name
+                ),
             )
 
         for variant, (_, desc) in _STOCKSKIS_NAMED_VARIANTS.items():
@@ -104,7 +108,9 @@ class PlayerFactory:
                     category="heuristic",
                     version=None,
                 ),
-                lambda name=f"StockSkis-{variant}", v=variant, **kw: StockskisPlayer(variant=v, name=name),
+                lambda name=f"StockSkis-{variant}", v=variant, **kw: StockskisPlayer(
+                    variant=v, name=name
+                ),
             )
 
     def list_players(self) -> list[dict[str, Any]]:
@@ -124,7 +130,9 @@ class PlayerFactory:
     def create(self, player_type: str, *, name: str | None = None, **kwargs: Any) -> PlayerPort:
         entry = self._players.get(player_type)
         if entry is None:
-            raise KeyError(f"Unknown player type: {player_type!r}. Available: {list(self._players)}")
+            raise KeyError(
+                f"Unknown player type: {player_type!r}. Available: {list(self._players)}"
+            )
         info, creator = entry
         if name is None:
             name = info.name

@@ -18,6 +18,7 @@ def main():
 
 def run_server():
     import uvicorn
+
     uvicorn.run(
         "tarok.adapters.api.server:app",
         host="0.0.0.0",
@@ -45,7 +46,7 @@ async def run_generate_expert_data():
 
     n = data["num_experiences"]
     print(f"Generated {n:,} expert experiences in {elapsed:.1f}s")
-    print(f"Speed: {num_games/elapsed:,.0f} games/sec")
+    print(f"Speed: {num_games / elapsed:,.0f} games/sec")
 
 
 async def run_generate_dd_data():
@@ -67,7 +68,7 @@ async def run_generate_dd_data():
 
     n = data["num_experiences"]
     print(f"Generated {n:,} DD-labeled experiences in {elapsed:.1f}s")
-    print(f"Speed: {num_games/elapsed:.1f} games/sec ({n/elapsed:.0f} exps/sec)")
+    print(f"Speed: {num_games / elapsed:.1f} games/sec ({n / elapsed:.0f} exps/sec)")
     print(f"DD values range: [{data['dd_values'].min():.3f}, {data['dd_values'].max():.3f}]")
 
 
@@ -219,7 +220,7 @@ async def run_dd_pretrain():
         avg_vloss = epoch_value_loss / num_batches
         avg_rloss = epoch_rank_loss / num_batches
         print(
-            f"Epoch {epoch+1:3d}/{num_epochs} | "
+            f"Epoch {epoch + 1:3d}/{num_epochs} | "
             f"policy={avg_ploss:.4f} value={avg_vloss:.4f} rank={avg_rloss:.4f}"
         )
 
@@ -228,6 +229,7 @@ async def run_dd_pretrain():
         save_path = "checkpoints/dd_pretrain.pt"
 
     import os
+
     os.makedirs(os.path.dirname(save_path), exist_ok=True)
     torch.save(net.state_dict(), save_path)
     print(f"\nSaved DD-pretrained model to {save_path}")
@@ -235,4 +237,3 @@ async def run_dd_pretrain():
 
 if __name__ == "__main__":
     main()
-

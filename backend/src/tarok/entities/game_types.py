@@ -118,9 +118,9 @@ class Card:
 DECK: list[Card] = [Card(i) for i in range(54)]
 
 # Tarok value constants (NOT Card objects — used as tarok(PAGAT) etc.)
-PAGAT = 1    # tarok value 1
-MOND = 21    # tarok value 21
-SKIS = 22    # tarok value 22
+PAGAT = 1  # tarok value 1
+MOND = 21  # tarok value 21
+SKIS = 22  # tarok value 22
 
 
 def tarok(value: int) -> Card:
@@ -183,8 +183,7 @@ class Contract(int, Enum):
         return _CONTRACT_BASE_VALUE[self]
 
     def is_solo(self) -> bool:
-        return self in (Contract.SOLO_THREE, Contract.SOLO_TWO,
-                        Contract.SOLO_ONE, Contract.SOLO)
+        return self in (Contract.SOLO_THREE, Contract.SOLO_TWO, Contract.SOLO_ONE, Contract.SOLO)
 
     @property
     def is_klop(self) -> bool:
@@ -214,8 +213,12 @@ _CONTRACT_STRENGTH: dict[Contract, int] = {
 }
 
 _CONTRACT_TALON_CARDS: dict[Contract, int] = {
-    Contract.THREE: 3, Contract.TWO: 2, Contract.ONE: 1,
-    Contract.SOLO_THREE: 3, Contract.SOLO_TWO: 2, Contract.SOLO_ONE: 1,
+    Contract.THREE: 3,
+    Contract.TWO: 2,
+    Contract.ONE: 1,
+    Contract.SOLO_THREE: 3,
+    Contract.SOLO_TWO: 2,
+    Contract.SOLO_ONE: 1,
 }
 
 _CONTRACT_BASE_VALUE: dict[Contract, int] = {

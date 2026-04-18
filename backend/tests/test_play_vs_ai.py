@@ -16,7 +16,19 @@ from tarok.adapters.players.neural_player import NeuralPlayer
 
 from tarok.adapters.players.human_player import HumanPlayer
 from tarok.adapters.api.ws_observer import _state_for_player
-from tarok.entities import Card, CardType, Suit, SuitRank, Bid, Contract, GameState, Phase, DECK, tarok, suit_card
+from tarok.entities import (
+    Card,
+    CardType,
+    Suit,
+    SuitRank,
+    Bid,
+    Contract,
+    GameState,
+    Phase,
+    DECK,
+    tarok,
+    suit_card,
+)
 from tarok.use_cases.game_loop import RustGameLoop as GameLoop, NullObserver
 
 
@@ -26,6 +38,7 @@ NAMES = ["You", "AI-1", "AI-2", "AI-3"]
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
+
 
 class AutoHuman:
     """Simulates a human that auto-responds to every game phase."""
@@ -49,9 +62,7 @@ class AutoHuman:
 
     async def choose_discard(self, state, player_idx, must_discard):
         hand = state.hands[player_idx]
-        discardable = [
-            c for c in hand if not c.is_king and c.card_type != CardType.TAROK
-        ]
+        discardable = [c for c in hand if not c.is_king and c.card_type != CardType.TAROK]
         discardable.sort(key=lambda c: c.points)
         return discardable[:must_discard]
 
@@ -111,13 +122,14 @@ class StateTrackingObserver(NullObserver):
 # Tests
 # ---------------------------------------------------------------------------
 
+
 @pytest.mark.asyncio
 async def test_full_game_with_rl_agents_completes():
     """A full game with NeuralPlayer (untrained) + auto-human completes without error."""
     human = AutoHuman()
     agents = [human]
     for i in range(3):
-        a = NeuralPlayer(name=f"AI-{i+1}")
+        a = NeuralPlayer(name=f"AI-{i + 1}")
         a.set_training(False)
         agents.append(a)
 
@@ -165,7 +177,7 @@ async def test_illegal_bid_falls_back_to_pass():
     for seed in range(5):
         agents = [AlwaysBidsThree()]
         for i in range(3):
-            a = NeuralPlayer(name=f"AI-{i+1}")
+            a = NeuralPlayer(name=f"AI-{i + 1}")
             a.set_training(False)
             agents.append(a)
 
@@ -180,7 +192,7 @@ async def test_legal_bids_sent_during_bidding():
     human = AutoHuman()
     agents = [human]
     for i in range(3):
-        a = NeuralPlayer(name=f"AI-{i+1}")
+        a = NeuralPlayer(name=f"AI-{i + 1}")
         a.set_training(False)
         agents.append(a)
 
@@ -190,7 +202,8 @@ async def test_legal_bids_sent_during_bidding():
 
     # Find events during bidding where it was player 0's turn
     bidding_states = [
-        sd for event, sd in observer.events
+        sd
+        for event, sd in observer.events
         if sd["phase"] == "bidding" and sd["current_player"] == 0
     ]
 
@@ -206,7 +219,7 @@ async def test_legal_bids_absent_when_not_our_turn():
     human = AutoHuman()
     agents = [human]
     for i in range(3):
-        a = NeuralPlayer(name=f"AI-{i+1}")
+        a = NeuralPlayer(name=f"AI-{i + 1}")
         a.set_training(False)
         agents.append(a)
 
@@ -216,7 +229,8 @@ async def test_legal_bids_absent_when_not_our_turn():
 
     # Find bidding events where it was NOT player 0's turn
     other_turn = [
-        sd for event, sd in observer.events
+        sd
+        for event, sd in observer.events
         if sd["phase"] == "bidding" and sd["current_player"] != 0
     ]
 
@@ -256,7 +270,7 @@ async def test_legal_bids_match_backend_legality():
     assert 6 not in legal  # SOLO_ONE
     assert 4 not in legal  # SOLO_THREE
     assert 5 not in legal  # SOLO_TWO
-    assert 7 in legal      # SOLO
+    assert 7 in legal  # SOLO
 
 
 @pytest.mark.asyncio
@@ -270,7 +284,9 @@ async def test_callable_kings_sent_during_king_calling():
     # Give player 0 a hand without the hearts king
     state.hands = [
         [tarok(v) for v in range(1, 13)],
-        [], [], [],
+        [],
+        [],
+        [],
     ]
     # Inject callable_kings: all kings not in player 0's hand (all 4, since hand is only taroks)
     state.callable_kings = lambda: [c for c in DECK if c.is_king]
@@ -299,8 +315,14 @@ async def test_must_discard_set_after_talon_pickup():
     # Player 0 has 15 cards (12 original + 3 picked from talon)
     state.hands = [
         [tarok(v) for v in range(1, 13)]
-        + [suit_card(Suit.HEARTS, SuitRank.PIP_1), suit_card(Suit.HEARTS, SuitRank.PIP_2), suit_card(Suit.HEARTS, SuitRank.PIP_3)],
-        [], [], [],
+        + [
+            suit_card(Suit.HEARTS, SuitRank.PIP_1),
+            suit_card(Suit.HEARTS, SuitRank.PIP_2),
+            suit_card(Suit.HEARTS, SuitRank.PIP_3),
+        ],
+        [],
+        [],
+        [],
     ]
 
     sd = _state_for_player(state, 0, NAMES)
@@ -333,7 +355,7 @@ async def test_multiple_games_with_rl_agents_stable():
         human = AutoHuman()
         agents = [human]
         for i in range(3):
-            a = NeuralPlayer(name=f"AI-{i+1}")
+            a = NeuralPlayer(name=f"AI-{i + 1}")
             a.set_training(False)
             agents.append(a)
 

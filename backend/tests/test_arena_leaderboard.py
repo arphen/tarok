@@ -41,7 +41,9 @@ def _player(
     }
 
 
-async def test_arena_history_persists_and_filters_by_checkpoint(tmp_path: Path, monkeypatch, client):
+async def test_arena_history_persists_and_filters_by_checkpoint(
+    tmp_path: Path, monkeypatch, client
+):
     arena_results = tmp_path / "arena_results.json"
     monkeypatch.setattr(arena_router, "_arena_history_path", arena_results)
 
@@ -85,7 +87,9 @@ async def test_arena_history_persists_and_filters_by_checkpoint(tmp_path: Path, 
     assert empty.json()["runs"] == []
 
 
-async def test_arena_checkpoint_leaderboard_aggregates_across_runs(tmp_path: Path, monkeypatch, client):
+async def test_arena_checkpoint_leaderboard_aggregates_across_runs(
+    tmp_path: Path, monkeypatch, client
+):
     arena_results = tmp_path / "arena_results.json"
     monkeypatch.setattr(arena_router, "_arena_history_path", arena_results)
 
@@ -127,8 +131,12 @@ async def test_arena_checkpoint_leaderboard_aggregates_across_runs(tmp_path: Pat
         },
     }
 
-    arena_router._persist_arena_run(run1_agents, total_games=200, session_size=20, payload=run1_payload)
-    arena_router._persist_arena_run(run2_agents, total_games=100, session_size=20, payload=run2_payload)
+    arena_router._persist_arena_run(
+        run1_agents, total_games=200, session_size=20, payload=run1_payload
+    )
+    arena_router._persist_arena_run(
+        run2_agents, total_games=100, session_size=20, payload=run2_payload
+    )
 
     resp = await client.get("/api/arena/leaderboard/checkpoints")
     assert resp.status_code == 200

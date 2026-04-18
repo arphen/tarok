@@ -69,12 +69,8 @@ class HumanPlayer:
     ) -> list[Card]:
         return await self._wait_for_input("discard")
 
-    async def choose_announcements(
-        self, state: GameState, player_idx: int
-    ) -> list[Announcement]:
+    async def choose_announcements(self, state: GameState, player_idx: int) -> list[Announcement]:
         return []
 
-    async def choose_card(
-        self, state: GameState, player_idx: int, legal_plays: list[Card]
-    ) -> Card:
+    async def choose_card(self, state: GameState, player_idx: int, legal_plays: list[Card]) -> Card:
         return await self._wait_for_input("card")

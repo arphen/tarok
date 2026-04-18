@@ -62,6 +62,7 @@ class DiscardRequest(BaseModel):
 
 class NewGameRequest(BaseModel):
     """Request to create a new human-vs-AI game with per-opponent model selection."""
+
     opponents: list[str] = ["latest", "latest", "latest"]  # 3 entries: filename or "latest"
     num_rounds: int = 1
 
@@ -82,6 +83,7 @@ class TrainingRequest(BaseModel):
 
 class LabTrainingRequest(BaseModel):
     """Request to start training via the training-lab (GPU lab) package."""
+
     num_sessions: int = 1000
     games_per_session: int = 20
     learning_rate: float = 3e-4

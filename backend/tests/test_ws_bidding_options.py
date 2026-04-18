@@ -1,4 +1,5 @@
 """Unit tests for websocket bidding state exposure to the UI."""
+
 from unittest.mock import AsyncMock
 
 import numpy as np
@@ -112,7 +113,9 @@ def test_state_for_player_does_not_compute_legal_bids_outside_bidding() -> None:
 @pytest.mark.asyncio
 async def test_observer_bid_event_contains_legal_bids_on_human_turn() -> None:
     ws = AsyncMock()
-    observer = WebSocketObserver(ws, player_idx=0, player_names=["You", "AI-1", "AI-2", "AI-3"], ai_delay=0)
+    observer = WebSocketObserver(
+        ws, player_idx=0, player_names=["You", "AI-1", "AI-2", "AI-3"], ai_delay=0
+    )
     expected_legal_bids = [None, Contract.SOLO.value, Contract.ONE.value, Contract.TWO.value]
     state = DummyState(phase=Phase.BIDDING, current_player=0, legal_bids=expected_legal_bids)
 
@@ -129,7 +132,9 @@ async def test_observer_bid_event_contains_legal_bids_on_human_turn() -> None:
 @pytest.mark.asyncio
 async def test_observer_bid_event_hides_legal_bids_when_not_human_turn() -> None:
     ws = AsyncMock()
-    observer = WebSocketObserver(ws, player_idx=0, player_names=["You", "AI-1", "AI-2", "AI-3"], ai_delay=0)
+    observer = WebSocketObserver(
+        ws, player_idx=0, player_names=["You", "AI-1", "AI-2", "AI-3"], ai_delay=0
+    )
     state = DummyState(
         phase=Phase.BIDDING,
         current_player=2,
@@ -248,8 +253,8 @@ def test_live_snapshot_after_solo_one_and_pass_keeps_solo_and_berac_for_next_pla
     gs.phase = te.PHASE_BIDDING
 
     # Bidding order for dealer=0 is 2 -> 3 -> 0 -> 1.
-    gs.add_bid(2, 6)    # SOLO_ONE
-    gs.add_bid(3, None) # PASS
+    gs.add_bid(2, 6)  # SOLO_ONE
+    gs.add_bid(3, None)  # PASS
 
     state = _build_py_state_from_rust(
         gs,

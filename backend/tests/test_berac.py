@@ -14,9 +14,20 @@ from tarok.adapters.players.neural_player import NeuralPlayer
 from tarok.adapters.players.stockskis_player import StockskisPlayer
 
 from tarok.entities import (
-    Card, CardType, Suit, SuitRank, DECK,
-    Bid, Contract, GameState, Phase, PlayerRole, Trick,
-    score_game, suit_card, tarok,
+    Card,
+    CardType,
+    Suit,
+    SuitRank,
+    DECK,
+    Bid,
+    Contract,
+    GameState,
+    Phase,
+    PlayerRole,
+    Trick,
+    score_game,
+    suit_card,
+    tarok,
 )
 from tarok.use_cases.game_loop import RustGameLoop as GameLoop, NullObserver
 from tarok.use_cases.deal import deal
@@ -26,6 +37,7 @@ from tarok.use_cases.play_trick import start_trick, play_card
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
+
 
 class ScriptedPlayer:
     """Player that returns pre-scripted actions or auto-plays first legal."""
@@ -78,7 +90,10 @@ class TrackingObserver(NullObserver):
 # Unit tests — scoring
 # ---------------------------------------------------------------------------
 
-@pytest.mark.skip(reason="Scoring is Rust-only; synthetic Python GameState scoring is no longer supported")
+
+@pytest.mark.skip(
+    reason="Scoring is Rust-only; synthetic Python GameState scoring is no longer supported"
+)
 def test_berac_scoring_declarer_wins_trick():
     """If the declarer took any trick, they get -70."""
     state = GameState()
@@ -103,7 +118,9 @@ def test_berac_scoring_declarer_wins_trick():
     assert scores[3] == 0
 
 
-@pytest.mark.skip(reason="Scoring is Rust-only; synthetic Python GameState scoring is no longer supported")
+@pytest.mark.skip(
+    reason="Scoring is Rust-only; synthetic Python GameState scoring is no longer supported"
+)
 def test_berac_scoring_declarer_takes_zero_tricks():
     """If the declarer took 0 tricks across all 12, they get +70."""
     state = GameState()
@@ -129,6 +146,7 @@ def test_berac_scoring_declarer_takes_zero_tricks():
 # ---------------------------------------------------------------------------
 # Integration tests — game loop early termination
 # ---------------------------------------------------------------------------
+
 
 @pytest.mark.asyncio
 async def test_berac_ends_early_when_declarer_wins_trick():
@@ -246,8 +264,7 @@ async def test_berac_remaining_cards_stay_in_hands():
             # Cards remaining in hands
             cards_in_hands = sum(len(h) for h in state.hands)
             assert cards_played + cards_in_hands == 48, (
-                f"Cards don't add up: {cards_played} played + "
-                f"{cards_in_hands} in hands != 48"
+                f"Cards don't add up: {cards_played} played + {cards_in_hands} in hands != 48"
             )
             break
 
@@ -272,7 +289,7 @@ async def test_berac_with_rl_agents_stable():
         human = ScriptedPlayer("You", bid=Contract.BERAC)
         agents = [human]
         for i in range(3):
-            a = NeuralPlayer(name=f"AI-{i+1}")
+            a = NeuralPlayer(name=f"AI-{i + 1}")
             a.set_training(False)
             agents.append(a)
 

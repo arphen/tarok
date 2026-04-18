@@ -6,8 +6,23 @@ from hypothesis import given as hgiven, settings, assume
 from hypothesis import strategies as st
 
 from tarok.entities import (
-    Card, CardType, Suit, SuitRank, DECK, tarok, suit_card, PAGAT, MOND, SKIS,
-    Contract, GameState, Phase, PlayerRole, Team, Trick, Announcement,
+    Card,
+    CardType,
+    Suit,
+    SuitRank,
+    DECK,
+    tarok,
+    suit_card,
+    PAGAT,
+    MOND,
+    SKIS,
+    Contract,
+    GameState,
+    Phase,
+    PlayerRole,
+    Team,
+    Trick,
+    Announcement,
     compute_card_points,
 )
 from tarok.use_cases.deal import deal
@@ -42,6 +57,7 @@ contracts = st.sampled_from(list(Contract))
 # Property: Deck always has 54 cards with correct raw total
 # ---------------------------------------------------------------------------
 
+
 @hgiven(random_seeds)
 @settings(max_examples=20)
 def test_deck_invariants(seed):
@@ -56,6 +72,7 @@ def test_deck_invariants(seed):
 # Property: compute_card_points of entire deck is always 70
 # ---------------------------------------------------------------------------
 
+
 @hgiven(random_seeds)
 @settings(max_examples=20)
 def test_full_deck_counted_points(seed):
@@ -68,6 +85,7 @@ def test_full_deck_counted_points(seed):
 # ---------------------------------------------------------------------------
 # Property: Any deal distributes all 54 cards (12 per player + 6 talon)
 # ---------------------------------------------------------------------------
+
 
 @hgiven(random_seeds)
 @settings(max_examples=50)
@@ -89,6 +107,7 @@ def test_deal_card_conservation(seed):
 # Property: Legal plays are always non-empty during trick play
 # ---------------------------------------------------------------------------
 
+
 @hgiven(random_seeds)
 @settings(max_examples=30, deadline=5000)
 def test_legal_plays_always_nonempty(seed):
@@ -109,11 +128,13 @@ def test_legal_plays_always_nonempty(seed):
         kings = state.callable_kings()
         if kings:
             from tarok.use_cases.call_king import call_king
+
             state = call_king(state, kings[0])
 
     # Talon exchange
     if state.phase == Phase.TALON_EXCHANGE:
         from tarok.use_cases.exchange_talon import reveal_talon, pick_talon_group, discard_cards
+
         reveal_talon(state)  # mutates state, returns groups
         state = pick_talon_group(state, 0)
         discards = _safe_discard(state)
@@ -137,6 +158,7 @@ def test_legal_plays_always_nonempty(seed):
 # Property: Only declarer team scores after a complete game
 # ---------------------------------------------------------------------------
 
+
 @hgiven(random_seeds)
 @settings(max_examples=50, deadline=5000)
 def test_opponents_score_zero(seed):
@@ -155,10 +177,12 @@ def test_opponents_score_zero(seed):
         kings = state.callable_kings()
         if kings:
             from tarok.use_cases.call_king import call_king
+
             state = call_king(state, kings[0])
 
     if state.phase == Phase.TALON_EXCHANGE:
         from tarok.use_cases.exchange_talon import reveal_talon, pick_talon_group, discard_cards
+
         reveal_talon(state)  # mutates state, returns groups
         state = pick_talon_group(state, 0)
         discards = _safe_discard(state)
@@ -184,6 +208,7 @@ def test_opponents_score_zero(seed):
 # Property: Card points are additive / partition-consistent
 # ---------------------------------------------------------------------------
 
+
 @hgiven(random_seeds)
 @settings(max_examples=30)
 def test_card_points_partition(seed):
@@ -203,6 +228,7 @@ def test_card_points_partition(seed):
 # Property: Higher tarok always beats lower tarok
 # ---------------------------------------------------------------------------
 
+
 @hgiven(
     st.integers(min_value=1, max_value=22),
     st.integers(min_value=1, max_value=22),
@@ -220,6 +246,7 @@ def test_higher_tarok_beats_lower(a, b):
 # Property: Any tarok beats any suit card
 # ---------------------------------------------------------------------------
 
+
 @hgiven(
     st.integers(min_value=1, max_value=22),
     st.sampled_from(list(Suit)),
@@ -235,6 +262,7 @@ def test_tarok_beats_suit(tarok_val, suit, rank):
 # ---------------------------------------------------------------------------
 # Property: Trick winner is always among the 4 players
 # ---------------------------------------------------------------------------
+
 
 @hgiven(random_seeds)
 @settings(max_examples=30, deadline=5000)
@@ -254,10 +282,12 @@ def test_trick_winner_valid(seed):
         kings = state.callable_kings()
         if kings:
             from tarok.use_cases.call_king import call_king
+
             state = call_king(state, kings[0])
 
     if state.phase == Phase.TALON_EXCHANGE:
         from tarok.use_cases.exchange_talon import reveal_talon, pick_talon_group, discard_cards
+
         reveal_talon(state)  # mutates state, returns groups
         state = pick_talon_group(state, 0)
         discards = _safe_discard(state)
@@ -280,6 +310,7 @@ def test_trick_winner_valid(seed):
 # ---------------------------------------------------------------------------
 # Property: Contract strength ordering is total and consistent
 # ---------------------------------------------------------------------------
+
 
 def test_contract_strength_total_order():
     contracts = list(Contract)

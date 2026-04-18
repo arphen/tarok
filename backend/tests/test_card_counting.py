@@ -3,8 +3,18 @@
 import pytest
 
 from tarok.entities import (
-    Card, CardType, Suit, SuitRank, tarok, suit_card, PAGAT, MOND, SKIS, DECK,
-    compute_card_points, TOTAL_GAME_POINTS,
+    Card,
+    CardType,
+    Suit,
+    SuitRank,
+    tarok,
+    suit_card,
+    PAGAT,
+    MOND,
+    SKIS,
+    DECK,
+    compute_card_points,
+    TOTAL_GAME_POINTS,
 )
 
 
@@ -58,7 +68,8 @@ class TestComputeCardPointsGroups:
             suit_card(Suit.HEARTS, SuitRank.QUEEN),
             suit_card(Suit.HEARTS, SuitRank.KNIGHT),
             suit_card(Suit.HEARTS, SuitRank.JACK),
-            tarok(2), tarok(3),
+            tarok(2),
+            tarok(3),
         ]
         assert compute_card_points(cards) == 12
 
@@ -69,7 +80,13 @@ class TestComputeCardPointsGroups:
 
     def test_five_cards_group_plus_leftover_2(self):
         # Group: 5+5+5 - 2 = 13; leftover 2: 5+1 - 1 = 5
-        cards = [tarok(PAGAT), tarok(MOND), tarok(SKIS), suit_card(Suit.HEARTS, SuitRank.KING), tarok(2)]
+        cards = [
+            tarok(PAGAT),
+            tarok(MOND),
+            tarok(SKIS),
+            suit_card(Suit.HEARTS, SuitRank.KING),
+            tarok(2),
+        ]
         assert compute_card_points(cards) == 18
 
     def test_full_deck_is_70(self):
@@ -77,6 +94,7 @@ class TestComputeCardPointsGroups:
 
     def test_full_deck_shuffled_is_70(self):
         import random
+
         deck = list(DECK)
         random.shuffle(deck)
         assert compute_card_points(deck) == TOTAL_GAME_POINTS

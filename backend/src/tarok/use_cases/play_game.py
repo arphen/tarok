@@ -15,8 +15,12 @@ from pydantic import BaseModel, ConfigDict
 import tarok_engine as te
 
 from tarok.entities import (
-    Card, DECK,
-    Contract, GameState, Phase, PlayerRole,
+    Card,
+    DECK,
+    Contract,
+    GameState,
+    Phase,
+    PlayerRole,
 )
 from tarok.ports.observer_port import GameObserverPort
 from tarok.ports.player_port import PlayerPort
@@ -27,16 +31,28 @@ from tarok.ports.player_port import PlayerPort
 # ---------------------------------------------------------------------------
 
 _U8_TO_CONTRACT: dict[int, Contract] = {
-    0: Contract.KLOP, 1: Contract.THREE, 2: Contract.TWO, 3: Contract.ONE,
-    4: Contract.SOLO_THREE, 5: Contract.SOLO_TWO, 6: Contract.SOLO_ONE,
-    7: Contract.SOLO, 8: Contract.BERAC, 9: Contract.BARVNI_VALAT,
+    0: Contract.KLOP,
+    1: Contract.THREE,
+    2: Contract.TWO,
+    3: Contract.ONE,
+    4: Contract.SOLO_THREE,
+    5: Contract.SOLO_TWO,
+    6: Contract.SOLO_ONE,
+    7: Contract.SOLO,
+    8: Contract.BERAC,
+    9: Contract.BARVNI_VALAT,
 }
 _CONTRACT_TO_U8: dict[Contract, int] = {v: k for k, v in _U8_TO_CONTRACT.items()}
 
 _U8_TO_PHASE: dict[int, Phase] = {
-    0: Phase.DEALING, 1: Phase.BIDDING, 2: Phase.KING_CALLING,
-    3: Phase.TALON_EXCHANGE, 4: Phase.ANNOUNCEMENTS, 5: Phase.TRICK_PLAY,
-    6: Phase.SCORING, 7: Phase.FINISHED,
+    0: Phase.DEALING,
+    1: Phase.BIDDING,
+    2: Phase.KING_CALLING,
+    3: Phase.TALON_EXCHANGE,
+    4: Phase.ANNOUNCEMENTS,
+    5: Phase.TRICK_PLAY,
+    6: Phase.SCORING,
+    7: Phase.FINISHED,
 }
 
 _U8_TO_ROLE = {0: PlayerRole.DECLARER, 1: PlayerRole.PARTNER, 2: PlayerRole.OPPONENT}
@@ -45,6 +61,7 @@ _U8_TO_ROLE = {0: PlayerRole.DECLARER, 1: PlayerRole.PARTNER, 2: PlayerRole.OPPO
 # ---------------------------------------------------------------------------
 # Snapshot types (read-only views for observers / PlayerPort)
 # ---------------------------------------------------------------------------
+
 
 class TrickResult(BaseModel):
     model_config = ConfigDict(arbitrary_types_allowed=True)
@@ -66,6 +83,7 @@ class _Bid(BaseModel):
 # ---------------------------------------------------------------------------
 # Session — all accumulated state lives here
 # ---------------------------------------------------------------------------
+
 
 class _Session:
     """Mutable game session.  Holds Rust state + Python bookkeeping for
@@ -110,10 +128,7 @@ class _Session:
         ck = getattr(gs, "called_king", None)
         s.called_king = DECK[ck] if ck is not None else None
         s.talon = [DECK[i] for i in gs.talon()]
-        s.talon_revealed = (
-            [[DECK[i] for i in g] for g in talon_revealed]
-            if talon_revealed else []
-        )
+        s.talon_revealed = [[DECK[i] for i in g] for g in talon_revealed] if talon_revealed else []
         s.put_down = []
         s.tricks = list(self.tricks)
         if current_trick is not None:
@@ -197,7 +212,9 @@ class _Session:
             gs.current_player = bidder
 
             await self.observer.on_bid(
-                self.bids[-1].player, self.bids[-1].contract, self.snap(),
+                self.bids[-1].player,
+                self.bids[-1].contract,
+                self.snap(),
             )
 
         gs.resolve_bidding(winner=winner, contract=highest)
@@ -207,7 +224,7 @@ class _Session:
         # if bidding ends before that player bids, they may have already
         # sent a premature response that must be discarded.
         for p in self.players:
-            if hasattr(p, 'drain_queue'):
+            if hasattr(p, "drain_queue"):
                 p.drain_queue()
 
         py_contract = _U8_TO_CONTRACT.get(gs.contract)
@@ -228,7 +245,9 @@ class _Session:
         gs.current_player = declarer
         py_callable = [DECK[i] for i in callable_idxs]
         card = await self.players[declarer].choose_king(
-            self.snap(), declarer, py_callable,
+            self.snap(),
+            declarer,
+            py_callable,
         )
         card_idx = DECK.index(card) if card in DECK else callable_idxs[0]
         if card_idx not in callable_idxs:
@@ -247,7 +266,9 @@ class _Session:
         await self.observer.on_talon_revealed(py_groups, self.snap(talon_revealed=groups))
 
         group_idx = await self.players[declarer].choose_talon_group(
-            self.snap(talon_revealed=groups), declarer, py_groups,
+            self.snap(talon_revealed=groups),
+            declarer,
+            py_groups,
         )
         if group_idx >= len(groups):
             group_idx = 0
@@ -258,7 +279,9 @@ class _Session:
 
         talon_cards = len(picked)
         discards = await self.players[declarer].choose_discard(
-            self.snap(), declarer, talon_cards,
+            self.snap(),
+            declarer,
+            talon_cards,
         )
         discarded_idxs = [DECK.index(c) for c in discards]
         gs.apply_discards(discarded_idxs)
@@ -288,7 +311,9 @@ class _Session:
                 py_legal = [DECK[i] for i in legal]
 
                 card = await self.players[player].choose_card(
-                    self.snap(current_trick=(lead, trick_cards)), player, py_legal,
+                    self.snap(current_trick=(lead, trick_cards)),
+                    player,
+                    py_legal,
                 )
                 card_idx = DECK.index(card) if card in DECK else legal[0]
                 if card_idx not in legal:
@@ -299,7 +324,8 @@ class _Session:
                 gs.current_player = (player + 1) % 4
 
                 await self.observer.on_card_played(
-                    player, DECK[card_idx],
+                    player,
+                    DECK[card_idx],
                     self.snap(current_trick=(lead, trick_cards)),
                 )
 
@@ -350,22 +376,48 @@ class _Session:
 # Public API
 # ---------------------------------------------------------------------------
 
+
 class NullObserver:
     """Observer that does nothing — used when no UI is attached."""
 
-    async def on_game_start(self, state): pass
-    async def on_deal(self, state): pass
-    async def on_bid(self, player, bid, state): pass
-    async def on_contract_won(self, player, contract, state): pass
-    async def on_king_called(self, player, king, state): pass
-    async def on_talon_revealed(self, groups, state): pass
-    async def on_talon_group_picked(self, state): pass
-    async def on_talon_exchanged(self, state, picked=None, discarded=None): pass
-    async def on_trick_start(self, state): pass
-    async def on_card_played(self, player, card, state): pass
-    async def on_rule_verified(self, player, rule, state): pass
-    async def on_trick_won(self, trick, winner, state): pass
-    async def on_game_end(self, scores, state, breakdown=None): pass
+    async def on_game_start(self, state):
+        pass
+
+    async def on_deal(self, state):
+        pass
+
+    async def on_bid(self, player, bid, state):
+        pass
+
+    async def on_contract_won(self, player, contract, state):
+        pass
+
+    async def on_king_called(self, player, king, state):
+        pass
+
+    async def on_talon_revealed(self, groups, state):
+        pass
+
+    async def on_talon_group_picked(self, state):
+        pass
+
+    async def on_talon_exchanged(self, state, picked=None, discarded=None):
+        pass
+
+    async def on_trick_start(self, state):
+        pass
+
+    async def on_card_played(self, player, card, state):
+        pass
+
+    async def on_rule_verified(self, player, rule, state):
+        pass
+
+    async def on_trick_won(self, trick, winner, state):
+        pass
+
+    async def on_game_end(self, scores, state, breakdown=None):
+        pass
 
 
 _PHASE_HANDLERS = {

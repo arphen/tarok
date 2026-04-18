@@ -22,6 +22,7 @@ log = logging.getLogger(__name__)
 
 # ---- Models ----
 
+
 class TournamentMatchRequest(BaseModel):
     agents: list[dict]  # [{name, type, checkpoint?}] — exactly 4
     num_games: int = 5
@@ -40,6 +41,7 @@ _multi_tournament_progress: dict | None = None
 
 
 # ---- Helpers ----
+
 
 def _build_agent(cfg: dict, idx: int):
     """Instantiate a single agent from a config dict."""
@@ -71,6 +73,7 @@ def _build_agent(cfg: dict, idx: int):
 
 # ---- Endpoints ----
 
+
 @router.post("/match")
 async def tournament_match(req: TournamentMatchRequest):
     """Run N games between 4 agents and return cumulative scores."""
@@ -98,6 +101,7 @@ async def tournament_match(req: TournamentMatchRequest):
 
 # ---- Multi-tournament simulation ----
 
+
 async def _simulate_single_tournament(
     agent_configs: list[dict],
     games_per_round: int,
@@ -114,7 +118,9 @@ async def _simulate_single_tournament(
         """Play a match, return configs ranked best→worst."""
         agents = [_build_agent(c, i) for i, c in enumerate(cfgs[:4])]
         while len(agents) < 4:
-            agents.append(get_player_factory().create("stockskis_m6", name=f"StockŠkis-{len(agents)}"))
+            agents.append(
+                get_player_factory().create("stockskis_m6", name=f"StockŠkis-{len(agents)}")
+            )
 
         cumulative: dict[int, int] = {0: 0, 1: 0, 2: 0, 3: 0}
         for _ in range(max(1, min(games_per_round, 100))):
@@ -216,7 +222,9 @@ async def simulate_multi_tournament(req: MultiTournamentRequest):
         try:
             for t in range(num):
                 try:
-                    placements = await _simulate_single_tournament(agent_configs, req.games_per_round)
+                    placements = await _simulate_single_tournament(
+                        agent_configs, req.games_per_round
+                    )
                 except Exception:
                     log.exception("Tournament %d/%d failed, skipping", t + 1, num)
                     _multi_tournament_progress = {
@@ -224,7 +232,12 @@ async def simulate_multi_tournament(req: MultiTournamentRequest):
                         "current": t + 1,
                         "total": num,
                         "standings": {
-                            name: {**s, "avg_placement": round(s["total_placement"] / max(s["tournaments_played"], 1), 2)}
+                            name: {
+                                **s,
+                                "avg_placement": round(
+                                    s["total_placement"] / max(s["tournaments_played"], 1), 2
+                                ),
+                            }
                             for name, s in standings.items()
                         },
                     }
@@ -250,7 +263,12 @@ async def simulate_multi_tournament(req: MultiTournamentRequest):
                     "current": t + 1,
                     "total": num,
                     "standings": {
-                        name: {**s, "avg_placement": round(s["total_placement"] / max(s["tournaments_played"], 1), 2)}
+                        name: {
+                            **s,
+                            "avg_placement": round(
+                                s["total_placement"] / max(s["tournaments_played"], 1), 2
+                            ),
+                        }
                         for name, s in standings.items()
                     },
                 }
@@ -258,7 +276,12 @@ async def simulate_multi_tournament(req: MultiTournamentRequest):
 
             # Final result
             final_standings = {
-                name: {**s, "avg_placement": round(s["total_placement"] / max(s["tournaments_played"], 1), 2)}
+                name: {
+                    **s,
+                    "avg_placement": round(
+                        s["total_placement"] / max(s["tournaments_played"], 1), 2
+                    ),
+                }
                 for name, s in standings.items()
             }
             _multi_tournament_progress = {

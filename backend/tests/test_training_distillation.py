@@ -80,11 +80,19 @@ def _make_neutral_batch(network: TarokNetV4, include_oracle_states: bool) -> dic
     }
 
 
-def _mean_actor_critic_cosine(network: TarokNetV4, states: torch.Tensor, oracle_states: torch.Tensor) -> float:
+def _mean_actor_critic_cosine(
+    network: TarokNetV4, states: torch.Tensor, oracle_states: torch.Tensor
+) -> float:
     with torch.no_grad():
-        actor = torch.nn.functional.normalize(network.get_actor_features(states), p=2, dim=-1, eps=1e-8)
-        critic = torch.nn.functional.normalize(network.get_critic_features(oracle_states), p=2, dim=-1, eps=1e-8)
-        return float(torch.nn.functional.cosine_similarity(actor, critic, dim=-1, eps=1e-8).mean().item())
+        actor = torch.nn.functional.normalize(
+            network.get_actor_features(states), p=2, dim=-1, eps=1e-8
+        )
+        critic = torch.nn.functional.normalize(
+            network.get_critic_features(oracle_states), p=2, dim=-1, eps=1e-8
+        )
+        return float(
+            torch.nn.functional.cosine_similarity(actor, critic, dim=-1, eps=1e-8).mean().item()
+        )
 
 
 def _actor_weight_delta(before: dict[str, torch.Tensor], after: dict[str, torch.Tensor]) -> float:
@@ -104,20 +112,28 @@ def test_oracle_distillation_moves_actor_toward_critic_features() -> None:
     adapter_with_oracle = _make_adapter(initial_state, imitation_coef=1.0)
     adapter_without_oracle = _make_adapter(initial_state, imitation_coef=1.0)
 
-    batch_with_oracle = _make_neutral_batch(adapter_with_oracle._network, include_oracle_states=True)  # type: ignore[arg-type]
-    batch_without_oracle = _make_neutral_batch(adapter_without_oracle._network, include_oracle_states=False)  # type: ignore[arg-type]
+    batch_with_oracle = _make_neutral_batch(
+        adapter_with_oracle._network, include_oracle_states=True
+    )  # type: ignore[arg-type]
+    batch_without_oracle = _make_neutral_batch(
+        adapter_without_oracle._network, include_oracle_states=False
+    )  # type: ignore[arg-type]
 
     states = batch_with_oracle["states"]
     oracle_states = batch_with_oracle["oracle_states"]
 
-    before_similarity = _mean_actor_critic_cosine(adapter_with_oracle._network, states, oracle_states)  # type: ignore[arg-type]
+    before_similarity = _mean_actor_critic_cosine(
+        adapter_with_oracle._network, states, oracle_states
+    )  # type: ignore[arg-type]
     before_with = copy.deepcopy(adapter_with_oracle._network.state_dict())  # type: ignore[union-attr]
     before_without = copy.deepcopy(adapter_without_oracle._network.state_dict())  # type: ignore[union-attr]
 
     metrics_with = adapter_with_oracle._ppo_update_batched(**batch_with_oracle)
     metrics_without = adapter_without_oracle._ppo_update_batched(**batch_without_oracle)
 
-    after_similarity = _mean_actor_critic_cosine(adapter_with_oracle._network, states, oracle_states)  # type: ignore[arg-type]
+    after_similarity = _mean_actor_critic_cosine(
+        adapter_with_oracle._network, states, oracle_states
+    )  # type: ignore[arg-type]
     after_with = adapter_with_oracle._network.state_dict()  # type: ignore[union-attr]
     after_without = adapter_without_oracle._network.state_dict()  # type: ignore[union-attr]
 

@@ -5,9 +5,23 @@ import random
 from pytest_bdd import scenarios, given, then, parsers
 
 from tarok.entities import (
-    CardType, Suit, SuitRank, PAGAT, MOND, SKIS,
-    tarok, suit_card, DECK,
-    Announcement, Contract, GameState, KontraLevel, Phase, PlayerRole, Team, Trick,
+    CardType,
+    Suit,
+    SuitRank,
+    PAGAT,
+    MOND,
+    SKIS,
+    tarok,
+    suit_card,
+    DECK,
+    Announcement,
+    Contract,
+    GameState,
+    KontraLevel,
+    Phase,
+    PlayerRole,
+    Team,
+    Trick,
     compute_card_points,
 )
 from tarok.use_cases.deal import deal
@@ -36,6 +50,7 @@ def contract_base_value(name, value):
 # helpers
 # ---------------------------------------------------------------------------
 
+
 def _build_controlled_state(card_points: int, contract_name: str) -> GameState:
     """Build a state where:
     - declarer (player 0) with partner (player 1) in 2v2
@@ -48,8 +63,10 @@ def _build_controlled_state(card_points: int, contract_name: str) -> GameState:
     state.declarer = 0
     state.partner = 1
     state.roles = {
-        0: PlayerRole.DECLARER, 1: PlayerRole.PARTNER,
-        2: PlayerRole.OPPONENT, 3: PlayerRole.OPPONENT,
+        0: PlayerRole.DECLARER,
+        1: PlayerRole.PARTNER,
+        2: PlayerRole.OPPONENT,
+        3: PlayerRole.OPPONENT,
     }
     state.announcements = {}
 
@@ -61,7 +78,7 @@ def _build_controlled_state(card_points: int, contract_name: str) -> GameState:
     rest = [c for c in deck if c not in trula and c not in kings]
 
     decl_forced = [trula[0], trula[1], kings[0], kings[1]]  # PAGAT, MOND, 2 kings
-    opp_forced = [trula[2], kings[2], kings[3]]              # SKIS, 2 kings
+    opp_forced = [trula[2], kings[2], kings[3]]  # SKIS, 2 kings
 
     # The declarer pile must have exactly 6 + 4k cards (6 put_down + k complete tricks).
     # Valid pile sizes: 6, 10, 14, 18, 22, 26, 30, 34, 38, 42, 46, 50, 54
@@ -136,11 +153,13 @@ def _build_controlled_state(card_points: int, contract_name: str) -> GameState:
     idx = 0
     for trick_num in range(12):
         t = Trick(lead_player=0 if trick_num < n_decl_tricks else 2)
-        cards_for_trick = all_trick[idx:idx+4]
+        cards_for_trick = all_trick[idx : idx + 4]
         idx += 4
-        sorted_cards = sorted(cards_for_trick, key=lambda c: (
-            1 if c.card_type == CardType.TAROK else 0, c.value
-        ), reverse=True)
+        sorted_cards = sorted(
+            cards_for_trick,
+            key=lambda c: (1 if c.card_type == CardType.TAROK else 0, c.value),
+            reverse=True,
+        )
         if trick_num < n_decl_tricks:
             t.cards = [
                 (0, sorted_cards[0]),
@@ -178,6 +197,7 @@ def game_score_is(scored_state, expected):
 # Zero-sum
 # ---------------------------------------------------------------------------
 
+
 def _play_random_game(seed: int) -> GameState:
     rng = random.Random(seed)
     state = GameState(phase=Phase.DEALING)
@@ -186,6 +206,7 @@ def _play_random_game(seed: int) -> GameState:
     # Force player 0 to bid THREE (avoid klop)
     state.phase = Phase.BIDDING
     from tarok.use_cases.bid import place_bid
+
     state.current_bidder = 0
     state.current_player = 0
     state = place_bid(state, 0, Contract.THREE)
@@ -197,18 +218,21 @@ def _play_random_game(seed: int) -> GameState:
         kings = state.callable_kings()
         if kings:
             from tarok.use_cases.call_king import call_king
+
             state = call_king(state, kings[0])
 
     if state.phase == Phase.TALON_EXCHANGE:
         from tarok.use_cases.exchange_talon import reveal_talon, pick_talon_group, discard_cards
+
         reveal_talon(state)
         state = pick_talon_group(state, 0)
         discardable = [
-            c for c in state.hands[state.declarer]
+            c
+            for c in state.hands[state.declarer]
             if c.card_type != CardType.TAROK and not c.is_king
-        ][:state.contract.talon_cards]
+        ][: state.contract.talon_cards]
         if len(discardable) < state.contract.talon_cards:
-            discardable = state.hands[state.declarer][:state.contract.talon_cards]
+            discardable = state.hands[state.declarer][: state.contract.talon_cards]
         state = discard_cards(state, discardable)
 
     state.phase = Phase.TRICK_PLAY
@@ -238,6 +262,7 @@ def opponents_zero(completed_game):
 # ---------------------------------------------------------------------------
 # Trula bonus
 # ---------------------------------------------------------------------------
+
 
 @given("the declarer team collected trula silently", target_fixture="trula_state")
 def silent_trula():
@@ -276,6 +301,7 @@ def trula_bonus_neg20():
 # Pagat ultimo bonus
 # ---------------------------------------------------------------------------
 
+
 @given("the declarer team won pagat ultimo silently", target_fixture="pagat_state")
 def silent_pagat():
     assert _SILENT_PAGAT_ULTIMO == 25
@@ -301,6 +327,7 @@ def pagat_bonus_50():
 # ---------------------------------------------------------------------------
 # Kontra / Re / Sub
 # ---------------------------------------------------------------------------
+
 
 @given("the opponents kontra the game")
 def opponents_kontra_game(scored_state):
@@ -328,26 +355,21 @@ def trula_bonus_40():
 # 2v2 team symmetry
 # ---------------------------------------------------------------------------
 
+
 @then("the declarer and partner should have the same score")
 def declarer_partner_same(scored_state):
     scores = score_game(scored_state)
-    assert scores[0] == scores[1], (
-        f"Declarer ({scores[0]}) != Partner ({scores[1]})"
-    )
+    assert scores[0] == scores[1], f"Declarer ({scores[0]}) != Partner ({scores[1]})"
 
 
 @then("both opponents should have the same score")
 def opponents_same(scored_state):
     scores = score_game(scored_state)
-    assert scores[2] == scores[3], (
-        f"Opponent 2 ({scores[2]}) != Opponent 3 ({scores[3]})"
-    )
+    assert scores[2] == scores[3], f"Opponent 2 ({scores[2]}) != Opponent 3 ({scores[3]})"
 
 
 @then("the declarer score should equal the negated opponent score")
 def declarer_neg_opponent(scored_state):
     scores = score_game(scored_state)
     # Opponents should have 0 (non-zero-sum: only declarer team scores)
-    assert scores[2] == 0, (
-        f"Opponent should have 0, got {scores[2]}"
-    )
+    assert scores[2] == 0, f"Opponent should have 0, got {scores[2]}"

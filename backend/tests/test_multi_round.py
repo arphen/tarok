@@ -8,12 +8,25 @@ from httpx import ASGITransport, AsyncClient
 
 from tarok.adapters.api.server import app
 from tarok.adapters.api.ws_observer import _build_card_tracker, _state_for_player
-from tarok.entities import Card, CardType, Suit, SuitRank, DECK, GameState, Phase, Contract, Trick, tarok, suit_card
+from tarok.entities import (
+    Card,
+    CardType,
+    Suit,
+    SuitRank,
+    DECK,
+    GameState,
+    Phase,
+    Contract,
+    Trick,
+    tarok,
+    suit_card,
+)
 from tarok.use_cases.game_loop import RustGameLoop as GameLoop, NullObserver
 from tarok.adapters.players.stockskis_player import StockskisPlayer
 
 
 # ---- Fixtures ----
+
 
 @pytest.fixture
 def client():
@@ -23,12 +36,16 @@ def client():
 
 # ---- API tests: num_rounds ----
 
+
 async def test_new_game_with_num_rounds(client):
     """POST /api/game/new with num_rounds creates a game with round config."""
-    resp = await client.post("/api/game/new", json={
-        "opponents": ["random", "random", "random"],
-        "num_rounds": 5,
-    })
+    resp = await client.post(
+        "/api/game/new",
+        json={
+            "opponents": ["random", "random", "random"],
+            "num_rounds": 5,
+        },
+    )
     assert resp.status_code == 200
     data = resp.json()
     assert "game_id" in data
@@ -36,23 +53,32 @@ async def test_new_game_with_num_rounds(client):
 
 async def test_new_game_default_rounds(client):
     """Default num_rounds should be 1."""
-    resp = await client.post("/api/game/new", json={
-        "opponents": ["random", "random", "random"],
-    })
+    resp = await client.post(
+        "/api/game/new",
+        json={
+            "opponents": ["random", "random", "random"],
+        },
+    )
     assert resp.status_code == 200
 
 
 async def test_new_game_single_round(client):
     """Explicit single round works."""
-    resp = await client.post("/api/game/new", json={
-        "num_rounds": 1,
-    })
+    resp = await client.post(
+        "/api/game/new",
+        json={
+            "num_rounds": 1,
+        },
+    )
     assert resp.status_code == 200
 
 
 # ---- Card tracker tests ----
 
-def _make_trick(cards_with_players: list[tuple[int, Card]], trump_value: int | None = None) -> Trick:
+
+def _make_trick(
+    cards_with_players: list[tuple[int, Card]], trump_value: int | None = None
+) -> Trick:
     """Helper to create a trick from cards."""
     trick = Trick()
     for p, c in cards_with_players:
@@ -107,7 +133,9 @@ def test_card_tracker_after_trick():
     tracker = _build_card_tracker(state)
 
     # Played cards should be gone from remaining
-    remaining_labels = [c["label"] for group in tracker["remaining_by_group"].values() for c in group]
+    remaining_labels = [
+        c["label"] for group in tracker["remaining_by_group"].values() for c in group
+    ]
     assert hearts_king.label not in remaining_labels
     assert tarok_1.label not in remaining_labels
 
@@ -160,11 +188,14 @@ def test_card_tracker_put_down_excluded():
     state.put_down = [put_card]
 
     tracker = _build_card_tracker(state)
-    remaining_labels = [c["label"] for group in tracker["remaining_by_group"].values() for c in group]
+    remaining_labels = [
+        c["label"] for group in tracker["remaining_by_group"].values() for c in group
+    ]
     assert put_card.label not in remaining_labels
 
 
 # ---- Match info in state tests ----
+
 
 def test_state_includes_match_info():
     """When match info is set, state includes it."""
@@ -198,6 +229,7 @@ def test_state_match_info_none_by_default():
 
 # ---- Multi-round game loop test ----
 
+
 class RecordingObserver(NullObserver):
     """Observer that records events for testing."""
 
@@ -215,7 +247,6 @@ class RecordingObserver(NullObserver):
 
 async def test_single_round_game_loop():
     """A single round game completes normally."""
-    
 
     players = [StockskisPlayer(variant="m6", name=f"P{i}") for i in range(4)]
     obs = RecordingObserver()
@@ -230,7 +261,6 @@ async def test_single_round_game_loop():
 
 async def test_multi_round_cumulative_scores():
     """Running multiple rounds accumulates scores correctly."""
-    
 
     players = [StockskisPlayer(variant="m6", name=f"P{i}") for i in range(4)]
     cumulative = {i: 0 for i in range(4)}

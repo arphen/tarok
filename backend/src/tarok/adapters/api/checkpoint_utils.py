@@ -10,6 +10,7 @@ Supported token forms
 - ``"hall_of_fame/foo.pt"``      →  ../data/checkpoints/hall_of_fame/foo.pt
 - other relative path            →  tried under ../data/checkpoints/, then as literal
 """
+
 from __future__ import annotations
 
 from pathlib import Path
@@ -39,7 +40,9 @@ def resolve_checkpoint(token: str) -> Path | None:
     return literal if literal.exists() else None
 
 
-def resolve_checkpoint_or_default(token: str | None, default_persona: str = "training_run") -> Path | None:
+def resolve_checkpoint_or_default(
+    token: str | None, default_persona: str = "training_run"
+) -> Path | None:
     """Resolve *token*, or fall back to *default_persona*/_current.pt."""
     if token:
         path = resolve_checkpoint(token)

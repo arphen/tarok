@@ -21,6 +21,7 @@ CONTRACT_MAP = {
 
 # --- First player can bid anything ---
 
+
 @given("a game in bidding phase", target_fixture="bidding_state")
 def bidding_state():
     state = GameState(phase=Phase.BIDDING, dealer=0)
@@ -52,6 +53,7 @@ def all_bids_legal(first_player_state):
 
 
 # --- Later bids higher than current ---
+
 
 @given(parsers.parse('a game where "{contract}" has been bid'), target_fixture="after_first_bid")
 def after_first_bid(contract):
@@ -85,6 +87,7 @@ def higher_contracts_only(next_player_state, contract):
 
 # --- All pass triggers re-deal ---
 
+
 @when("all four players pass", target_fixture="all_passed")
 def all_pass(bidding_state):
     state = bidding_state
@@ -104,7 +107,11 @@ def game_enters_klop(all_passed):
 
 # --- Single bidder wins ---
 
-@given(parsers.parse('a game where 3 players passed and 1 bid "{contract}"'), target_fixture="single_bidder")
+
+@given(
+    parsers.parse('a game where 3 players passed and 1 bid "{contract}"'),
+    target_fixture="single_bidder",
+)
 def single_bidder(contract):
     state = GameState(phase=Phase.BIDDING, dealer=0)
     # Bidding order: 2, 3, 0, then forehand (1)

@@ -42,15 +42,23 @@ from tarok_model.encoding import (
     card_idx_to_card,
 )
 from tarok.entities import (
-    Card, CardType, Suit, DECK,
-    Announcement, Contract, GameState, KontraLevel, Phase, PlayerRole,
+    Card,
+    CardType,
+    Suit,
+    DECK,
+    Announcement,
+    Contract,
+    GameState,
+    KontraLevel,
+    Phase,
+    PlayerRole,
 )
 from tarok.ports.observer_port import GameObserverPort
 from tarok.use_cases import rust_state as _rust_state
 
 
 # Map Rust contract u8 → Python Contract enum
-_RUST_CONTRACT = {c.value if hasattr(c, 'value') else c: c for c in Contract}
+_RUST_CONTRACT = {c.value if hasattr(c, "value") else c: c for c in Contract}
 # Build a fast lookup: Rust contract index → Python Contract
 _U8_TO_CONTRACT: dict[int, Contract] = {}
 for c in Contract:
@@ -87,9 +95,16 @@ _RUST_PHASE_TO_PY = {
 
 # BID_ACTIONS index → Rust contract u8 or None (pass)
 _BID_IDX_TO_RUST: list[int | None] = [None]  # index 0 = pass
-for c in [Contract.THREE, Contract.TWO, Contract.ONE,
-          Contract.SOLO_THREE, Contract.SOLO_TWO, Contract.SOLO_ONE,
-          Contract.SOLO, Contract.BERAC]:
+for c in [
+    Contract.THREE,
+    Contract.TWO,
+    Contract.ONE,
+    Contract.SOLO_THREE,
+    Contract.SOLO_TWO,
+    Contract.SOLO_ONE,
+    Contract.SOLO,
+    Contract.BERAC,
+]:
     _BID_IDX_TO_RUST.append(_PY_CONTRACT_TO_RUST_U8[c])
 
 _CURRENT_BIDDER_UNSET = object()
@@ -98,19 +113,44 @@ _CURRENT_BIDDER_UNSET = object()
 class NullObserver:
     """Default observer that does nothing."""
 
-    async def on_game_start(self, state): pass
-    async def on_deal(self, state): pass
-    async def on_bid(self, player, bid, state): pass
-    async def on_contract_won(self, player, contract, state): pass
-    async def on_king_called(self, player, king, state): pass
-    async def on_talon_revealed(self, groups, state): pass
-    async def on_talon_group_picked(self, state): pass
-    async def on_talon_exchanged(self, state, picked=None, discarded=None): pass
-    async def on_trick_start(self, state): pass
-    async def on_card_played(self, player, card, state): pass
-    async def on_rule_verified(self, player, rule, state): pass
-    async def on_trick_won(self, trick, winner, state): pass
-    async def on_game_end(self, scores, state, breakdown=None): pass
+    async def on_game_start(self, state):
+        pass
+
+    async def on_deal(self, state):
+        pass
+
+    async def on_bid(self, player, bid, state):
+        pass
+
+    async def on_contract_won(self, player, contract, state):
+        pass
+
+    async def on_king_called(self, player, king, state):
+        pass
+
+    async def on_talon_revealed(self, groups, state):
+        pass
+
+    async def on_talon_group_picked(self, state):
+        pass
+
+    async def on_talon_exchanged(self, state, picked=None, discarded=None):
+        pass
+
+    async def on_trick_start(self, state):
+        pass
+
+    async def on_card_played(self, player, card, state):
+        pass
+
+    async def on_rule_verified(self, player, rule, state):
+        pass
+
+    async def on_trick_won(self, trick, winner, state):
+        pass
+
+    async def on_game_end(self, scores, state, breakdown=None):
+        pass
 
 
 class _RustTrickSnapshot:
@@ -189,18 +229,27 @@ class RustGameLoop:
     ) -> None:
         if self._decision_recorder is None:
             return
-        self._decision_recorder({
-            "step": self._decision_step,
-            "player": player,
-            "actor_kind": actor_kind,
-            "decision_type": decision_type.name,
-            "state": state.tolist() if hasattr(state, "tolist") else list(state),
-            "legal_mask": legal_mask.tolist() if hasattr(legal_mask, "tolist") else list(legal_mask),
-            "action": int(action),
-        })
+        self._decision_recorder(
+            {
+                "step": self._decision_step,
+                "player": player,
+                "actor_kind": actor_kind,
+                "decision_type": decision_type.name,
+                "state": state.tolist() if hasattr(state, "tolist") else list(state),
+                "legal_mask": legal_mask.tolist()
+                if hasattr(legal_mask, "tolist")
+                else list(legal_mask),
+                "action": int(action),
+            }
+        )
         self._decision_step += 1
 
-    async def run(self, dealer: int = 0, preset_hands: list[list[int]] | None = None, preset_talon: list[int] | None = None) -> tuple[GameState, dict[int, int]]:
+    async def run(
+        self,
+        dealer: int = 0,
+        preset_hands: list[list[int]] | None = None,
+        preset_talon: list[int] | None = None,
+    ) -> tuple[GameState, dict[int, int]]:
         """Play one full game, returning (final_state, {player: score})."""
         gs = te.RustGameState(dealer)
         self._decision_step = 0
@@ -215,8 +264,12 @@ class RustGameLoop:
         # Only populated when we actually have observer callbacks
         has_observer = not isinstance(self._observer, NullObserver)
 
-        await self._observer.on_game_start(_build_py_state_from_rust(gs, completed_tricks, bids=bid_history))
-        await self._observer.on_deal(_build_py_state_from_rust(gs, completed_tricks, bids=bid_history))
+        await self._observer.on_game_start(
+            _build_py_state_from_rust(gs, completed_tricks, bids=bid_history)
+        )
+        await self._observer.on_deal(
+            _build_py_state_from_rust(gs, completed_tricks, bids=bid_history)
+        )
 
         # === BIDDING ===
         contract, declarer = await self._run_bidding(gs, completed_tricks, bid_history)
@@ -242,7 +295,12 @@ class RustGameLoop:
             initial_tarok_counts[p] = sum(1 for c in hand if c < 22)
 
         # === KING CALLING ===
-        if declarer is not None and not _is_klop(contract) and not _is_solo(contract) and not _is_berac(contract):
+        if (
+            declarer is not None
+            and not _is_klop(contract)
+            and not _is_solo(contract)
+            and not _is_berac(contract)
+        ):
             chosen_king_idx = await self._run_king_call(gs, declarer)
             if chosen_king_idx is not None:
                 await self._observer.on_king_called(
@@ -253,12 +311,21 @@ class RustGameLoop:
 
         # === TALON EXCHANGE ===
         talon_cards = _talon_cards(contract)
-        if declarer is not None and talon_cards > 0 and not _is_klop(contract) and not _is_berac(contract):
-            gs.phase = te.PHASE_TALON_EXCHANGE  # Transition from king_calling so frontend shows talon UI
+        if (
+            declarer is not None
+            and talon_cards > 0
+            and not _is_klop(contract)
+            and not _is_berac(contract)
+        ):
+            gs.phase = (
+                te.PHASE_TALON_EXCHANGE
+            )  # Transition from king_calling so frontend shows talon UI
             talon_groups = _build_talon_groups(gs.talon(), talon_cards)
             await self._observer.on_talon_revealed(
                 [[DECK[idx] for idx in g] for g in talon_groups],
-                _build_py_state_from_rust(gs, completed_tricks, bids=bid_history, talon_revealed=talon_groups),
+                _build_py_state_from_rust(
+                    gs, completed_tricks, bids=bid_history, talon_revealed=talon_groups
+                ),
             )
             picked_idxs, discarded_idxs = await self._run_talon_exchange(
                 gs,
@@ -283,7 +350,9 @@ class RustGameLoop:
 
         # === TRICK PLAY ===
         gs.phase = te.PHASE_TRICK_PLAY
-        lead_player = declarer if (_is_berac(contract) and declarer is not None) else (dealer + 1) % 4
+        lead_player = (
+            declarer if (_is_berac(contract) and declarer is not None) else (dealer + 1) % 4
+        )
         berac_early = False
         for trick_num in range(12):
             lead = lead_player
@@ -291,7 +360,9 @@ class RustGameLoop:
             gs.start_trick(lead_player)
             gs.current_player = lead_player
             await self._observer.on_trick_start(
-                _build_py_state_from_rust(gs, completed_tricks, bids=bid_history, current_trick=(lead, trick_cards)),
+                _build_py_state_from_rust(
+                    gs, completed_tricks, bids=bid_history, current_trick=(lead, trick_cards)
+                ),
             )
 
             for offset in range(4):
@@ -304,12 +375,16 @@ class RustGameLoop:
                 card_state_np = gs.encode_state(player, te.DT_CARD_PLAY)
                 card_mask_np = gs.legal_plays_mask(player)
 
-                if hasattr(agent, '_decide_from_tensors'):
+                if hasattr(agent, "_decide_from_tensors"):
                     # Fast tensor path
-                state_t = torch.from_numpy(card_state_np).float()
-                legal_mask = torch.from_numpy(card_mask_np).float()
-                action_idx = agent._decide_from_tensors(
-                    state_t, legal_mask, DecisionType.CARD_PLAY,
+                    state_t = torch.from_numpy(card_state_np).float()
+                    legal_mask = torch.from_numpy(card_mask_np).float()
+                    action_idx = agent._decide_from_tensors(
+                        state_t,
+                        legal_mask,
+                        DecisionType.CARD_PLAY,
+                        game_mode=contract_to_game_mode(py_contract),
+                    )
 
                     if action_idx not in legal_cards:
                         action_idx = legal_cards[0]
@@ -344,7 +419,9 @@ class RustGameLoop:
                 await self._observer.on_card_played(
                     player,
                     DECK[action_idx],
-                    _build_py_state_from_rust(gs, completed_tricks, bids=bid_history, current_trick=(lead, trick_cards)),
+                    _build_py_state_from_rust(
+                        gs, completed_tricks, bids=bid_history, current_trick=(lead, trick_cards)
+                    ),
                 )
 
             # Finish trick
@@ -375,13 +452,19 @@ class RustGameLoop:
 
         # Build a minimal Python GameState for compatibility with trainer
         py_state = _build_py_state_stub(
-            dealer, py_contract, declarer,
-            gs, initial_tarok_counts, completed_tricks, bid_history,
+            dealer,
+            py_contract,
+            declarer,
+            gs,
+            initial_tarok_counts,
+            completed_tricks,
+            bid_history,
         )
         py_state.scores = scores
 
         # Scoring breakdown — computed entirely in Rust, no Python scoring
         import json as _json
+
         breakdown = None
         try:
             breakdown_json = gs.score_game_breakdown_json()
@@ -450,11 +533,13 @@ class RustGameLoop:
             bid_state_np = gs.encode_state(bidder, te.DT_BID)
             bid_mask = encode_bid_mask(py_legal_bids)
 
-            if hasattr(agent, '_decide_from_tensors'):
+            if hasattr(agent, "_decide_from_tensors"):
                 # Fast tensor path (NeuralPlayer)
                 state_t = torch.from_numpy(bid_state_np).float()
                 action_idx = agent._decide_from_tensors(
-                    state_t, bid_mask, DecisionType.BID,
+                    state_t,
+                    bid_mask,
+                    DecisionType.BID,
                 )
                 bid_contract = BID_ACTIONS[action_idx]  # Contract | None
             else:
@@ -492,10 +577,9 @@ class RustGameLoop:
 
             # Determine whether bidding is over *before* advertising next bidder.
             active_after = [i for i in range(4) if not passed[i]]
-            bidding_done = (
-                (len(active_after) <= 1 and winning_player is not None)
-                or len(active_after) == 0
-            )
+            bidding_done = (len(active_after) <= 1 and winning_player is not None) or len(
+                active_after
+            ) == 0
 
             next_bidder = bidder
             if not bidding_done:
@@ -563,11 +647,13 @@ class RustGameLoop:
         king_state_np = gs.encode_state(declarer, te.DT_KING_CALL)
         king_mask = encode_king_mask(py_callable)
 
-        if hasattr(agent, '_decide_from_tensors'):
+        if hasattr(agent, "_decide_from_tensors"):
             # Fast tensor path
             state_t = torch.from_numpy(king_state_np).float()
             action_idx = agent._decide_from_tensors(
-                state_t, king_mask, DecisionType.KING_CALL,
+                state_t,
+                king_mask,
+                DecisionType.KING_CALL,
             )
 
             chosen_suit = KING_ACTIONS[action_idx]
@@ -630,11 +716,13 @@ class RustGameLoop:
         talon_state_np = gs.encode_state(declarer, te.DT_TALON_PICK)
         talon_mask = encode_talon_mask(num_groups)
 
-        if hasattr(agent, '_decide_from_tensors'):
+        if hasattr(agent, "_decide_from_tensors"):
             # Fast tensor path
             state_t = torch.from_numpy(talon_state_np).float()
             action_idx = agent._decide_from_tensors(
-                state_t, talon_mask, DecisionType.TALON_PICK,
+                state_t,
+                talon_mask,
+                DecisionType.TALON_PICK,
             )
             if action_idx >= num_groups:
                 action_idx = 0
@@ -658,13 +746,10 @@ class RustGameLoop:
             hand = gs.hand(declarer)
             hand_cards = [(idx, DECK[idx]) for idx in hand]
             discardable = [
-                (idx, c) for idx, c in hand_cards
-                if not c.is_king and c.card_type != CardType.TAROK
+                (idx, c) for idx, c in hand_cards if not c.is_king and c.card_type != CardType.TAROK
             ]
             if len(discardable) < talon_cards:
-                discardable = [
-                    (idx, c) for idx, c in hand_cards if not c.is_king
-                ]
+                discardable = [(idx, c) for idx, c in hand_cards if not c.is_king]
             discardable.sort(key=lambda x: x[1].points)
             discarded_idxs = [idx for idx, _ in discardable[:talon_cards]]
             for idx in discarded_idxs:
@@ -721,11 +806,14 @@ class RustGameLoop:
 def _is_klop(contract_u8: int) -> bool:
     return contract_u8 == 0
 
+
 def _is_solo(contract_u8: int) -> bool:
     return contract_u8 in (4, 5, 6, 7)
 
+
 def _is_berac(contract_u8: int) -> bool:
     return contract_u8 == 8
+
 
 def _talon_cards(contract_u8: int) -> int:
     return {1: 3, 2: 2, 3: 1, 4: 3, 5: 2, 6: 1}.get(contract_u8, 0)
@@ -818,17 +906,17 @@ def _build_py_state_from_rust(
     state.hands = [[DECK[idx] for idx in gs.hand(p)] for p in range(4)]
 
     # Contract / declarer / partner
-    contract_u8 = gs.contract if hasattr(gs, 'contract') else None
+    contract_u8 = gs.contract if hasattr(gs, "contract") else None
     state.contract = _RUST_U8_TO_PY_CONTRACT.get(contract_u8) if contract_u8 is not None else None
-    state.declarer = getattr(gs, 'declarer', None)
-    state.partner = getattr(gs, 'partner', None)
+    state.declarer = getattr(gs, "declarer", None)
+    state.partner = getattr(gs, "partner", None)
 
     # Called king
-    called_king_idx = getattr(gs, 'called_king', None)
+    called_king_idx = getattr(gs, "called_king", None)
     state.called_king = DECK[called_king_idx] if called_king_idx is not None else None
 
     # Talon
-    talon_idxs = gs.talon() if hasattr(gs, 'talon') else []
+    talon_idxs = gs.talon() if hasattr(gs, "talon") else []
     state.talon = [DECK[idx] for idx in talon_idxs]
     if talon_revealed is not None:
         state.talon_revealed = [[DECK[idx] for idx in g] for g in talon_revealed]
@@ -855,7 +943,7 @@ def _build_py_state_from_rust(
         except Exception:
             state.roles[p] = PlayerRole.OPPONENT
     state.scores = {}
-    state.current_player = getattr(gs, 'current_player', 0)
+    state.current_player = getattr(gs, "current_player", 0)
     # Preserve explicit None to signal that bidding is complete and no one should act.
     if current_bidder is _CURRENT_BIDDER_UNSET:
         state.current_bidder = state.current_player
@@ -863,10 +951,10 @@ def _build_py_state_from_rust(
         state.current_bidder = current_bidder
 
     # Snapshot legal actions at build time so observer payloads are immutable.
-    if hasattr(gs, 'legal_bids') and callable(getattr(gs, 'legal_bids', None)):
+    if hasattr(gs, "legal_bids") and callable(getattr(gs, "legal_bids", None)):
         legal_bids_cache: dict[int, list[int | None]] = {}
         snapshot_bids = list(bids or [])
-        snapshot_dealer = int(getattr(gs, 'dealer', 0))
+        snapshot_dealer = int(getattr(gs, "dealer", 0))
 
         def _legal_bids(player_idx: int, _cache=legal_bids_cache, _gs=gs) -> list[int | None]:
             if player_idx not in _cache:
@@ -888,7 +976,7 @@ def _build_py_state_from_rust(
             return list(_cache[player_idx])
 
         state.legal_bids = _legal_bids
-    if hasattr(gs, 'legal_plays') and callable(getattr(gs, 'legal_plays', None)):
+    if hasattr(gs, "legal_plays") and callable(getattr(gs, "legal_plays", None)):
         legal_plays_cache: dict[int, list[Card]] = {}
 
         def _legal_plays(player_idx: int, _cache=legal_plays_cache, _gs=gs) -> list[Card]:
@@ -908,7 +996,7 @@ def _build_py_state_from_rust(
             return list(_cache[player_idx])
 
         state.legal_plays = _legal_plays
-    if hasattr(gs, 'callable_kings') and callable(getattr(gs, 'callable_kings', None)):
+    if hasattr(gs, "callable_kings") and callable(getattr(gs, "callable_kings", None)):
         callable_kings_cache: list[Card] | None = None
 
         def _callable_kings(_gs=gs) -> list[Card]:
@@ -943,7 +1031,7 @@ def _build_py_state_stub(
     state.dealer = dealer
     state.contract = contract
     state.declarer = declarer
-    state.partner = getattr(gs, 'partner', None)
+    state.partner = getattr(gs, "partner", None)
     state.phase = Phase.FINISHED
     state.num_players = 4
     state.hands = [[DECK[idx] for idx in gs.hand(p)] for p in range(4)]
@@ -958,7 +1046,7 @@ def _build_py_state_stub(
     state.put_down = []
     state.called_king = None
     state.scores = {}
-    state.current_player = getattr(gs, 'current_player', 0)
+    state.current_player = getattr(gs, "current_player", 0)
     state.initial_tarok_counts = initial_tarok_counts
 
     # Build roles dict from Rust state
@@ -966,7 +1054,7 @@ def _build_py_state_stub(
     roles: dict[int, PlayerRole] = {}
     for p in range(4):
         try:
-            rust_role = gs.get_role(p) if hasattr(gs, 'get_role') else 2
+            rust_role = gs.get_role(p) if hasattr(gs, "get_role") else 2
             roles[p] = _RUST_ROLE_MAP.get(rust_role, PlayerRole.OPPONENT)
         except Exception:
             roles[p] = PlayerRole.OPPONENT

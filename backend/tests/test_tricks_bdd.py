@@ -9,13 +9,26 @@ import random
 import pytest
 from pytest_bdd import scenarios, given, when, then, parsers
 
-from tarok.entities import Card, CardType, Suit, SuitRank, tarok, suit_card, GameState, Phase, Trick, Contract, PlayerRole
+from tarok.entities import (
+    Card,
+    CardType,
+    Suit,
+    SuitRank,
+    tarok,
+    suit_card,
+    GameState,
+    Phase,
+    Trick,
+    Contract,
+    PlayerRole,
+)
 from tarok.use_cases.play_trick import play_card, start_trick
 
 scenarios("features/tricks.feature")
 
 
 # ---- helpers ----
+
 
 def _add_heart_lead(state: GameState) -> GameState:
     state.current_trick = Trick(lead_player=1)
@@ -25,6 +38,7 @@ def _add_heart_lead(state: GameState) -> GameState:
 
 
 # ---- Scenario: Must follow lead suit when possible ----
+
 
 @given("a player has hearts and clubs in hand", target_fixture="state")
 def player_hearts_clubs():
@@ -52,6 +66,7 @@ def only_hearts(after_lead):
 
 # ---- Scenario: Must play tarok if cannot follow suit ----
 
+
 @given("a player has only clubs and taroks in hand", target_fixture="state")
 def player_clubs_taroks():
     state = GameState(phase=Phase.TRICK_PLAY)
@@ -73,6 +88,7 @@ def only_taroks(after_lead):
 
 # ---- Scenario: Can play anything if no suit and no tarok ----
 
+
 @given("a player has only clubs and diamonds in hand", target_fixture="state")
 def player_clubs_diamonds():
     state = GameState(phase=Phase.TRICK_PLAY)
@@ -90,6 +106,7 @@ def any_card(after_lead):
 
 
 # ---- Scenario: Must follow tarok with tarok ----
+
 
 @given("a player has taroks and suit cards in hand", target_fixture="state")
 def player_taroks_and_suits():
@@ -113,6 +130,7 @@ def lead_tarok(state):
 
 # ---- Scenario: Higher tarok beats lower tarok ----
 
+
 @given("tarok XV is played against tarok X", target_fixture="tarok_trick")
 def tarok_15_vs_10():
     trick = Trick(lead_player=0)
@@ -126,6 +144,7 @@ def tarok_15_wins(tarok_trick):
 
 
 # ---- Scenario: Any tarok beats any suit card ----
+
 
 @given("tarok I is played against the king of hearts", target_fixture="tarok_vs_suit")
 def tarok_1_vs_king():
@@ -146,6 +165,7 @@ def tarok_wins(tarok_vs_suit):
 
 # ---- Scenario: Lead suit wins against off-suit ----
 
+
 @given("king of hearts leads and king of clubs follows", target_fixture="suit_trick")
 def heart_king_vs_club_king():
     trick = Trick(lead_player=0)
@@ -165,9 +185,11 @@ def heart_king_wins(suit_trick):
 
 # ---- Scenario: After 12 tricks the phase is scoring ----
 
+
 @given("a game in trick play phase with 4 random players", target_fixture="trick_play_state")
 def trick_play_game():
     from tarok.use_cases.deal import deal
+
     state = GameState()
     state.phase = Phase.DEALING
     state = deal(state, rng=random.Random(42))
@@ -175,8 +197,10 @@ def trick_play_game():
     state.contract = Contract.THREE
     state.declarer = 0
     state.roles = {
-        0: PlayerRole.DECLARER, 1: PlayerRole.PARTNER,
-        2: PlayerRole.OPPONENT, 3: PlayerRole.OPPONENT,
+        0: PlayerRole.DECLARER,
+        1: PlayerRole.PARTNER,
+        2: PlayerRole.OPPONENT,
+        3: PlayerRole.OPPONENT,
     }
     state.current_player = 1
     return state

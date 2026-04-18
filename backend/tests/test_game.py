@@ -8,7 +8,6 @@ from tarok.adapters.players.stockskis_player import StockskisPlayer
 
 
 @pytest.mark.asyncio
-async def test_full_game_with_random_players():
 async def test_full_game():
     players = [StockskisPlayer(variant="m6", name=f"Bot-{i}") for i in range(4)]
     game = GameLoop(players)

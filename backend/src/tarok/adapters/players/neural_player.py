@@ -100,7 +100,11 @@ class NeuralPlayer:
     ) -> int:
         state_tensor = encode_state(state, player_idx, decision_type).to(self.device)
         mask = legal_mask.to(self.device)
-        game_mode = contract_to_game_mode(state.contract) if decision_type == DecisionType.CARD_PLAY else None
+        game_mode = (
+            contract_to_game_mode(state.contract)
+            if decision_type == DecisionType.CARD_PLAY
+            else None
+        )
         with torch.no_grad():
             action_idx, _log_prob, _value = self.network.get_action(
                 state_tensor.unsqueeze(0), mask.unsqueeze(0), decision_type, game_mode=game_mode
@@ -149,19 +153,13 @@ class NeuralPlayer:
         taroks.sort(key=lambda c: c.points)
         return (suit_cards + taroks)[:must_discard]
 
-    async def choose_announcements(
-        self, state: GameState, player_idx: int
-    ) -> list[Announcement]:
+    async def choose_announcements(self, state: GameState, player_idx: int) -> list[Announcement]:
         return []
 
-    async def choose_announce_action(
-        self, state: GameState, player_idx: int
-    ) -> int:
+    async def choose_announce_action(self, state: GameState, player_idx: int) -> int:
         return ANNOUNCE_PASS
 
-    async def choose_card(
-        self, state: GameState, player_idx: int, legal_plays: list[Card]
-    ) -> Card:
+    async def choose_card(self, state: GameState, player_idx: int, legal_plays: list[Card]) -> Card:
         mask = encode_legal_mask(legal_plays)
         action_idx = self._decide(state, player_idx, mask, DecisionType.CARD_PLAY)
         card = card_idx_to_card(action_idx)

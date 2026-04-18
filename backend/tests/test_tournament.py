@@ -21,15 +21,18 @@ def client():
 
 async def test_tournament_match_basic(client):
     """POST /api/tournament/match runs games and returns ranked results."""
-    resp = await client.post("/api/tournament/match", json={
-        "agents": [
-            {"name": "A", "type": "random"},
-            {"name": "B", "type": "random"},
-            {"name": "C", "type": "random"},
-            {"name": "D", "type": "random"},
-        ],
-        "num_games": 1,
-    })
+    resp = await client.post(
+        "/api/tournament/match",
+        json={
+            "agents": [
+                {"name": "A", "type": "random"},
+                {"name": "B", "type": "random"},
+                {"name": "C", "type": "random"},
+                {"name": "D", "type": "random"},
+            ],
+            "num_games": 1,
+        },
+    )
     assert resp.status_code == 200
     data = resp.json()
     assert "cumulative" in data
@@ -43,15 +46,18 @@ async def test_tournament_match_basic(client):
 
 async def test_tournament_match_returns_correct_names(client):
     """Agent names in the ranked result match what was sent."""
-    resp = await client.post("/api/tournament/match", json={
-        "agents": [
-            {"name": "Alpha", "type": "random"},
-            {"name": "Beta", "type": "random"},
-            {"name": "Gamma", "type": "random"},
-            {"name": "Delta", "type": "random"},
-        ],
-        "num_games": 1,
-    })
+    resp = await client.post(
+        "/api/tournament/match",
+        json={
+            "agents": [
+                {"name": "Alpha", "type": "random"},
+                {"name": "Beta", "type": "random"},
+                {"name": "Gamma", "type": "random"},
+                {"name": "Delta", "type": "random"},
+            ],
+            "num_games": 1,
+        },
+    )
     data = resp.json()
     names = {r["name"] for r in data["ranked"]}
     assert names == {"Alpha", "Beta", "Gamma", "Delta"}
@@ -59,42 +65,51 @@ async def test_tournament_match_returns_correct_names(client):
 
 async def test_tournament_match_multiple_games(client):
     """Multiple games should produce a games list matching num_games."""
-    resp = await client.post("/api/tournament/match", json={
-        "agents": [
-            {"name": "A", "type": "random"},
-            {"name": "B", "type": "random"},
-            {"name": "C", "type": "random"},
-            {"name": "D", "type": "random"},
-        ],
-        "num_games": 3,
-    })
+    resp = await client.post(
+        "/api/tournament/match",
+        json={
+            "agents": [
+                {"name": "A", "type": "random"},
+                {"name": "B", "type": "random"},
+                {"name": "C", "type": "random"},
+                {"name": "D", "type": "random"},
+            ],
+            "num_games": 3,
+        },
+    )
     data = resp.json()
     assert len(data["games"]) == 3
 
 
 async def test_tournament_match_num_games_clamped(client):
     """num_games is clamped to [1, 100]."""
-    resp = await client.post("/api/tournament/match", json={
-        "agents": [
-            {"name": "A", "type": "random"},
-            {"name": "B", "type": "random"},
-            {"name": "C", "type": "random"},
-            {"name": "D", "type": "random"},
-        ],
-        "num_games": 0,
-    })
+    resp = await client.post(
+        "/api/tournament/match",
+        json={
+            "agents": [
+                {"name": "A", "type": "random"},
+                {"name": "B", "type": "random"},
+                {"name": "C", "type": "random"},
+                {"name": "D", "type": "random"},
+            ],
+            "num_games": 0,
+        },
+    )
     data = resp.json()
     assert len(data["games"]) >= 1
 
 
 async def test_tournament_match_fewer_agents_padded(client):
     """Fewer than 4 agents should be padded with random fillers."""
-    resp = await client.post("/api/tournament/match", json={
-        "agents": [
-            {"name": "Solo", "type": "random"},
-        ],
-        "num_games": 1,
-    })
+    resp = await client.post(
+        "/api/tournament/match",
+        json={
+            "agents": [
+                {"name": "Solo", "type": "random"},
+            ],
+            "num_games": 1,
+        },
+    )
     assert resp.status_code == 200
     data = resp.json()
     assert len(data["ranked"]) == 4
@@ -102,15 +117,18 @@ async def test_tournament_match_fewer_agents_padded(client):
 
 async def test_tournament_match_ranked_is_sorted(client):
     """Ranked list should be sorted by score descending."""
-    resp = await client.post("/api/tournament/match", json={
-        "agents": [
-            {"name": "A", "type": "random"},
-            {"name": "B", "type": "random"},
-            {"name": "C", "type": "random"},
-            {"name": "D", "type": "random"},
-        ],
-        "num_games": 2,
-    })
+    resp = await client.post(
+        "/api/tournament/match",
+        json={
+            "agents": [
+                {"name": "A", "type": "random"},
+                {"name": "B", "type": "random"},
+                {"name": "C", "type": "random"},
+                {"name": "D", "type": "random"},
+            ],
+            "num_games": 2,
+        },
+    )
     data = resp.json()
     scores = [r["score"] for r in data["ranked"]]
     assert scores == sorted(scores, reverse=True)
@@ -121,16 +139,19 @@ async def test_tournament_match_ranked_is_sorted(client):
 
 async def test_multi_tournament_simulate_starts(client):
     """POST /api/tournament/simulate starts the simulation."""
-    resp = await client.post("/api/tournament/simulate", json={
-        "agents": [
-            {"name": "M1", "type": "random"},
-            {"name": "M2", "type": "random"},
-            {"name": "M3", "type": "random"},
-            {"name": "M4", "type": "random"},
-        ],
-        "num_tournaments": 1,
-        "games_per_round": 1,
-    })
+    resp = await client.post(
+        "/api/tournament/simulate",
+        json={
+            "agents": [
+                {"name": "M1", "type": "random"},
+                {"name": "M2", "type": "random"},
+                {"name": "M3", "type": "random"},
+                {"name": "M4", "type": "random"},
+            ],
+            "num_tournaments": 1,
+            "games_per_round": 1,
+        },
+    )
     assert resp.status_code == 200
     data = resp.json()
     assert data["status"] == "started"
@@ -150,16 +171,19 @@ async def test_multi_tournament_progress_idle(client):
 
 async def test_multi_tournament_completes(client):
     """A 1-tournament simulation should complete and show standings."""
-    await client.post("/api/tournament/simulate", json={
-        "agents": [
-            {"name": "T1", "type": "random"},
-            {"name": "T2", "type": "random"},
-            {"name": "T3", "type": "random"},
-            {"name": "T4", "type": "random"},
-        ],
-        "num_tournaments": 1,
-        "games_per_round": 1,
-    })
+    await client.post(
+        "/api/tournament/simulate",
+        json={
+            "agents": [
+                {"name": "T1", "type": "random"},
+                {"name": "T2", "type": "random"},
+                {"name": "T3", "type": "random"},
+                {"name": "T4", "type": "random"},
+            ],
+            "num_tournaments": 1,
+            "games_per_round": 1,
+        },
+    )
 
     # Poll until done (with timeout)
     for _ in range(60):
@@ -186,16 +210,19 @@ async def test_multi_tournament_completes(client):
 
 async def test_multi_tournament_standings_have_correct_fields(client):
     """Each standing entry should have all expected fields."""
-    await client.post("/api/tournament/simulate", json={
-        "agents": [
-            {"name": "F1", "type": "random"},
-            {"name": "F2", "type": "random"},
-            {"name": "F3", "type": "random"},
-            {"name": "F4", "type": "random"},
-        ],
-        "num_tournaments": 1,
-        "games_per_round": 1,
-    })
+    await client.post(
+        "/api/tournament/simulate",
+        json={
+            "agents": [
+                {"name": "F1", "type": "random"},
+                {"name": "F2", "type": "random"},
+                {"name": "F3", "type": "random"},
+                {"name": "F4", "type": "random"},
+            ],
+            "num_tournaments": 1,
+            "games_per_round": 1,
+        },
+    )
 
     for _ in range(60):
         await asyncio.sleep(0.5)
@@ -217,16 +244,19 @@ async def test_multi_tournament_standings_have_correct_fields(client):
 
 async def test_multi_tournament_exactly_one_winner_per_tournament(client):
     """Across all standings, total wins should equal num_tournaments."""
-    await client.post("/api/tournament/simulate", json={
-        "agents": [
-            {"name": "W1", "type": "random"},
-            {"name": "W2", "type": "random"},
-            {"name": "W3", "type": "random"},
-            {"name": "W4", "type": "random"},
-        ],
-        "num_tournaments": 2,
-        "games_per_round": 1,
-    })
+    await client.post(
+        "/api/tournament/simulate",
+        json={
+            "agents": [
+                {"name": "W1", "type": "random"},
+                {"name": "W2", "type": "random"},
+                {"name": "W3", "type": "random"},
+                {"name": "W4", "type": "random"},
+            ],
+            "num_tournaments": 2,
+            "games_per_round": 1,
+        },
+    )
 
     for _ in range(120):
         await asyncio.sleep(0.5)
@@ -243,16 +273,19 @@ async def test_multi_tournament_exactly_one_winner_per_tournament(client):
 
 async def test_multi_tournament_stop(client):
     """POST /api/tournament/simulate/stop cancels the task."""
-    await client.post("/api/tournament/simulate", json={
-        "agents": [
-            {"name": "S1", "type": "random"},
-            {"name": "S2", "type": "random"},
-            {"name": "S3", "type": "random"},
-            {"name": "S4", "type": "random"},
-        ],
-        "num_tournaments": 50,
-        "games_per_round": 1,
-    })
+    await client.post(
+        "/api/tournament/simulate",
+        json={
+            "agents": [
+                {"name": "S1", "type": "random"},
+                {"name": "S2", "type": "random"},
+                {"name": "S3", "type": "random"},
+                {"name": "S4", "type": "random"},
+            ],
+            "num_tournaments": 50,
+            "games_per_round": 1,
+        },
+    )
 
     await asyncio.sleep(0.2)
     resp = await client.post("/api/tournament/simulate/stop")
@@ -262,16 +295,19 @@ async def test_multi_tournament_stop(client):
 
 async def test_multi_tournament_num_clamped(client):
     """num_tournaments is clamped to [1, 100]."""
-    resp = await client.post("/api/tournament/simulate", json={
-        "agents": [
-            {"name": "C1", "type": "random"},
-            {"name": "C2", "type": "random"},
-            {"name": "C3", "type": "random"},
-            {"name": "C4", "type": "random"},
-        ],
-        "num_tournaments": 200,
-        "games_per_round": 1,
-    })
+    resp = await client.post(
+        "/api/tournament/simulate",
+        json={
+            "agents": [
+                {"name": "C1", "type": "random"},
+                {"name": "C2", "type": "random"},
+                {"name": "C3", "type": "random"},
+                {"name": "C4", "type": "random"},
+            ],
+            "num_tournaments": 200,
+            "games_per_round": 1,
+        },
+    )
     data = resp.json()
     # Server should clamp to 100
     assert data.get("num_tournaments", 100) <= 100
@@ -335,16 +371,19 @@ async def test_checkpoints_deduplicates(client, tmp_path, monkeypatch):
 
 async def test_multi_tournament_resilience_completes(client):
     """Multi-tournament with many random agents should complete all tournaments."""
-    await client.post("/api/tournament/simulate", json={
-        "agents": [
-            {"name": "R1", "type": "random"},
-            {"name": "R2", "type": "random"},
-            {"name": "R3", "type": "random"},
-            {"name": "R4", "type": "random"},
-        ],
-        "num_tournaments": 3,
-        "games_per_round": 1,
-    })
+    await client.post(
+        "/api/tournament/simulate",
+        json={
+            "agents": [
+                {"name": "R1", "type": "random"},
+                {"name": "R2", "type": "random"},
+                {"name": "R3", "type": "random"},
+                {"name": "R4", "type": "random"},
+            ],
+            "num_tournaments": 3,
+            "games_per_round": 1,
+        },
+    )
 
     for _ in range(120):
         await asyncio.sleep(0.5)
@@ -364,16 +403,19 @@ async def test_multi_tournament_resilience_completes(client):
 
 async def test_multi_tournament_error_cancelled_progress_reflects(client):
     """Stopping mid-run should reflect cancelled status in progress."""
-    await client.post("/api/tournament/simulate", json={
-        "agents": [
-            {"name": "X1", "type": "random"},
-            {"name": "X2", "type": "random"},
-            {"name": "X3", "type": "random"},
-            {"name": "X4", "type": "random"},
-        ],
-        "num_tournaments": 100,
-        "games_per_round": 1,
-    })
+    await client.post(
+        "/api/tournament/simulate",
+        json={
+            "agents": [
+                {"name": "X1", "type": "random"},
+                {"name": "X2", "type": "random"},
+                {"name": "X3", "type": "random"},
+                {"name": "X4", "type": "random"},
+            ],
+            "num_tournaments": 100,
+            "games_per_round": 1,
+        },
+    )
 
     # Let it start, then cancel
     await asyncio.sleep(1)

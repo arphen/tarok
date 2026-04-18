@@ -9,13 +9,25 @@ from pydantic import BaseModel
 
 from tarok.adapters.players.neural_player import NeuralPlayer
 from tarok.adapters.api.checkpoint_utils import resolve_checkpoint_or_default
-from tarok.entities import Card, CardType, Suit, SuitRank, DECK, Contract, GameState, Phase, PlayerRole, Trick
+from tarok.entities import (
+    Card,
+    CardType,
+    Suit,
+    SuitRank,
+    DECK,
+    Contract,
+    GameState,
+    Phase,
+    PlayerRole,
+    Trick,
+)
 from tarok.entities.game_types import suit_card
 
 router = APIRouter(tags=["analyze"])
 
 
 # ---- Models ----
+
 
 class CardInput(BaseModel):
     card_type: str  # "tarok" or "suit"
@@ -25,6 +37,7 @@ class CardInput(BaseModel):
 
 class AnalyzeRequest(BaseModel):
     """Cards the user holds + the current trick + game context."""
+
     hand: list[CardInput]
     trick: list[CardInput] = []  # cards already played in current trick
     contract: str = "three"  # contract name
@@ -35,6 +48,7 @@ class AnalyzeRequest(BaseModel):
 
 class AnalyzeBidRequest(BaseModel):
     """Hand cards + bidding context → AI bid recommendation."""
+
     hand: list[CardInput]
     bids: list[dict] = []  # [{player: int, contract: str|null}]
     dealer: int = 0
@@ -46,6 +60,7 @@ class AnalyzeKingRequest(BaseModel):
 
 
 # ---- Helpers ----
+
 
 def _parse_card(ci: CardInput) -> Card:
     ct = CardType(ci.card_type)
@@ -79,6 +94,7 @@ CONTRACT_NAME_MAP = {
 
 # ---- Endpoints ----
 
+
 @router.post("/api/analyze")
 async def analyze_hand(req: AnalyzeRequest):
     """Given a hand of cards and game context, return the AI's recommended play.
@@ -101,9 +117,9 @@ async def analyze_hand(req: AnalyzeRequest):
     state.hands[0] = list(hand)
     state.current_player = 0
     state.roles = {
-        0: PlayerRole.DECLARER if req.position == 0 else (
-            PlayerRole.PARTNER if req.position == 1 else PlayerRole.OPPONENT
-        ),
+        0: PlayerRole.DECLARER
+        if req.position == 0
+        else (PlayerRole.PARTNER if req.position == 1 else PlayerRole.OPPONENT),
         1: PlayerRole.PARTNER if req.position != 1 else PlayerRole.DECLARER,
         2: PlayerRole.OPPONENT,
         3: PlayerRole.OPPONENT,
@@ -135,6 +151,7 @@ async def analyze_hand(req: AnalyzeRequest):
     checkpoint_path = resolve_checkpoint_or_default(None)
     if checkpoint_path and checkpoint_path.exists():
         import torch
+
         checkpoint = torch.load(checkpoint_path, map_location="cpu", weights_only=True)
         agent.network.load_state_dict(checkpoint["model_state_dict"])
 
@@ -153,7 +170,7 @@ async def analyze_hand(req: AnalyzeRequest):
 
     # Mask illegal actions
     masked = logits.clone()
-    masked[legal_mask == 0] = float('-inf')
+    masked[legal_mask == 0] = float("-inf")
     probs = torch.softmax(masked, dim=-1).squeeze(0)
 
     # Build ranked recommendations
@@ -162,10 +179,12 @@ async def analyze_hand(req: AnalyzeRequest):
         idx = CARD_TO_IDX.get(card)
         if idx is not None:
             prob = probs[idx].item()
-            ranked.append({
-                "card": _card_to_dict(card),
-                "probability": round(prob, 4),
-            })
+            ranked.append(
+                {
+                    "card": _card_to_dict(card),
+                    "probability": round(prob, 4),
+                }
+            )
 
     ranked.sort(key=lambda x: x["probability"], reverse=True)
 
@@ -182,7 +201,11 @@ async def analyze_hand(req: AnalyzeRequest):
 async def analyze_bid(req: AnalyzeBidRequest):
     """Given a hand and bidding history, return the AI's recommended bid."""
     from tarok_model.encoding import (
-        encode_state, encode_bid_mask, BID_ACTIONS, BID_TO_IDX, DecisionType,
+        encode_state,
+        encode_bid_mask,
+        BID_ACTIONS,
+        BID_TO_IDX,
+        DecisionType,
     )
     import torch
 
@@ -190,6 +213,7 @@ async def analyze_bid(req: AnalyzeBidRequest):
 
     # Build synthetic game state in BIDDING phase
     from tarok.entities import Bid
+
     state = GameState(phase=Phase.BIDDING)
     state.dealer = req.dealer
     state.hands[0] = list(hand)
@@ -221,7 +245,7 @@ async def analyze_bid(req: AnalyzeBidRequest):
     with torch.no_grad():
         logits, value = agent.network(state_tensor, DecisionType.BID)
     masked = logits.clone()
-    masked[mask == 0] = float('-inf')
+    masked[mask == 0] = float("-inf")
     probs = torch.softmax(masked, dim=-1).squeeze(0)
 
     ranked = []
@@ -231,18 +255,30 @@ async def analyze_bid(req: AnalyzeBidRequest):
             label = "Pass"
         else:
             idx = BID_TO_IDX.get(bid_option, 0)
-            label = bid_option.value if isinstance(bid_option.value, str) else bid_option.name.replace("_", " ").title()
-        ranked.append({
-            "contract": bid_option.value if bid_option else None,
-            "name": label,
-            "probability": round(probs[idx].item(), 4),
-        })
+            label = (
+                bid_option.value
+                if isinstance(bid_option.value, str)
+                else bid_option.name.replace("_", " ").title()
+            )
+        ranked.append(
+            {
+                "contract": bid_option.value if bid_option else None,
+                "name": label,
+                "probability": round(probs[idx].item(), 4),
+            }
+        )
     ranked.sort(key=lambda x: x["probability"], reverse=True)
 
     return {
         "recommended": recommended.value if recommended else None,
         "recommended_name": (recommended.name.replace("_", " ").title() if recommended else "Pass"),
-        "legal_bids": [{"value": b.value if b else None, "name": b.name.replace("_", " ").title() if b else "Pass"} for b in legal],
+        "legal_bids": [
+            {
+                "value": b.value if b else None,
+                "name": b.name.replace("_", " ").title() if b else "Pass",
+            }
+            for b in legal
+        ],
         "ranked_bids": ranked,
         "position_value": round(value.item(), 4) if value is not None else None,
         "has_trained_model": checkpoint_path.exists(),
@@ -253,7 +289,11 @@ async def analyze_bid(req: AnalyzeBidRequest):
 async def analyze_king(req: AnalyzeKingRequest):
     """Given a hand and contract, recommend which king to call."""
     from tarok_model.encoding import (
-        encode_state, encode_king_mask, KING_ACTIONS, SUIT_TO_IDX, DecisionType,
+        encode_state,
+        encode_king_mask,
+        KING_ACTIONS,
+        SUIT_TO_IDX,
+        DecisionType,
     )
     import torch
 
@@ -265,7 +305,12 @@ async def analyze_king(req: AnalyzeKingRequest):
     state.contract = contract
     state.declarer = 0
     state.current_player = 0
-    state.roles = {0: PlayerRole.DECLARER, 1: PlayerRole.OPPONENT, 2: PlayerRole.OPPONENT, 3: PlayerRole.OPPONENT}
+    state.roles = {
+        0: PlayerRole.DECLARER,
+        1: PlayerRole.OPPONENT,
+        2: PlayerRole.OPPONENT,
+        3: PlayerRole.OPPONENT,
+    }
 
     # Find callable kings (kings NOT in hand)
     callable_kings = []

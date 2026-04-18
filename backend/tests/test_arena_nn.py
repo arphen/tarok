@@ -1,4 +1,5 @@
 """Test that the arena can run with NN agents and produces analytics."""
+
 import pytest
 import numpy as np
 from httpx import ASGITransport, AsyncClient
@@ -6,16 +7,19 @@ from tarok.adapters.api.server import app
 import tempfile
 import os
 
+
 @pytest.mark.asyncio
 async def test_arena_runs_with_nn_agent(tmp_path, monkeypatch):
     # Patch arena_results path to temp
     from tarok.adapters.api.routers import arena_router
+
     arena_results = tmp_path / "arena_results.json"
     monkeypatch.setattr(arena_router, "_arena_history_path", arena_results)
 
     # Create a real checkpoint file (TorchScript export needs valid weights)
     import torch
     from tarok_model.network import TarokNetV4
+
     ckpt_path = tmp_path / "dummy.pt"
     net = TarokNetV4()
     torch.save({"model_arch": "v4", "model_state_dict": net.state_dict()}, str(ckpt_path))
@@ -33,11 +37,14 @@ async def test_arena_runs_with_nn_agent(tmp_path, monkeypatch):
 
     transport = ASGITransport(app=app)
     async with AsyncClient(transport=transport, base_url="http://test") as client:
-        resp = await client.post("/api/arena/start", json={
-            "agents": req_agents,
-            "total_games": 20,
-            "session_size": 5,
-        })
+        resp = await client.post(
+            "/api/arena/start",
+            json={
+                "agents": req_agents,
+                "total_games": 20,
+                "session_size": 5,
+            },
+        )
         data = resp.json()
         assert data["status"] == "started"
 
@@ -47,7 +54,9 @@ async def test_arena_runs_with_nn_agent(tmp_path, monkeypatch):
             prog = resp2.json()
             if prog["status"] == "done":
                 break
-            import asyncio; await asyncio.sleep(0.2)
+            import asyncio
+
+            await asyncio.sleep(0.2)
         else:
             raise AssertionError("Arena did not finish in time")
 
