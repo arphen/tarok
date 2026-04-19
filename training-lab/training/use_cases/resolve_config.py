@@ -73,6 +73,16 @@ class ResolveConfig:
             device=merged.get("device", "auto"),
             save_dir=merged.get("save_dir", "data/checkpoints/training_run"),
             concurrency=merged.get("concurrency", 128),
+            lapajne_mc_worlds=(
+                int(merged["lapajne_mc_worlds"])
+                if merged.get("lapajne_mc_worlds") is not None
+                else None
+            ),
+            lapajne_mc_sims=(
+                int(merged["lapajne_mc_sims"])
+                if merged.get("lapajne_mc_sims") is not None
+                else None
+            ),
             imitation_coef=merged.get("imitation_coef", 0.3),
             imitation_schedule=str(merged.get("imitation_schedule", "constant")),
             imitation_coef_min=merged.get("imitation_coef_min", 0.0),

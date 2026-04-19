@@ -12,13 +12,13 @@
 use crate::card::*;
 use crate::game_state::*;
 use crate::bots::lustrek;
+use crate::bots::lapajne;
 use crate::bots::stockskis_m6;
 use crate::bots::stockskis_pozrl;
 use crate::bots::stockskis_v1;
 use crate::bots::stockskis_v3;
 use crate::bots::stockskis_v5;
 use crate::bots::stockskis_v6;
-use crate::lapajne;
 use crate::player::*;
 
 // -----------------------------------------------------------------------

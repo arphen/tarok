@@ -37,6 +37,8 @@ imitation_width_elo: 250
 explore_rate: 0.10
 
 concurrency: 256
+lapajne_mc_worlds: 24   # Optional: worlds per Lapajne card decision (1..512)
+lapajne_mc_sims: 20   # Optional: sims per Lapajne MCTS tree (1..4096)
 device: auto
 iteration_runner_mode: spawn
 iteration_runner_restart_every: 10

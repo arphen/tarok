@@ -13,8 +13,8 @@ use rayon::prelude::*;
 
 use crate::card::*;
 use crate::game_state::*;
-use crate::lapajne;
 use crate::scoring;
+use crate::bots::lapajne;
 use crate::bots::lustrek;
 use crate::bots::stockskis_m6;
 use crate::bots::stockskis_pozrl;

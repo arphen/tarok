@@ -6,7 +6,7 @@
 bench_seats: "nn,bot_v1,bot_v3,bot_m6"
 
 iterations: 50             # Capped at 50; you'll likely stop it early via Ctrl+C
-games: 10000
+games: 500
 outplace_session_size: 50  # compare cumulative scores per 50-game session for Elo outplacing
 bench_games: 3000
 benchmark_checkpoints: [0, 10, 20, 30, 40, 50]
@@ -50,6 +50,8 @@ behavioral_clone_games_per_iteration: 20000
 
 # --- Runner Hardware ---
 concurrency: 256
+lapajne_mc_worlds: 24   # Optional: worlds per Lapajne card decision (1..512)
+lapajne_mc_sims: 20   # Optional: sims per Lapajne MCTS tree (1..4096)
 device: auto
 iteration_runner_mode: spawn
 iteration_runner_restart_every: 10

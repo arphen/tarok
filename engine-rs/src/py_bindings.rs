@@ -776,7 +776,7 @@ fn compute_legal_plays(hand: Vec<u8>, trick_cards: Vec<(u8, u8)>, contract: Opti
 ///   initial_talon:  (n_games, 6) uint8, only when `include_replay_data=True`
 ///   traces:         list[dict], only when `include_replay_data=True`
 #[pyfunction]
-#[pyo3(signature = (n_games, concurrency=64, model_path=None, explore_rate=0.05, seat_config="nn,nn,nn,nn", include_replay_data=true, include_oracle_states=false))]
+#[pyo3(signature = (n_games, concurrency=64, model_path=None, explore_rate=0.05, seat_config="nn,nn,nn,nn", include_replay_data=true, include_oracle_states=false, lapajne_mc_worlds=None, lapajne_mc_sims=None))]
 fn run_self_play(
     py: Python<'_>,
     n_games: u32,
@@ -786,6 +786,8 @@ fn run_self_play(
     seat_config: &str,
     include_replay_data: bool,
     include_oracle_states: bool,
+    lapajne_mc_worlds: Option<usize>,
+    lapajne_mc_sims: Option<usize>,
 ) -> PyResult<PyObject> {
     use std::collections::HashMap;
     use std::sync::Arc;
@@ -793,6 +795,13 @@ fn run_self_play(
     use crate::player::{BatchPlayer, CARD_ACTION_SIZE};
     use crate::player_bot::{try_make_bot_by_seat_label, SUPPORTED_BOT_SEAT_LABELS};
     use crate::player_nn::NeuralNetPlayer;
+
+    if let Some(sims) = lapajne_mc_sims {
+        crate::bots::lapajne::set_mc_sims(sims);
+    }
+    if let Some(worlds) = lapajne_mc_worlds {
+        crate::bots::lapajne::set_mc_worlds(worlds);
+    }
 
     // Parse seat_config: "nn,nn,nn,nn" or "nn,bot_v5,bot_v5,bot_v5" etc.
     let seat_labels: Vec<&str> = seat_config.split(',').map(|s| s.trim()).collect();

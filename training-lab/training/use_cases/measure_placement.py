@@ -39,6 +39,8 @@ class MeasurePlacement:
                 config.effective_bench_seats,
                 config.concurrency,
                 session_size=config.outplace_session_size,
+                lapajne_mc_worlds=config.lapajne_mc_worlds,
+            lapajne_mc_sims=config.lapajne_mc_sims,
             )
             bench_time = time.time() - t0
             self._presenter.on_benchmark_done(placement, bench_time)
