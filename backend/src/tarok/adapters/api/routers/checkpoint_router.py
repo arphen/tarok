@@ -136,7 +136,9 @@ async def list_checkpoints():
                     {
                         "filename": rel,
                         "persona": persona_name,
-                        "model_name": f"{persona_name} (test)" if basename == "_test.pt" else persona_name,
+                        "model_name": f"{persona_name} (test)"
+                        if basename == "_test.pt"
+                        else persona_name,
                         "is_hof": False,
                         "episode": 0,
                     }

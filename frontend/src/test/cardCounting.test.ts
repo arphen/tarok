@@ -49,34 +49,32 @@ describe('groupCards', () => {
     expect(result.total).toBe(15);
   });
 
-  it('handles incomplete group of 2 cards with per-card deduction', () => {
-    // 2 leftover cards: each card − round(2/3 × points)
+  it('handles incomplete group of 2 cards with deduction of 1', () => {
+    // 2 leftover cards: sum − 1
     const cards = [card('K♥', 5), card('Q♥', 4)];
     const result = groupCards(cards);
     expect(result.groups).toHaveLength(1);
     expect(result.groups[0].isComplete).toBe(false);
-    // K♥: 5 − round(10/3) = 5 − 3 = 2
-    // Q♥: 4 − round(8/3) = 4 − 3 = 1
-    // Total: 3
-    expect(result.groups[0].value).toBe(3);
-    expect(result.total).toBe(3);
+    expect(result.groups[0].deduction).toBe(1);
+    expect(result.groups[0].value).toBe(8);
+    expect(result.total).toBe(8);
   });
 
-  it('handles incomplete group of 1 card with per-card deduction', () => {
+  it('handles incomplete group of 1 card with no deduction', () => {
     const cards = [card('K♥', 5)];
     const result = groupCards(cards);
     expect(result.groups).toHaveLength(1);
     expect(result.groups[0].isComplete).toBe(false);
-    // 5 − round(10/3) = 5 − 3 = 2
-    expect(result.groups[0].value).toBe(2);
-    expect(result.total).toBe(2);
+    expect(result.groups[0].deduction).toBe(0);
+    expect(result.groups[0].value).toBe(5);
+    expect(result.total).toBe(5);
   });
 
   it('handles 1-point cards in incomplete group', () => {
-    // 1-point card: 1 − round(2/3) = 1 − 1 = 0
+    // 1-point card in a single-card remainder: deduction is 0
     const cards = [card('7♥', 1)];
     const result = groupCards(cards);
-    expect(result.groups[0].value).toBe(0);
+    expect(result.groups[0].value).toBe(1);
   });
 
   it('handles mix of full + incomplete groups (4 cards)', () => {
@@ -89,9 +87,9 @@ describe('groupCards', () => {
     expect(result.groups[0].isComplete).toBe(true);
     expect(result.groups[0].value).toBe(10); // 5+4+3 - 2
     expect(result.groups[1].isComplete).toBe(false);
-    // 10♥: 2 − round(4/3) = 2 − 1 = 1
-    expect(result.groups[1].value).toBe(1);
-    expect(result.total).toBe(11);
+    // Last 1 card: sum - 0
+    expect(result.groups[1].value).toBe(2);
+    expect(result.total).toBe(12);
   });
 
   it('handles mix of full + incomplete groups (5 cards)', () => {
@@ -102,9 +100,9 @@ describe('groupCards', () => {
     const result = groupCards(cards);
     expect(result.groups).toHaveLength(2);
     expect(result.groups[0].value).toBe(10); // 5+4+3 - 2
-    // Incomplete: Škis 5−3=2, Mond 5−3=2 → 4
-    expect(result.groups[1].value).toBe(4);
-    expect(result.total).toBe(14);
+    // Last 2 cards: sum - 1
+    expect(result.groups[1].value).toBe(9);
+    expect(result.total).toBe(19);
   });
 
   it('three 1-point cards → sum 3 minus 2 = 1', () => {

@@ -151,7 +151,9 @@ class NeuralPlayer:
     ) -> int:
         del oracle_tensor
         if self._jit is not None:
-            return self._jit_pick_action(state_tensor, legal_mask, decision_type, game_mode=game_mode)
+            return self._jit_pick_action(
+                state_tensor, legal_mask, decision_type, game_mode=game_mode
+            )
         assert self.network is not None
         state_tensor = state_tensor.to(self.device)
         mask = legal_mask.to(self.device)
