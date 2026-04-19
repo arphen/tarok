@@ -12,6 +12,7 @@
 use crate::card::*;
 use crate::game_state::*;
 use crate::bots::lustrek;
+use crate::bots::lapajne;
 use crate::bots::stockskis_m6;
 use crate::bots::stockskis_pozrl;
 use crate::bots::stockskis_v1;
@@ -205,10 +206,32 @@ impl HeuristicStrategy for BotPozrl {
 
 // -----------------------------------------------------------------------
 // Registry — the only two places to edit when adding a new bot
+pub struct BotLapajne;
+impl HeuristicStrategy for BotLapajne {
+    fn seat_label(&self) -> &'static str { "bot_lapajne" }
+    fn name(&self) -> &'static str { "lapajne" }
+    fn evaluate_bid(&self, hand: CardSet, highest: Option<Contract>) -> Option<Contract> {
+        lapajne::evaluate_bid_lapajne(hand, highest)
+    }
+    fn choose_king(&self, hand: CardSet) -> Option<Card> {
+        lapajne::choose_king_lapajne(hand)
+    }
+    fn choose_talon_group(&self, groups: &[Vec<Card>], hand: CardSet, called_king: Option<Card>) -> usize {
+        lapajne::choose_talon_group_lapajne(groups, hand, called_king)
+    }
+    fn choose_discards(&self, hand: CardSet, must_discard: usize, called_king: Option<Card>) -> Vec<Card> {
+        lapajne::choose_discards_lapajne(hand, must_discard, called_king)
+    }
+    fn choose_card(&self, hand: CardSet, gs: &GameState, player: u8) -> Card {
+        lapajne::choose_card_lapajne(hand, gs, player)
+    }
+}
+
 // -----------------------------------------------------------------------
 
 /// All recognised heuristic seat-label strings, used for error messages.
-pub const SUPPORTED_BOT_SEAT_LABELS: [&str; 7] = [
+pub const SUPPORTED_BOT_SEAT_LABELS: [&str; 8] = [
+    "bot_lapajne",
     "bot_lustrek",
     "bot_v1",
     "bot_v3",
@@ -222,6 +245,7 @@ pub const SUPPORTED_BOT_SEAT_LABELS: [&str; 7] = [
 /// Returns `None` for labels that are not heuristic bots (e.g. `"nn"` or paths).
 pub fn try_make_bot_by_seat_label(label: &str) -> Option<StockSkisPlayer> {
     let strategy: Box<dyn HeuristicStrategy> = match label {
+        "bot_lapajne" => Box::new(BotLapajne),
         "bot_lustrek" => Box::new(BotLustrek),
         "bot_v1"      => Box::new(BotV1),
         "bot_v3"      => Box::new(BotV3),

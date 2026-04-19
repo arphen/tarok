@@ -32,6 +32,16 @@
   margin-bottom: 20px;
 }
 
+.arena-error-banner {
+  background: rgba(231, 76, 60, 0.14);
+  border: 1px solid rgba(231, 76, 60, 0.55);
+  color: #ffb3ab;
+  border-radius: 8px;
+  padding: 10px 12px;
+  margin-bottom: 12px;
+  font-size: 0.9rem;
+}
+
 .arena-agents h3 {
   margin: 0 0 12px;
   font-size: 1rem;

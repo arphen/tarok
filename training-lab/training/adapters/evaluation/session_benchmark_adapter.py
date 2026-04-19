@@ -16,6 +16,8 @@ class SessionBenchmark(BenchmarkPort):
         seat_config: str,
         concurrency: int,
         session_size: int,
+        lapajne_mc_worlds: int | None = None,
+        lapajne_mc_sims: int | None = None,
     ) -> float:
         raw = te.run_self_play(
             n_games=n_games,
@@ -23,6 +25,8 @@ class SessionBenchmark(BenchmarkPort):
             model_path=model_path,
             explore_rate=0.0,
             seat_config=seat_config,
+            lapajne_mc_worlds=lapajne_mc_worlds,
+            lapajne_mc_sims=lapajne_mc_sims,
         )
         scores = np.array(raw["scores"])
         n_total = scores.shape[0]

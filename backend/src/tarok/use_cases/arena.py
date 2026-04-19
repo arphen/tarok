@@ -39,6 +39,8 @@ def agent_type_to_seat_label(agent_type: str) -> str | None:
     t = agent_type.strip().lower()
     if t in ("stockskis", "stockskis_v5"):
         return "bot_v5"
+    if t in ("stockskis_lapajne", "lapajne", "bot_lapajne"):
+        return "bot_lapajne"
     if t == "stockskis_v6":
         return "bot_v6"
     if t in ("stockskis_m6", "bot_m6"):

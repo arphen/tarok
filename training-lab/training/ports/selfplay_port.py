@@ -17,6 +17,8 @@ class SelfPlayPort(ABC):
         concurrency: int,
         include_replay_data: bool = False,
         include_oracle_states: bool = False,
+        lapajne_mc_worlds: int | None = None,
+        lapajne_mc_sims: int | None = None,
     ) -> dict[str, Any]:
         """Run self-play games, return raw experience dict."""
 

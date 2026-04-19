@@ -64,6 +64,8 @@ class PrepareTraining:
         initial = self._benchmark.measure_placement(
             ts_path, config.bench_games, config.effective_bench_seats,
             config.concurrency, session_size=config.outplace_session_size,
+            lapajne_mc_worlds=config.lapajne_mc_worlds,
+            lapajne_mc_sims=config.lapajne_mc_sims,
         )
         self._presenter.on_initial_benchmark(
             initial, config.bench_games, config.effective_bench_seats, time.time() - t0,
