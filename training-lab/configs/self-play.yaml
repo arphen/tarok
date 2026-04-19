@@ -12,6 +12,7 @@ bench_seats: "nn,bot_v1,bot_v3,bot_m6"
 
 iterations: 100
 games: 5000
+outplace_session_size: 50  # compare cumulative scores per 50-game session for Elo outplacing
 bench_games: 3000
 benchmark_checkpoints: [0, 10, 20, 30, 40, 50, 60, 70, 80, 90, 100, 110, 120, 130, 140, 149]
 best_model_metric: "elo"
@@ -47,6 +48,7 @@ league:
   snapshot_interval: 5      # auto-snapshot learner checkpoint every N iterations
   snapshot_elo_delta: 50    # admit snapshot only after this much learner Elo gain
   max_active_snapshots: 3   # cap active nn checkpoints kept in league pool
+  elo_outplace_unit_weight: 50  # effective K multiplier baseline for session-based outplacing
 
   opponents:
     - name: StockSkis

@@ -399,6 +399,47 @@ def test_update_league_elo_exact_k_factor() -> None:
     assert pool.entries[0].elo == pytest.approx(1500.0, abs=1e-4)
 
 
+def test_update_league_elo_uses_weighted_k_factor() -> None:
+    # With elo_outplace_unit_weight=5, effective K is 32*5.
+    v5 = LeagueOpponent("V5", "bot_v5")
+    pool = LeaguePool(config=LeagueConfig(elo_outplace_unit_weight=5.0))
+    pool.entries = [LeaguePoolEntry(opponent=v5, elo=1500.0)]
+    pool.learner_elo = 1500.0
+
+    UpdateLeagueElo().execute(
+        pool,
+        seat_config_used="nn,bot_v5,nn,nn",
+        seat_outcomes={1: (4, 0, 0)},
+    )
+
+    # learner_outcome=1.0, expected=0.5, delta = 32*5*(1-0.5)=80
+    assert pool.learner_elo == pytest.approx(1580.0, abs=1e-4)
+
+
+def test_update_league_elo_mixed_outcomes_vs_stronger_opponent() -> None:
+    # 10 games versus 1700-Elo opponent, learner starts at 1500:
+    # learner_outcome = (6 wins + 0.5*1 draw) / 10 = 0.65
+    # expected(1500 vs 1700) ~= 0.240253...
+    # delta = 32 * (0.65 - expected)
+    v5 = LeagueOpponent("V5", "bot_v5")
+    pool = LeaguePool(config=LeagueConfig())
+    pool.entries = [LeaguePoolEntry(opponent=v5, elo=1700.0)]
+    pool.learner_elo = 1500.0
+
+    UpdateLeagueElo().execute(
+        pool,
+        seat_config_used="nn,bot_v5,nn,nn",
+        seat_outcomes={1: (6, 3, 1)},
+    )
+
+    expected_score = _elo_expected(1500.0, 1700.0)
+    expected_delta = 32.0 * (0.65 - expected_score)
+
+    assert pool.learner_elo == pytest.approx(1500.0 + expected_delta, abs=1e-6)
+    assert pool.entries[0].games_played == 10
+    assert pool.entries[0].learner_outplaces == 6
+
+
 def test_update_league_elo_ignores_unknown_token() -> None:
     # A seat token not in the pool is silently skipped.
     pool = LeaguePool(config=LeagueConfig())

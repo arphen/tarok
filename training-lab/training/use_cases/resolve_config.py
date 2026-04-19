@@ -9,7 +9,7 @@ from training.entities.training_config import TrainingConfig
 from training.ports.config_port import ConfigPort
 
 
-def _parse_league(raw: dict[str, Any]) -> LeagueConfig | None:
+def _parse_league(raw: dict[str, Any], default_outplace_unit_weight: float) -> LeagueConfig | None:
     """Parse the optional ``league:`` block from a YAML dict."""
     if not raw:
         return None
@@ -31,6 +31,7 @@ def _parse_league(raw: dict[str, Any]) -> LeagueConfig | None:
         snapshot_interval=raw.get("snapshot_interval", 5),
         snapshot_elo_delta=float(raw.get("snapshot_elo_delta", 50.0)),
         max_active_snapshots=max(0, int(raw.get("max_active_snapshots", 3))),
+        elo_outplace_unit_weight=float(raw.get("elo_outplace_unit_weight", default_outplace_unit_weight)),
     )
 
 
@@ -45,7 +46,8 @@ class ResolveConfig:
 
         merged = {**base, **{k: v for k, v in cli.items() if v is not None}}
 
-        league = _parse_league(merged.get("league") or {})
+        default_outplace_unit_weight = float(max(1, int(merged.get("outplace_session_size", 50))))
+        league = _parse_league(merged.get("league") or {}, default_outplace_unit_weight)
 
         raw_bench_checkpoints = merged.get("benchmark_checkpoints", [0, 4, 7])
         bench_checkpoints = tuple(sorted({int(x) for x in raw_bench_checkpoints if int(x) >= 0}))
@@ -58,6 +60,7 @@ class ResolveConfig:
             bench_seats=merged.get("bench_seats"),
             iterations=merged.get("iterations", 10),
             games=merged.get("games", 10_000),
+            outplace_session_size=max(1, int(merged.get("outplace_session_size", 50))),
             bench_games=merged.get("bench_games", 3_000),
             benchmark_checkpoints=bench_checkpoints,
             best_model_metric=metric,

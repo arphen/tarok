@@ -38,8 +38,8 @@ training-lab/configs/                              ← ADD: league YAML examples
 | Class | Frozen? | Purpose |
 |---|---|---|
 | LeagueOpponent | ✓ | Name, type (`nn_checkpoint`/`bot_v5`/`bot_v6`/`bot_m6`), optional path |
-| LeagueConfig | ✓ | Config from YAML: `enabled`, `opponents`, `min_nn_per_game`, `sampling`, `pfsp_alpha`, `snapshot_interval` |
-| LeaguePoolEntry | ✗ | Live runtime entry per opponent: Elo, `games_played`, `wins`, `win_rate` property |
+| LeagueConfig | ✓ | Config from YAML: `enabled`, `opponents`, `min_nn_per_game`, `sampling`, `pfsp_alpha`, `snapshot_interval`, `elo_outplace_unit_weight` |
+| LeaguePoolEntry | ✗ | Live runtime entry per opponent: Elo, `games_played`, `learner_outplaces`, `outplace_rate` property |
 | LeaguePool | ✗ | Aggregate root (mutable, like `TrainingRun`). Has `add_snapshot()` and `sampling_weights()` |
 
 Rule: if it's a pure data shape with no logic beyond properties, it goes here. No external imports.
@@ -63,9 +63,39 @@ Why separate: seat sampling is non-trivial (PFSP weighting, min-NN enforcement) 
 
 Pure logic. Mutates LeaguePool entries in place.
 
-- mean_scores: 4-element list from np.mean(raw["scores"], axis=0) — already in RunIteration's hands
+- Input metric: `seat_outcomes[seat_idx] = (learner_outplaces, opponent_outplaces, draws)`
+- Per game, outplace means score comparison vs seat 0 learner:
+  - learner_outplaces: learner_score > opponent_score
+  - opponent_outplaces: learner_score < opponent_score
+  - draws: learner_score == opponent_score
 - For each seat 1–3 mapped to a named pool entry: pairwise Elo update vs seat 0 (K=32)
-- Same opponent in multiple seats: updated independently per seat
+- Same opponent token in multiple seats: updated independently per seat
+
+Elo translation for one seat uses:
+
+```text
+n_games = learner_outplaces + opponent_outplaces + draws
+learner_outcome = (learner_outplaces + 0.5 * draws) / n_games
+expected = 1 / (1 + 10 ^ ((opp_elo - learner_elo) / 400))
+k_effective = 32 * max(1.0, elo_outplace_unit_weight)
+learner_elo += k_effective * (learner_outcome - expected)
+```
+
+Important: opponent/snapshot Elo values remain fixed. Only learner Elo moves.
+
+### Outplace Window — Is It "After 50 Games"?
+
+No. Outplace is computed over every game in each training iteration, then accumulated.
+
+- Per iteration:
+  - If `games: 10000`, then the outplace counts for that iteration are based on 10,000 game-level comparisons.
+- Across training:
+  - `games_played` and `learner_outplaces` are cumulative for each pool entry.
+  - `outplace_rate = learner_outplaces / games_played` (0.5 prior when games_played is 0).
+
+So in warm-up config (`iterations: 50`, `games: 10000`), the number 50 is iterations, not a 50-game outplace window.
+The effective outplace sample size per opponent depends on seat sampling and how often that opponent appears in seats 1..3.
+By default, `elo_outplace_unit_weight` falls back to `outplace_session_size`; you can override it in `league:`.
 
 PFSP weighting (sampling: pfsp): weight_i = win_rate_i ^ pfsp_alpha. Higher alpha concentrates sampling on the hardest opponents.
 
@@ -138,11 +168,12 @@ TrainModel.execute()
     │
     ├─ RunIteration.execute(seats_override=...)
     │   ├─ RustSelfPlay → raw["scores"]: (n_games, 4)
+    │   ├─ compute_run_stats → seat_outcomes per opponent seat
     │   ├─ PPOAdapter.update (seat 0 only)
     │   ├─ Benchmark
-    │   └─► IterationResult(mean_scores, seat_config_used)
+    │   └─► IterationResult(mean_scores, seat_config_used, seat_outcomes)
     │
-    ├─ UpdateLeagueElo(result.mean_scores, ...) — mutates pool entries
+    ├─ UpdateLeagueElo(result.seat_outcomes, ...) — mutates pool entries
     │
     └─ every snapshot_interval:
         copy ts_path → league_pool/iter_NNN.pt

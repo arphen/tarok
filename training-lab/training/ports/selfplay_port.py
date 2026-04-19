@@ -25,5 +25,13 @@ class SelfPlayPort(ABC):
         self,
         raw: dict[str, Any],
         seat_labels: list[str],
+        session_size: int = 50,
     ) -> tuple[int, tuple[float, float, float, float], dict[int, tuple[int, int, int]]]:
-        """Compute (n_learner, mean_scores, seat_outcomes) from raw self-play results."""
+        """Compute ``(n_learner, mean_scores, seat_outcomes)`` from one run.
+
+        ``seat_outcomes`` is keyed by seat index (1..3) and stores
+        ``(learner_outplaces, opponent_outplaces, draws)`` where outplacing is
+        decided from cumulative session totals.  When more than one seat has
+        label ``"nn"`` (``min_nn_per_game > 1``), outcomes are accumulated
+        across *all* nn seats vs each opponent seat.
+        """

@@ -16,6 +16,7 @@ class TrainingConfig:
     bench_seats: str | None = None
     iterations: int = 10
     games: int = 10_000
+    outplace_session_size: int = 50
     bench_games: int = 3_000
     benchmark_checkpoints: tuple[int, ...] = (0, 4, 7)
     best_model_metric: str = "loss"

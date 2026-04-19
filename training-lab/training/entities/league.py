@@ -37,6 +37,9 @@ class LeagueConfig:
     snapshot_interval: int = 5  # save snapshot every N iterations
     snapshot_elo_delta: float = 50.0
     max_active_snapshots: int = 3
+    # Multiplies Elo K-factor when converting outplace outcomes to rating deltas.
+    # Defaults to outplace_session_size so a session result carries more weight.
+    elo_outplace_unit_weight: float = 1.0
 
 
 # ---------------------------------------------------------------------------

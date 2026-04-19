@@ -23,5 +23,5 @@ class ExperienceBundle:
     n_total: int
     n_learner: int
     mean_scores: tuple  # (p0, p1, p2, p3) floats
-    seat_outcomes: dict  # seat_idx -> (wins, draws, losses)
+    seat_outcomes: dict  # seat_idx -> (learner_outplaces, opponent_outplaces, draws)
     sp_time: float

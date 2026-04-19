@@ -4,6 +4,9 @@ from __future__ import annotations
 
 import gc
 import shutil
+import warnings
+import zipfile
+from typing import Any
 
 import torch
 
@@ -14,11 +17,16 @@ from training.ports import ModelPort
 
 class TorchModelAdapter(ModelPort):
     def load_weights(self, checkpoint_path: str) -> tuple[dict, int, bool, str]:
-        cp = torch.load(checkpoint_path, map_location="cpu", weights_only=False)
-        sd = cp.get("model_state_dict", cp)
+        cp = _load_checkpoint_payload(checkpoint_path)
+        if isinstance(cp, dict):
+            sd = cp.get("model_state_dict", cp)
+            model_arch = cp.get("model_arch")
+        else:
+            sd = _unwrap_exported_state_dict(cp.state_dict())
+            model_arch = "v4"
+
         hidden_size = sd["shared.0.weight"].shape[0]
         oracle = any(k.startswith("critic_backbone") for k in sd)
-        model_arch = cp.get("model_arch")
         if model_arch != "v4":
             raise ValueError(
                 f"Unsupported checkpoint architecture '{model_arch}'. Only 'v4' checkpoints are supported."
@@ -111,3 +119,37 @@ def _cleanup_torch_native_memory() -> None:
             torch.mps.empty_cache()
         except Exception:
             pass
+
+
+def _load_checkpoint_payload(checkpoint_path: str) -> dict[str, Any] | torch.jit.RecursiveScriptModule:
+    if _is_torchscript_archive(checkpoint_path):
+        with warnings.catch_warnings():
+            warnings.filterwarnings(
+                "ignore",
+                message=r"`torch\.jit\.load` is deprecated\. Please switch to `torch\.export`\.",
+                category=DeprecationWarning,
+            )
+            return torch.jit.load(checkpoint_path, map_location="cpu")
+    return torch.load(checkpoint_path, map_location="cpu", weights_only=False)
+
+
+def _unwrap_exported_state_dict(state_dict: dict[str, Any]) -> dict[str, Any]:
+    if "shared.0.weight" in state_dict:
+        return state_dict
+    if any(key.startswith("base.") for key in state_dict):
+        return {
+            key.removeprefix("base."): value
+            for key, value in state_dict.items()
+            if key.startswith("base.")
+        }
+    return state_dict
+
+
+def _is_torchscript_archive(checkpoint_path: str) -> bool:
+    if not zipfile.is_zipfile(checkpoint_path):
+        return False
+
+    with zipfile.ZipFile(checkpoint_path) as archive:
+        names = archive.namelist()
+
+    return any(name.endswith("constants.pkl") or "/code/" in f"/{name}" for name in names)

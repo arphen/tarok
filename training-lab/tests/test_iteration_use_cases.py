@@ -192,6 +192,19 @@ class TestCollectExperiences:
 
         presenter.on_selfplay_done.assert_called_once()
 
+    def test_outplace_session_size_forwarded_to_selfplay(self, tmp_path: Path) -> None:
+        sp = _make_selfplay(_raw_data(8), n_learner=2)
+        config = _base_config(tmp_path, outplace_session_size=17)
+
+        uc = CollectExperiences(sp, _make_ppo(), MagicMock())
+        uc.execute(config, _identity(), "m.pt")
+
+        sp.compute_run_stats.assert_called_once_with(
+            sp.run.return_value,
+            ["nn", "bot_v5", "bot_v5", "bot_v5"],
+            session_size=17,
+        )
+
 
 # ---------------------------------------------------------------------------
 # UpdatePolicy

@@ -1,0 +1,58 @@
+# ---------------------------------------------------------
+# BOOTSTRAP PHASE: Behavioral Cloning
+# Goal: Force network to memorize bot_v5 strategy
+# ---------------------------------------------------------
+
+bench_seats: "nn,bot_v1,bot_v3,bot_m6"
+
+iterations: 50             # Capped at 50; you'll likely stop it early via Ctrl+C
+games: 10000
+outplace_session_size: 50  # compare cumulative scores per 50-game session for Elo outplacing
+bench_games: 3000
+benchmark_checkpoints: [0, 10, 20, 30, 40, 50]
+best_model_metric: "elo"
+
+# --- Core PPO Settings (Restored!) ---
+gamma: 0.995
+gae_lambda: 0.98
+clip_epsilon: 0.2
+value_coef: 0.5
+explore_rate: 0.10
+
+# --- Optimization Setup ---
+ppo_epochs: 4
+batch_size: 16384
+
+# --- Learning Rate (Linear for Bootstrap) ---
+# We disable Elo-based LR because losing to V5 will tank the learner's Elo initially
+lr: 0.0003
+lr_schedule: linear
+lr_min: 0.00001
+
+# --- Entropy ---
+entropy_coef: 0.05         # High starting entropy is fine; IL will quickly crush it
+entropy_schedule: linear
+entropy_coef_min: 0.005
+
+# --- The Sledgehammer (Imitation Learning) ---
+imitation_coef: 0.50       
+imitation_schedule: constant 
+
+# --- Runner Hardware ---
+concurrency: 256
+device: auto
+iteration_runner_mode: spawn
+iteration_runner_restart_every: 10
+
+# --- The Classroom (League) ---
+league:
+  enabled: true
+  min_nn_per_game: 1        # CRITICAL: 1 Learner + 3 Tutors
+  sampling: uniform         # Uniform is fine, there is only one opponent
+  snapshot_interval: 9999   # Disabled: Do not fill the pool with clone checkpoints
+  elo_outplace_unit_weight: 50  # effective K multiplier baseline for session-based outplacing
+
+  opponents:
+    - name: V5_Tutor
+      type: bot_v5
+      initial_elo: 1600

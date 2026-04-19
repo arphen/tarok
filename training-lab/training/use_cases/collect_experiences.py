@@ -59,7 +59,11 @@ class CollectExperiences:
         n_total = len(raw["players"])
         sp_time = time.time() - t0
 
-        n_learner, mean_scores, seat_outcomes = self._selfplay.compute_run_stats(raw, seat_labels)
+        n_learner, mean_scores, seat_outcomes = self._selfplay.compute_run_stats(
+            raw,
+            seat_labels,
+            session_size=config.outplace_session_size,
+        )
         self._presenter.on_selfplay_done(n_total, n_learner, sp_time)
 
         if config.human_data_dir:

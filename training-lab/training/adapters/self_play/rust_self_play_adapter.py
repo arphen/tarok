@@ -75,7 +75,31 @@ class RustSelfPlay(SelfPlayPort):
         self,
         raw: dict[str, Any],
         seat_labels: list[str],
+        session_size: int = 50,
     ) -> tuple[int, tuple[float, float, float, float], dict[int, tuple[int, int, int]]]:
+        """Return learner count, mean seat scores, and session outplace outcomes.
+
+        For each non-``nn`` opponent seat ``si``, every ``nn`` seat at the
+        table contributes its own comparison against ``si``.  This means that
+        when ``min_nn_per_game > 1`` (e.g. ``"nn,bot_v5,nn,bot_v1"``), both
+        seat-0 *and* seat-2 results are accumulated into the ``bot_v5`` and
+        ``bot_v1`` outcome buckets — none of the learner's matchup data is
+        discarded.
+
+        Outcomes are decided from cumulative session totals:
+        games are grouped into chunks of ``session_size``; any leftover games
+        that don't fill a full session are ignored for outplace units (but are
+        still counted in ``mean_scores``).  If fewer games than ``session_size``
+        are available, per-game scores are used directly.
+
+        For each comparison unit:
+        ``nn_score > opp_score`` -> learner_outplaces,
+        ``nn_score < opp_score`` -> opponent_outplaces,
+        equal scores -> draws.
+
+        The resulting ``seat_outcomes[si]`` tuple order is
+        ``(learner_outplaces, opponent_outplaces, draws)``.
+        """
         players_np = np.asarray(raw["players"])
         nn_seats = [i for i, s in enumerate(seat_labels) if s == "nn"]
         n_learner = int(sum(np.sum(players_np == s) for s in nn_seats))
@@ -87,18 +111,40 @@ class RustSelfPlay(SelfPlayPort):
             mean_scores: tuple[float, float, float, float] = (
                 float(ms[0]), float(ms[1]), float(ms[2]), float(ms[3])
             )
+
+            unit_scores = scores_np
+            n_games = int(scores_np.shape[0])
+            if session_size > 1:
+                n_sessions = n_games // session_size
+                if n_sessions > 0:
+                    used_games = n_sessions * session_size
+                    clean_scores = scores_np[:used_games]
+                    unit_scores = np.sum(clean_scores.reshape(n_sessions, session_size, 4), axis=1)
+
+            nn_seat_indices = [i for i, s in enumerate(seat_labels) if s == "nn"]
             seat_outcomes: dict[int, tuple[int, int, int]] = {}
-            learner_scores = scores_np[:, 0]
             for si in range(1, 4):
                 if seat_labels[si] == "nn":
                     continue
-                opp_scores = scores_np[:, si]
-                wins = int(np.sum(learner_scores > opp_scores))
-                losses = int(np.sum(learner_scores < opp_scores))
-                draws = int(np.sum(learner_scores == opp_scores))
-                seat_outcomes[si] = (wins, losses, draws)
+                opp_scores = unit_scores[:, si]
+                total_learner_outplaces = 0
+                total_opponent_outplaces = 0
+                total_draws = 0
+                for nn_idx in nn_seat_indices:
+                    nn_scores = unit_scores[:, nn_idx]
+                    total_learner_outplaces += int(np.sum(nn_scores > opp_scores))
+                    total_opponent_outplaces += int(np.sum(nn_scores < opp_scores))
+                    total_draws += int(np.sum(nn_scores == opp_scores))
+                seat_outcomes[si] = (total_learner_outplaces, total_opponent_outplaces, total_draws)
         else:
             mean_scores = (0.0, 0.0, 0.0, 0.0)
             seat_outcomes = {}
+            non_nn_seats = [i for i, s in enumerate(seat_labels) if i > 0 and s != "nn"]
+            if non_nn_seats:
+                log.warning(
+                    "run_self_play returned no scores; league Elo cannot be updated for seats %s. "
+                    "Rebuild engine-rs so run_self_play exports scores.",
+                    non_nn_seats,
+                )
 
         return n_learner, mean_scores, seat_outcomes
