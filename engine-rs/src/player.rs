@@ -62,15 +62,15 @@ impl DecisionType {
 
 /// Maps bid action index → Contract (None = pass).
 pub const BID_IDX_TO_CONTRACT: [Option<Contract>; BID_ACTION_SIZE] = [
-    None,                       // 0 = pass
-    Some(Contract::Three),      // 1
-    Some(Contract::Two),        // 2
-    Some(Contract::One),        // 3
-    Some(Contract::SoloThree),  // 4
-    Some(Contract::SoloTwo),    // 5
-    Some(Contract::SoloOne),    // 6
-    Some(Contract::Solo),       // 7
-    Some(Contract::Berac),      // 8
+    None,                      // 0 = pass
+    Some(Contract::Three),     // 1
+    Some(Contract::Two),       // 2
+    Some(Contract::One),       // 3
+    Some(Contract::SoloThree), // 4
+    Some(Contract::SoloTwo),   // 5
+    Some(Contract::SoloOne),   // 6
+    Some(Contract::Solo),      // 7
+    Some(Contract::Berac),     // 8
 ];
 
 /// Convert an `Option<Contract>` to a bid action index.

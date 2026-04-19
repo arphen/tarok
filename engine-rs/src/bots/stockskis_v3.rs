@@ -7,7 +7,6 @@
 /// - Defensive coordination (lead through declarer, avoid their voids)
 /// - Smarter šmiranje scaling by position and phase
 /// - Refined bidding with interacting features
-
 use crate::card::*;
 use crate::game_state::*;
 use crate::legal_moves;
@@ -57,7 +56,9 @@ impl CardTracker {
 
         let mut player_voids = [[false; 4]; NUM_PLAYERS];
         for trick in &state.tricks {
-            if trick.count == 0 { continue; }
+            if trick.count == 0 {
+                continue;
+            }
             let lead_card = trick.cards[0].1;
             if let Some(lead_suit) = lead_card.suit() {
                 for i in 1..trick.count as usize {
@@ -69,7 +70,9 @@ impl CardTracker {
             }
         }
 
-        let tricks_left = (hand.len() as usize).saturating_sub(state.tricks.len()).max(1);
+        let tricks_left = (hand.len() as usize)
+            .saturating_sub(state.tricks.len())
+            .max(1);
 
         let phase = match state.tricks.len() {
             0..=3 => GamePhase::Early,
@@ -91,14 +94,18 @@ impl CardTracker {
     fn higher_taroks_out(&self, value: u8) -> u8 {
         let mut count = 0u8;
         for c in self.taroks_remaining.iter() {
-            if c.value() > value { count += 1; }
+            if c.value() > value {
+                count += 1;
+            }
         }
         count
     }
 
     fn suit_is_master(&self, suit: Suit, value: u8) -> bool {
         for c in self.remaining.suit(suit).iter() {
-            if c.value() > value { return false; }
+            if c.value() > value {
+                return false;
+            }
         }
         true
     }
@@ -121,7 +128,9 @@ impl CardTracker {
     fn max_opponent_tarok(&self) -> u8 {
         let mut max_val = 0u8;
         for c in self.taroks_remaining.iter() {
-            if c.value() > max_val { max_val = c.value(); }
+            if c.value() > max_val {
+                max_val = c.value();
+            }
         }
         max_val
     }
@@ -153,15 +162,23 @@ pub fn evaluate_bid_v3(hand: CardSet, highest_so_far: Option<Contract>) -> Optio
     // Core tarok strength
     rating += tarok_count as f64 * 6.0;
     rating += high_taroks as f64 * 5.0;
-    if has_skis { rating += 14.0; }
+    if has_skis {
+        rating += 14.0;
+    }
     if has_mond {
         rating += 11.0;
-        if has_skis { rating += 3.0; } // mond protected
+        if has_skis {
+            rating += 3.0;
+        } // mond protected
     }
     if has_pagat {
-        if tarok_count >= 7 { rating += 8.0; }
-        else if tarok_count >= 5 { rating += 3.0; }
-        else { rating -= 2.0; } // unprotected
+        if tarok_count >= 7 {
+            rating += 8.0;
+        } else if tarok_count >= 5 {
+            rating += 3.0;
+        } else {
+            rating -= 2.0;
+        } // unprotected
     }
 
     // Kings and suit control
@@ -175,7 +192,11 @@ pub fn evaluate_bid_v3(hand: CardSet, highest_so_far: Option<Contract>) -> Optio
         if count == 0 {
             rating += 8.0; // void
         } else if count == 1 {
-            if has_king { rating += 4.0; } else { rating += 3.0; }
+            if has_king {
+                rating += 4.0;
+            } else {
+                rating += 3.0;
+            }
         } else if count == 2 && has_king {
             rating += 2.0;
         } else if count >= 3 && !has_king {
@@ -206,11 +227,8 @@ pub fn evaluate_bid_v3(hand: CardSet, highest_so_far: Option<Contract>) -> Optio
     ];
 
     let has_all_suits = Suit::ALL.iter().all(|&s| hand.has_suit(s));
-    let can_berac = ratio < 0.16
-        && tarok_count <= 2
-        && has_all_suits
-        && high_taroks == 0
-        && king_count == 0;
+    let can_berac =
+        ratio < 0.16 && tarok_count <= 2 && has_all_suits && high_taroks == 0 && king_count == 0;
 
     let mut best: Option<Contract> = None;
     for &(contract, threshold) in &thresholds {
@@ -246,7 +264,9 @@ pub fn choose_king_v3(hand: CardSet) -> Option<Card> {
 
     for s in Suit::ALL {
         let king = Card::suit_card(s, SuitRank::King);
-        if hand.contains(king) { continue; }
+        if hand.contains(king) {
+            continue;
+        }
         let count = hand.suit_count(s) as i32;
         let low_cards = hand.suit(s).iter().filter(|c| c.value() <= 4).count() as i32;
         let has_queen = hand.contains(Card::suit_card(s, SuitRank::Queen));
@@ -280,29 +300,46 @@ fn evaluate_talon_group_v3(group: &[Card], hand: CardSet, called_king: Option<Ca
     let mut total = 0.0f64;
     for &card in group {
         total += card.points() as f64 * 2.0 + worth_over(card) as f64 * 0.3;
-        if card.card_type() == CardType::Tarok { total += 10.0; }
+        if card.card_type() == CardType::Tarok {
+            total += 10.0;
+        }
         if let (Some(cs), Some(s)) = (called_suit, card.suit()) {
-            if s == cs { total += 5.0; }
+            if s == cs {
+                total += 5.0;
+            }
         }
     }
 
     for s in Suit::ALL {
-        if Some(s) == called_suit { continue; }
+        if Some(s) == called_suit {
+            continue;
+        }
         let hand_count = hand.suit_count(s);
         let group_adds = group.iter().filter(|c| c.suit() == Some(s)).count() as u32;
-        if hand_count <= 1 && hand_count + group_adds <= 1 { total += 6.0; }
-        if hand_count == 0 && group_adds == 0 { total += 4.0; }
+        if hand_count <= 1 && hand_count + group_adds <= 1 {
+            total += 6.0;
+        }
+        if hand_count == 0 && group_adds == 0 {
+            total += 4.0;
+        }
     }
 
     total
 }
 
-pub fn choose_talon_group_v3(groups: &[Vec<Card>], hand: CardSet, called_king: Option<Card>) -> usize {
+pub fn choose_talon_group_v3(
+    groups: &[Vec<Card>],
+    hand: CardSet,
+    called_king: Option<Card>,
+) -> usize {
     let mut best_idx = 0;
     let mut best_score = f64::NEG_INFINITY;
     for (i, group) in groups.iter().enumerate() {
         let score = evaluate_talon_group_v3(group, hand, called_king);
-        if score > best_score { best_score = score; best_idx = i; }
+        if score > best_score {
+            best_score = score;
+            best_idx = i;
+        }
     }
     best_idx
 }
@@ -311,16 +348,24 @@ pub fn choose_talon_group_v3(groups: &[Vec<Card>], hand: CardSet, called_king: O
 // Discard
 // -----------------------------------------------------------------------
 
-pub fn choose_discards_v3(hand: CardSet, must_discard: usize, called_king: Option<Card>) -> Vec<Card> {
+pub fn choose_discards_v3(
+    hand: CardSet,
+    must_discard: usize,
+    called_king: Option<Card>,
+) -> Vec<Card> {
     let called_suit = called_king.and_then(|k| k.suit());
 
-    let mut discardable: Vec<Card> = hand.iter()
+    let mut discardable: Vec<Card> = hand
+        .iter()
         .filter(|c| c.card_type() != CardType::Tarok && !c.is_king())
         .collect();
 
     if discardable.len() < must_discard {
-        let mut extra: Vec<Card> = hand.iter()
-            .filter(|c| c.card_type() == CardType::Tarok && !c.is_trula() && !discardable.contains(c))
+        let mut extra: Vec<Card> = hand
+            .iter()
+            .filter(|c| {
+                c.card_type() == CardType::Tarok && !c.is_trula() && !discardable.contains(c)
+            })
             .collect();
         extra.sort_by_key(|c| c.value());
         discardable.extend(extra);
@@ -328,20 +373,27 @@ pub fn choose_discards_v3(hand: CardSet, must_discard: usize, called_king: Optio
 
     let mut by_suit: [Vec<Card>; 4] = Default::default();
     for &c in &discardable {
-        if let Some(s) = c.suit() { by_suit[s as usize].push(c); }
+        if let Some(s) = c.suit() {
+            by_suit[s as usize].push(c);
+        }
     }
 
     let mut result: Vec<Card> = Vec::with_capacity(must_discard);
 
-    let mut suit_order: Vec<(Suit, u32)> = Suit::ALL.iter()
+    let mut suit_order: Vec<(Suit, u32)> = Suit::ALL
+        .iter()
         .filter(|&&s| Some(s) != called_suit && !by_suit[s as usize].is_empty())
         .map(|&s| (s, hand.suit_count(s)))
         .collect();
     suit_order.sort_by_key(|&(_, count)| count);
 
     for (suit, _) in suit_order {
-        if result.len() >= must_discard { break; }
-        let suit_discardable: Vec<Card> = hand.suit(suit).iter()
+        if result.len() >= must_discard {
+            break;
+        }
+        let suit_discardable: Vec<Card> = hand
+            .suit(suit)
+            .iter()
             .filter(|c| !c.is_king() && discardable.contains(c) && !result.contains(c))
             .collect();
         if suit_discardable.len() + result.len() <= must_discard {
@@ -350,13 +402,16 @@ pub fn choose_discards_v3(hand: CardSet, must_discard: usize, called_king: Optio
     }
 
     if result.len() < must_discard {
-        let mut remaining: Vec<Card> = discardable.iter()
+        let mut remaining: Vec<Card> = discardable
+            .iter()
             .filter(|c| !result.contains(c))
             .copied()
             .collect();
         remaining.sort_by_key(|c| (c.points(), worth_over(*c)));
         for c in remaining {
-            if result.len() >= must_discard { break; }
+            if result.len() >= must_discard {
+                break;
+            }
             result.push(c);
         }
     }
@@ -415,7 +470,8 @@ fn eval_klop_berac_v3(
                 }
                 score -= 500.0;
             }
-            if tracker.phase == GamePhase::Late && card.value() <= 5
+            if tracker.phase == GamePhase::Late
+                && card.value() <= 5
                 && tracker.higher_taroks_out(card.value()) == 0
             {
                 return 10.0;
@@ -433,19 +489,24 @@ fn eval_klop_berac_v3(
                 -wo * 3.0
             } else {
                 let mut score = -wo + remaining * 3.0 - count * 2.0;
-                if count == 1.0 { score += 5.0; }
+                if count == 1.0 {
+                    score += 5.0;
+                }
                 score
             }
         }
     } else if let Some(ref trick) = state.current_trick {
-        if trick.count == 0 { return -wo; }
+        if trick.count == 0 {
+            return -wo;
+        }
 
         let lead_suit = trick.lead_suit();
         if let Some(best) = trick.best_card() {
             let is_last = trick.count as usize == NUM_PLAYERS - 1;
             let trick_pts: f64 = (0..trick.count as usize)
                 .map(|i| trick.cards[i].1.points() as f64)
-                .sum::<f64>() + pts;
+                .sum::<f64>()
+                + pts;
 
             if card.beats(best, lead_suit) {
                 if is_last && trick_pts <= 3.0 {
@@ -458,7 +519,9 @@ fn eval_klop_berac_v3(
                 // Dump cards from suits where opponents are void
                 if let Some(suit) = card.suit() {
                     let danger = tracker.opponents_void_in(suit, player);
-                    if danger > 0 { score += pts * 3.0; }
+                    if danger > 0 {
+                        score += pts * 3.0;
+                    }
                 }
                 score
             }
@@ -490,7 +553,11 @@ fn eval_leading_v3(
                 GamePhase::Early => 90.0,
                 GamePhase::Mid => 70.0,
                 GamePhase::Late => {
-                    if tracker.tricks_left <= 1 { -300.0 } else { 50.0 }
+                    if tracker.tricks_left <= 1 {
+                        -300.0
+                    } else {
+                        50.0
+                    }
                 }
             }
         } else if card.value() == MOND {
@@ -515,12 +582,24 @@ fn eval_leading_v3(
             // Regular tarok
             if higher_out == 0 {
                 let score = 55.0 + wo;
-                if is_playing { score + 10.0 } else { score }
+                if is_playing {
+                    score + 10.0
+                } else {
+                    score
+                }
             } else if is_playing {
                 let base = (((wo - 11.0).max(0.0)) / 3.0).powf(1.5);
-                if tracker.phase == GamePhase::Early { base + 10.0 } else { base }
+                if tracker.phase == GamePhase::Early {
+                    base + 10.0
+                } else {
+                    base
+                }
             } else {
-                if higher_out <= 2 { 25.0 + wo * 0.5 } else { wo * 0.2 }
+                if higher_out <= 2 {
+                    25.0 + wo * 0.5
+                } else {
+                    wo * 0.2
+                }
             }
         }
     } else {
@@ -547,7 +626,11 @@ fn eval_leading_v3(
         } else {
             // Defender: avoid leading suits where declarer is void
             let mut score = if count >= 3.0 {
-                if card.is_king() { pts * 2.0 + 5.0 } else { count * 3.0 - pts * 1.5 }
+                if card.is_king() {
+                    pts * 2.0 + 5.0
+                } else {
+                    count * 3.0 - pts * 1.5
+                }
             } else if count == 1.0 {
                 8.0 - pts
             } else {
@@ -601,16 +684,15 @@ fn eval_following_v3(
     }
 
     let best_is_ally = if is_playing {
-        best_player == state.declarer.unwrap_or(255)
-            || state.partner == Some(best_player)
+        best_player == state.declarer.unwrap_or(255) || state.partner == Some(best_player)
     } else {
-        best_player != state.declarer.unwrap_or(255)
-            && state.partner != Some(best_player)
+        best_player != state.declarer.unwrap_or(255) && state.partner != Some(best_player)
     };
 
     let trick_pts: f64 = (0..num_played)
         .map(|i| trick.cards[i].1.points() as f64)
-        .sum::<f64>() + pts;
+        .sum::<f64>()
+        + pts;
 
     let would_win = card.beats(best_card, lead_suit);
 
@@ -628,15 +710,21 @@ fn eval_following_v3(
 
     // Mond
     if card.card_type() == CardType::Tarok && card.value() == MOND {
-        if !would_win { return -600.0; }
+        if !would_win {
+            return -600.0;
+        }
         let skis_out = tracker.taroks_remaining.contains(Card::tarok(SKIS));
-        if skis_out && !is_last { return -100.0; }
+        if skis_out && !is_last {
+            return -100.0;
+        }
         return trick_pts * 2.0 + 40.0;
     }
 
     // Škis
     if card.card_type() == CardType::Tarok && card.value() == SKIS {
-        if tracker.tricks_left <= 1 { return -400.0; }
+        if tracker.tricks_left <= 1 {
+            return -400.0;
+        }
         return trick_pts * 2.5 + 35.0;
     }
 

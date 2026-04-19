@@ -1,29 +1,20 @@
-/// StockŠkis v5 — strongest heuristic bot, combining all v1–v4 lessons
-/// with major bidding overhaul, belief tracking, and smarter trick play.
+/// StockŠkis m6 — refined heuristic bot based on v5/v6 with targeted tweaks.
 ///
-/// Key improvements over v4:
-/// - **Bidding overhaul**: Much less aggressive solo bidding — solos require
-///   guaranteed points (kings + škis/mond) > 30.  No solo with fewer than
-///   4 taroks.  Tighter thresholds across the board.
-/// - **Berač gating**: No berač with any tarok ≥ 9, škis, void suits,
-///   singletons, or more than 2 taroks.  Kings allowed only if 5+ cards
-///   in that suit.
-/// - **Belief tracking**: Infer opponent hand composition from observed
-///   plays and voids — track tarok probability per-player to make smarter
-///   following decisions.
-/// - **Last-seat economy**: When last to play and winning, play the
-///   *lowest* tarok that still wins the trick.
-/// - **Partner preservation**: Don't overtrump partner when it doesn't
-///   change who wins the trick.
-/// - **Opposition coordination**: Defenders avoid wasting high taroks
-///   and lead through declarer's weak suits.
-
+/// Changes from v5/v6:
+/// - **King calling**: Prefer suits with ~2 cards and high-value cards (queen,
+///   jack) rather than maximum length.  Queen + 1 other card is the sweet spot.
+/// - **Discarding**: Prioritize putting down point cards (queens, knights) to
+///   secure points, rather than void-building.
+/// - **Pagat caution**: Never lead pagat unless all remaining taroks are
+///   accounted for.  Only attempt pagat ultimo with 10+ taroks.
+/// - **Less aggressive play**: Toned-down multipliers on trick-point scoring
+///   and more conservative tarok usage.
 use crate::card::*;
 use crate::game_state::*;
 use crate::legal_moves;
 
 // -----------------------------------------------------------------------
-// Card tracking — enhanced with belief estimation
+// Card tracking — same as v5/v6
 // -----------------------------------------------------------------------
 
 #[allow(dead_code)]
@@ -33,14 +24,11 @@ struct CardTracker {
     taroks_remaining: CardSet,
     suit_counts: [u8; 4],
     player_voids: [[bool; 4]; NUM_PLAYERS],
-    /// Estimated probability that each opponent still has taroks (0.0–1.0).
     player_tarok_likelihood: [f64; NUM_PLAYERS],
     tricks_left: usize,
     phase: GamePhase,
-    /// Points already secured by declarer team.
-    declarer_team_points: i32,
-    /// Points already secured by opposition.
-    opposition_points: i32,
+    /// Estimated number of taroks this player started with.
+    starting_taroks_estimate: u8,
 }
 
 #[derive(Clone, Copy, PartialEq)]
@@ -72,16 +60,23 @@ impl CardTracker {
         }
 
         let mut player_voids = [[false; 4]; NUM_PLAYERS];
-        // Track tarok-related plays per opponent
         let mut player_played_tarok = [false; NUM_PLAYERS];
         let mut player_followed_suit_when_could = [0u32; NUM_PLAYERS];
         let mut player_total_follows = [0u32; NUM_PLAYERS];
 
+        // Count taroks this player has played in completed tricks
+        let mut own_taroks_played = 0u8;
         for trick in &state.tricks {
             if trick.count == 0 {
                 continue;
             }
             let lead_card = trick.cards[0].1;
+            for i in 0..trick.count as usize {
+                let (p, c) = trick.cards[i];
+                if p == player && c.card_type() == CardType::Tarok {
+                    own_taroks_played += 1;
+                }
+            }
             if let Some(lead_suit) = lead_card.suit() {
                 for i in 1..trick.count as usize {
                     let (p, c) = trick.cards[i];
@@ -97,7 +92,6 @@ impl CardTracker {
                     }
                 }
             } else {
-                // Lead was tarok
                 for i in 1..trick.count as usize {
                     let (p, c) = trick.cards[i];
                     if p == player {
@@ -110,7 +104,6 @@ impl CardTracker {
             }
         }
 
-        // Estimate tarok likelihood per opponent
         let mut player_tarok_likelihood = [0.8f64; NUM_PLAYERS];
         let total_taroks_remaining = taroks_remaining.len() as f64;
         let opponents_count = (NUM_PLAYERS - 1) as f64;
@@ -125,8 +118,6 @@ impl CardTracker {
                 player_tarok_likelihood[p] = 0.0;
                 continue;
             }
-            // If they played suit card when tarok was led and they had to
-            // follow with tarok, they are tarok-void
             let mut tarok_void = false;
             for trick in &state.tricks {
                 if trick.count == 0 {
@@ -148,40 +139,15 @@ impl CardTracker {
             } else if total_taroks_remaining == 0.0 {
                 player_tarok_likelihood[p] = 0.0;
             } else {
-                // Base likelihood from remaining distribution
                 let base = (avg_taroks_per_opponent / 4.0).min(1.0);
                 player_tarok_likelihood[p] = base;
             }
         }
 
-        // Compute points accumulated
-        let mut declarer_team_points = 0i32;
-        let mut opposition_points = 0i32;
-        for trick in &state.tricks {
-            if trick.count < 4 {
-                continue;
-            }
-            let lead_suit = trick.lead_suit();
-            let mut winner = trick.cards[0].0;
-            let mut best = trick.cards[0].1;
-            let mut trick_pts = 0i32;
-            for i in 0..trick.count as usize {
-                trick_pts += trick.cards[i].1.points() as i32;
-                if i > 0 && trick.cards[i].1.beats(best, lead_suit) {
-                    best = trick.cards[i].1;
-                    winner = trick.cards[i].0;
-                }
-            }
-            let winner_is_declarer_team = state.declarer == Some(winner)
-                || state.partner == Some(winner);
-            if winner_is_declarer_team {
-                declarer_team_points += trick_pts;
-            } else {
-                opposition_points += trick_pts;
-            }
-        }
-
-        let tricks_left = (hand.len() as usize).saturating_sub(state.tricks.len()).max(1);
+        let taroks_in_hand = hand.tarok_count();
+        let tricks_left = (hand.len() as usize)
+            .saturating_sub(state.tricks.len())
+            .max(1);
         let phase = match state.tricks.len() {
             0..=3 => GamePhase::Early,
             4..=8 => GamePhase::Mid,
@@ -190,15 +156,14 @@ impl CardTracker {
 
         CardTracker {
             remaining,
-            taroks_in_hand: hand.tarok_count(),
+            taroks_in_hand,
             taroks_remaining,
             suit_counts,
             player_voids,
             player_tarok_likelihood,
             tricks_left,
             phase,
-            declarer_team_points,
-            opposition_points,
+            starting_taroks_estimate: taroks_in_hand + own_taroks_played,
         }
     }
 
@@ -234,60 +199,51 @@ impl CardTracker {
         }
         count
     }
-
-    /// Lowest tarok in remaining that is higher than `value`.
-    #[allow(dead_code)]
-    fn lowest_winning_tarok_remaining(&self, value: u8) -> Option<u8> {
-        let mut lowest: Option<u8> = None;
-        for card in self.taroks_remaining.iter() {
-            if card.value() > value {
-                match lowest {
-                    None => lowest = Some(card.value()),
-                    Some(v) if card.value() < v => lowest = Some(card.value()),
-                    _ => {}
-                }
-            }
-        }
-        lowest
-    }
 }
 
 // -----------------------------------------------------------------------
-// Bidding — completely overhauled
+// Bidding — tighter gating for One and harder
 // -----------------------------------------------------------------------
 
-/// Compute "guaranteed" points: kings (5 each) + škis (5) + mond (5 if safe).
 fn guaranteed_points(hand: CardSet) -> f64 {
     let mut pts = 0.0f64;
     let has_skis = hand.contains(Card::tarok(SKIS));
     let has_mond = hand.contains(Card::tarok(MOND));
 
-    // Kings: 5 points each
     for suit in Suit::ALL {
         if hand.contains(Card::suit_card(suit, SuitRank::King)) {
             pts += 5.0;
         }
     }
-
-    // Škis: always guaranteed
     if has_skis {
         pts += 5.0;
     }
-
-    // Mond: guaranteed if we also have škis, or if we have many taroks (safe)
     if has_mond {
         if has_skis || hand.tarok_count() >= 6 {
             pts += 5.0;
         } else {
-            // Mond somewhat vulnerable
             pts += 2.0;
         }
     }
-
     pts
 }
 
-pub fn evaluate_bid_v5(hand: CardSet, highest_so_far: Option<Contract>) -> Option<Contract> {
+/// Count cards worth 5 points: kings, škis, mond, pagat.
+fn five_point_card_count(hand: CardSet) -> u8 {
+    let mut count = hand.king_count();
+    if hand.contains(Card::tarok(SKIS)) {
+        count += 1;
+    }
+    if hand.contains(Card::tarok(MOND)) {
+        count += 1;
+    }
+    if hand.contains(Card::tarok(PAGAT)) {
+        count += 1;
+    }
+    count
+}
+
+pub fn evaluate_bid_m6(hand: CardSet, highest_so_far: Option<Contract>) -> Option<Contract> {
     let tarok_count = hand.tarok_count();
     let high_taroks = hand.high_tarok_count();
     let king_count = hand.king_count();
@@ -296,7 +252,6 @@ pub fn evaluate_bid_v5(hand: CardSet, highest_so_far: Option<Contract>) -> Optio
     let has_mond = hand.contains(Card::tarok(MOND));
     let has_pagat = hand.contains(Card::tarok(PAGAT));
 
-    // --- Compute hand rating ---
     let mut rating = 0.0f64;
     rating += tarok_count as f64 * 5.5;
     rating += high_taroks as f64 * 4.5;
@@ -315,7 +270,7 @@ pub fn evaluate_bid_v5(hand: CardSet, highest_so_far: Option<Contract>) -> Optio
         } else if tarok_count >= 5 {
             rating += 2.0;
         } else {
-            rating -= 4.0; // unprotected pagat is dangerous
+            rating -= 4.0;
         }
     }
 
@@ -326,7 +281,6 @@ pub fn evaluate_bid_v5(hand: CardSet, highest_so_far: Option<Contract>) -> Optio
     let mut has_singleton = false;
     let mut max_tarok_val = 0u8;
 
-    // Track max tarok value in hand
     for card in hand.taroks().iter() {
         if card.value() > max_tarok_val {
             max_tarok_val = card.value();
@@ -352,7 +306,7 @@ pub fn evaluate_bid_v5(hand: CardSet, highest_so_far: Option<Contract>) -> Optio
         } else if count == 2 && has_king {
             rating += 2.0;
         } else if count >= 3 && !has_king {
-            rating -= count as f64 * 2.5; // slightly harsher penalty
+            rating -= count as f64 * 2.5;
         }
 
         if has_king && has_queen && count >= 2 {
@@ -366,9 +320,6 @@ pub fn evaluate_bid_v5(hand: CardSet, highest_so_far: Option<Contract>) -> Optio
 
     let ratio = (rating / 130.0).min(1.0);
 
-    // --- Berač gating (much tighter) ---
-    // No berač with: any void suit, any singleton, >2 taroks, any tarok ≥ 9,
-    // kings unless 5+ in that suit
     let mut king_blocks_berac = false;
     for suit in Suit::ALL {
         let has_king = hand.contains(Card::suit_card(suit, SuitRank::King));
@@ -379,14 +330,13 @@ pub fn evaluate_bid_v5(hand: CardSet, highest_so_far: Option<Contract>) -> Optio
 
     let can_berac = ratio < 0.16
         && tarok_count <= 2
-        && max_tarok_val < 9 // no tarok 9 or above (excludes škis etc.)
+        && max_tarok_val < 9
         && has_all_suits
         && !has_void
         && !has_singleton
         && !king_blocks_berac
         && high_taroks == 0;
 
-    // --- Normal contract thresholds (raised to be less aggressive) ---
     let thresholds: [(Contract, f64); 7] = [
         (Contract::Three, 0.26),
         (Contract::Two, 0.33),
@@ -404,21 +354,28 @@ pub fn evaluate_bid_v5(hand: CardSet, highest_so_far: Option<Contract>) -> Optio
         }
     }
 
-    // --- Solo gating: guaranteed points must exceed 30 ---
+    // Gate: One or harder requires at least 2 five-point cards and 6+ taroks.
+    // Five-point cards are kings, škis, mond, pagat.
     if let Some(contract) = best {
-        if contract.is_solo() {
-            let gp = guaranteed_points(hand);
-            if gp < 30.0 {
-                // Downgrade: find highest non-solo that still qualifies
+        if contract.strength() >= Contract::One.strength() {
+            let fives = five_point_card_count(hand);
+            if fives < 2 || tarok_count < 6 {
+                // Downgrade to best contract below One
                 best = None;
                 for &(c, t) in &thresholds {
-                    if !c.is_solo() && ratio >= t {
+                    if c.strength() < Contract::One.strength() && ratio >= t {
                         best = Some(c);
                     }
                 }
             }
-            // Additional: no solo at all with fewer than 4 taroks
-            if tarok_count < 4 {
+        }
+    }
+
+    // Solo gating: guaranteed points must exceed 30, and 4+ taroks
+    if let Some(contract) = best {
+        if contract.is_solo() {
+            let gp = guaranteed_points(hand);
+            if gp < 30.0 || tarok_count < 4 {
                 best = None;
                 for &(c, t) in &thresholds {
                     if !c.is_solo() && ratio >= t {
@@ -429,12 +386,14 @@ pub fn evaluate_bid_v5(hand: CardSet, highest_so_far: Option<Contract>) -> Optio
         }
     }
 
-    // Berač override
-    if can_berac && best.map_or(true, |current| Contract::Berac.strength() > current.strength()) {
+    if can_berac
+        && best.map_or(true, |current| {
+            Contract::Berac.strength() > current.strength()
+        })
+    {
         best = Some(Contract::Berac);
     }
 
-    // Filter against highest bid so far
     if let Some(contract) = best {
         if let Some(highest) = highest_so_far {
             if contract.strength() <= highest.strength() {
@@ -448,10 +407,10 @@ pub fn evaluate_bid_v5(hand: CardSet, highest_so_far: Option<Contract>) -> Optio
 }
 
 // -----------------------------------------------------------------------
-// King calling — same as v4 (already solid)
+// King calling — prefer ~2 cards with queen/jack, not longest suit
 // -----------------------------------------------------------------------
 
-pub fn choose_king_v5(hand: CardSet) -> Option<Card> {
+pub fn choose_king_m6(hand: CardSet) -> Option<Card> {
     let mut best_king: Option<Card> = None;
     let mut best_score = -1i32;
 
@@ -461,13 +420,25 @@ pub fn choose_king_v5(hand: CardSet) -> Option<Card> {
             continue;
         }
         let count = hand.suit_count(suit) as i32;
-        let low_cards = hand
-            .suit(suit)
-            .iter()
-            .filter(|card| card.value() <= 4)
-            .count() as i32;
         let has_queen = hand.contains(Card::suit_card(suit, SuitRank::Queen));
-        let score = count * 3 + low_cards * 2 + if has_queen { 1 } else { 0 };
+        let has_knight = hand.contains(Card::suit_card(suit, SuitRank::Knight));
+        let has_jack = hand.contains(Card::suit_card(suit, SuitRank::Jack));
+
+        let count_score = match count {
+            0 => 0,
+            1 => 4,
+            2 => 10,
+            3 => 6,
+            _ => 2,
+        };
+
+        let high_bonus = if has_queen { 8 } else { 0 }
+            + if has_knight { 5 } else { 0 }
+            + if has_jack { 3 } else { 0 };
+
+        let synergy = if has_queen && count == 2 { 4 } else { 0 };
+
+        let score = count_score + high_bonus + synergy;
         if score > best_score {
             best_score = score;
             best_king = Some(king);
@@ -488,46 +459,45 @@ pub fn choose_king_v5(hand: CardSet) -> Option<Card> {
 }
 
 // -----------------------------------------------------------------------
-// Talon — slightly improved void-building + called-suit bonus
+// Talon — same as v6
 // -----------------------------------------------------------------------
 
-fn evaluate_talon_group_v5(group: &[Card], hand: CardSet, called_king: Option<Card>) -> f64 {
-    let called_suit = called_king.and_then(|king| king.suit());
-    let mut total = 0.0f64;
+fn evaluate_talon_group_m6(group: &[Card], hand: CardSet, _called_king: Option<Card>) -> f64 {
+    let mut score = 0.0;
+    if group.contains(&Card::tarok(MOND)) {
+        score += 100000.0;
+    }
+    if group.contains(&Card::tarok(SKIS)) {
+        score += 10000.0;
+    }
+    if group.contains(&Card::tarok(PAGAT)) {
+        score += 1000.0;
+    }
 
-    for &card in group {
-        total += card.points() as f64 * 2.0 + worth_over(card) as f64 * 0.3;
-        if card.card_type() == CardType::Tarok {
-            total += 10.0;
-        }
-        if let (Some(king_suit), Some(suit)) = (called_suit, card.suit()) {
-            if suit == king_suit {
-                total += 6.0;
+    for &c in group {
+        if c.card_type() == CardType::Tarok {
+            score += 5.0;
+            if c.value() >= 15 {
+                score += 10.0;
             }
+        } else if c.is_king() {
+            let mut king_score = 25.0;
+            let suit_count = hand.suit_count(c.suit().unwrap())
+                + group.iter().filter(|&&g| g.suit() == c.suit()).count() as u32;
+            if suit_count >= 3 {
+                king_score -= 15.0;
+            }
+            score += king_score;
+        } else if c.value() == SuitRank::Queen as u8 {
+            score += 2.0;
+        } else {
+            score += 1.0;
         }
     }
-
-    for suit in Suit::ALL {
-        if Some(suit) == called_suit {
-            continue;
-        }
-        let hand_count = hand.suit_count(suit);
-        let group_adds = group
-            .iter()
-            .filter(|card| card.suit() == Some(suit))
-            .count() as u32;
-        if hand_count <= 1 && hand_count + group_adds <= 1 {
-            total += 6.0;
-        }
-        if hand_count == 0 && group_adds == 0 {
-            total += 4.0;
-        }
-    }
-
-    total
+    score
 }
 
-pub fn choose_talon_group_v5(
+pub fn choose_talon_group_m6(
     groups: &[Vec<Card>],
     hand: CardSet,
     called_king: Option<Card>,
@@ -535,7 +505,7 @@ pub fn choose_talon_group_v5(
     let mut best_idx = 0usize;
     let mut best_score = f64::NEG_INFINITY;
     for (idx, group) in groups.iter().enumerate() {
-        let score = evaluate_talon_group_v5(group, hand, called_king);
+        let score = evaluate_talon_group_m6(group, hand, called_king);
         if score > best_score {
             best_score = score;
             best_idx = idx;
@@ -545,10 +515,10 @@ pub fn choose_talon_group_v5(
 }
 
 // -----------------------------------------------------------------------
-// Discard — same as v4 (already solid)
+// Discard — prioritize putting down point cards to secure points
 // -----------------------------------------------------------------------
 
-pub fn choose_discards_v5(
+pub fn choose_discards_m6(
     hand: CardSet,
     must_discard: usize,
     called_king: Option<Card>,
@@ -573,61 +543,25 @@ pub fn choose_discards_v5(
         discardable.extend(extra);
     }
 
-    let mut by_suit: [Vec<Card>; 4] = Default::default();
-    for &card in &discardable {
-        if let Some(suit) = card.suit() {
-            by_suit[suit as usize].push(card);
+    discardable.sort_by(|a, b| {
+        let a_called = a.suit() == called_suit && called_suit.is_some();
+        let b_called = b.suit() == called_suit && called_suit.is_some();
+        if a_called != b_called {
+            return a_called.cmp(&b_called);
         }
-    }
+        // Queens (4pts) > Knights (3pts) > Jacks (2pts) > Pips (1pt)
+        b.points().cmp(&a.points())
+    });
 
-    let mut result: Vec<Card> = Vec::with_capacity(must_discard);
-    let mut suit_order: Vec<(Suit, u32)> = Suit::ALL
-        .iter()
-        .filter(|&&suit| Some(suit) != called_suit && !by_suit[suit as usize].is_empty())
-        .map(|&suit| (suit, hand.suit_count(suit)))
-        .collect();
-    suit_order.sort_by_key(|&(_, count)| count);
-
-    for (suit, _) in suit_order {
-        if result.len() >= must_discard {
-            break;
-        }
-        let suit_discardable: Vec<Card> = hand
-            .suit(suit)
-            .iter()
-            .filter(|card| !card.is_king() && discardable.contains(card) && !result.contains(card))
-            .collect();
-        if suit_discardable.len() + result.len() <= must_discard {
-            result.extend(suit_discardable);
-        }
-    }
-
-    if result.len() < must_discard {
-        let mut remaining: Vec<Card> = discardable
-            .iter()
-            .filter(|card| !result.contains(card))
-            .copied()
-            .collect();
-        remaining.sort_by_key(|card| (card.points(), worth_over(*card)));
-        for card in remaining {
-            if result.len() >= must_discard {
-                break;
-            }
-            result.push(card);
-        }
-    }
-
-    result.truncate(must_discard);
-    result
+    discardable.into_iter().take(must_discard).collect()
 }
 
 // -----------------------------------------------------------------------
-// Card play — v5 with belief tracking, partner preservation, last-seat
-//             economy, and role-aware evaluation
+// Card play
 // -----------------------------------------------------------------------
 
 #[allow(private_interfaces)]
-pub fn evaluate_card_play_v5(
+pub fn evaluate_card_play_m6(
     card: Card,
     hand: CardSet,
     state: &GameState,
@@ -637,34 +571,21 @@ pub fn evaluate_card_play_v5(
 ) -> f64 {
     let is_declarer = state.declarer == Some(player);
     let is_partner = state.partner == Some(player);
-    let _is_playing = is_declarer || is_partner;
-    let is_klop = state
-        .contract
-        .map_or(false, |contract| contract.is_klop());
-    let is_berac = state
-        .contract
-        .map_or(false, |contract| contract.is_berac());
+    let is_klop = state.contract.map_or(false, |contract| contract.is_klop());
+    let is_berac = state.contract.map_or(false, |contract| contract.is_berac());
 
     if is_klop || is_berac {
-        return eval_klop_berac_v5(card, hand, state, player, is_leading, tracker);
+        return eval_klop_berac_m6(card, hand, state, player, is_leading, tracker);
     }
 
     if is_leading {
-        eval_leading_v5(
-            card,
-            hand,
-            state,
-            player,
-            is_declarer,
-            is_partner,
-            tracker,
-        )
+        eval_leading_m6(card, hand, state, player, is_declarer, is_partner, tracker)
     } else {
-        eval_following_v5(card, hand, state, player, is_declarer, is_partner, tracker)
+        eval_following_m6(card, hand, state, player, is_declarer, is_partner, tracker)
     }
 }
 
-fn eval_klop_berac_v5(
+fn eval_klop_berac_m6(
     card: Card,
     _hand: CardSet,
     state: &GameState,
@@ -745,7 +666,7 @@ fn eval_klop_berac_v5(
     }
 }
 
-fn eval_leading_v5(
+fn eval_leading_m6(
     card: Card,
     hand: CardSet,
     state: &GameState,
@@ -761,28 +682,38 @@ fn eval_leading_v5(
     if card.card_type() == CardType::Tarok {
         let higher_out = tracker.higher_taroks_out(card.value());
 
-        // --- Pagat ---
+        // --- Pagat: only lead if guaranteed safe ---
         if card.value() == PAGAT {
-            if tracker.tricks_left <= 2 && tracker.taroks_in_hand <= 2 {
-                return 300.0;
-            }
+            // Last trick and we have it — play it
             if tracker.tricks_left == 1 {
                 return 400.0;
             }
-            return -250.0;
+            // Only lead pagat if no higher taroks remain anywhere (guaranteed win)
+            if higher_out == 0 && tracker.taroks_remaining.len() == 0 {
+                return 300.0;
+            }
+            // With 10+ starting taroks and late game, allow ultimo attempt
+            if tracker.starting_taroks_estimate >= 10
+                && tracker.tricks_left <= 2
+                && tracker.taroks_in_hand <= 2
+            {
+                return 250.0;
+            }
+            // Otherwise never lead pagat
+            return -400.0;
         }
 
         // --- Partner leading ---
         if is_partner {
             if card.value() == SKIS {
                 return match tracker.phase {
-                    GamePhase::Early => 130.0,
-                    GamePhase::Mid => 105.0,
+                    GamePhase::Early => 120.0,
+                    GamePhase::Mid => 95.0,
                     GamePhase::Late => {
                         if tracker.tricks_left <= 1 {
                             -300.0
                         } else {
-                            70.0
+                            60.0
                         }
                     }
                 };
@@ -791,40 +722,37 @@ fn eval_leading_v5(
                 let skis_out = tracker.taroks_remaining.contains(Card::tarok(SKIS));
                 let has_skis = hand.contains(Card::tarok(SKIS));
                 if skis_out && !has_skis {
-                    return 72.0;
+                    return 65.0;
                 }
-                return 95.0 + tracker.taroks_remaining.len() as f64 * 2.0;
+                return 85.0 + tracker.taroks_remaining.len() as f64 * 1.5;
             }
-            // Partner should lead high taroks to pull opponents' taroks
-            return 90.0 + wo * 1.4 - higher_out as f64 * 4.0;
+            return 80.0 + wo * 1.2 - higher_out as f64 * 5.0;
         }
 
         // --- Opposition leading ---
         if is_opposition {
-            // Preserve taroks — only lead them if master or late game
             if higher_out == 0 {
                 if tracker.phase == GamePhase::Late {
-                    return 25.0 + wo * 0.3;
+                    return 22.0 + wo * 0.2;
                 }
-                return 20.0 + wo * 0.2;
+                return 16.0 + wo * 0.15;
             }
             if higher_out <= 1 && tracker.tricks_left <= 3 {
-                return 8.0 + wo * 0.1;
+                return 6.0 + wo * 0.1;
             }
-            // Don't waste taroks on leads as opposition
-            return -50.0 - wo * 0.5 - higher_out as f64 * 7.0;
+            return -55.0 - wo * 0.6 - higher_out as f64 * 8.0;
         }
 
         // --- Declarer leading ---
         if card.value() == SKIS {
             return match tracker.phase {
-                GamePhase::Early => 95.0,
-                GamePhase::Mid => 75.0,
+                GamePhase::Early => 85.0,
+                GamePhase::Mid => 65.0,
                 GamePhase::Late => {
                     if tracker.tricks_left <= 1 {
                         -300.0
                     } else {
-                        55.0
+                        50.0
                     }
                 }
             };
@@ -834,21 +762,21 @@ fn eval_leading_v5(
             let skis_out = tracker.taroks_remaining.contains(Card::tarok(SKIS));
             let has_skis = hand.contains(Card::tarok(SKIS));
             if skis_out && !has_skis {
-                return -150.0;
+                return -180.0;
             }
             if has_skis {
-                return 70.0;
+                return 60.0;
             }
-            return 75.0 + tracker.taroks_remaining.len() as f64 * 3.0;
+            return 65.0 + tracker.taroks_remaining.len() as f64 * 2.5;
         }
 
         if higher_out == 0 {
-            return 65.0 + wo;
+            return 55.0 + wo * 0.8;
         }
 
-        let base = ((wo - 11.0).max(0.0) / 3.0).powf(1.5);
+        let base = ((wo - 11.0).max(0.0) / 3.5).powf(1.5);
         if tracker.phase == GamePhase::Early {
-            base + 10.0
+            base + 8.0
         } else {
             base
         }
@@ -859,32 +787,31 @@ fn eval_leading_v5(
 
         if is_partner {
             if card.is_king() && tracker.suit_is_master(suit, card.value()) {
-                18.0 + pts
+                16.0 + pts
             } else if count == 1.0 {
-                6.0 - pts
+                5.0 - pts
             } else if count == 2.0 && !card.is_king() {
-                4.0 - pts
+                3.0 - pts
             } else {
                 -pts - count
             }
         } else if is_declarer {
             if card.is_king() {
                 if tracker.suit_is_master(suit, card.value()) {
-                    30.0 + pts * 2.0
+                    26.0 + pts * 1.5
                 } else if count >= 3.0 {
-                    15.0 + pts
+                    12.0 + pts
                 } else {
-                    pts - 8.0
+                    pts - 10.0
                 }
             } else if count == 1.0 {
-                18.0 - pts
+                15.0 - pts
             } else if count == 2.0 && !card.is_king() {
-                12.0 - pts
+                10.0 - pts
             } else {
                 -pts * 1.5 - count * 2.0
             }
         } else {
-            // Opposition suit leads
             let mut declarer_team_voids = 0.0;
             if let Some(declarer) = state.declarer {
                 if tracker.player_voids[declarer as usize][suit as usize] {
@@ -897,27 +824,23 @@ fn eval_leading_v5(
                 }
             }
 
-            let mut score = 18.0 - pts * 4.0 - count * 1.5;
+            let mut score = 15.0 - pts * 4.0 - count * 1.5;
             if card.is_king() {
                 score -= 25.0;
             }
             if card.value() <= SuitRank::Pip2 as u8 {
-                score += 8.0;
+                score += 7.0;
             }
             if declarer_team_voids > 0.0 {
-                // Lead into suits where declarer team is void — they'll
-                // be forced to play taroks they'd rather keep
-                score += declarer_team_voids * 14.0 - pts * 2.0;
+                score += declarer_team_voids * 12.0 - pts * 2.0;
             } else if remaining > 0.0 {
                 score += remaining.min(4.0);
             }
 
-            // Bonus: lead into suits where we believe declarer has low
-            // tarok likelihood (so our partner might win)
             if let Some(declarer) = state.declarer {
                 let dl = tracker.player_tarok_likelihood[declarer as usize];
                 if dl < 0.3 {
-                    score += 5.0; // declarer may be low on taroks
+                    score += 4.0;
                 }
             }
 
@@ -926,7 +849,7 @@ fn eval_leading_v5(
     }
 }
 
-fn eval_following_v5(
+fn eval_following_m6(
     card: Card,
     _hand: CardSet,
     state: &GameState,
@@ -969,17 +892,28 @@ fn eval_following_v5(
         + pts;
     let would_win = card.beats(best_card, lead_suit);
 
-    // === Special card handling ===
-
-    // Pagat
+    // === Pagat: very careful handling ===
     if card.card_type() == CardType::Tarok && card.value() == PAGAT {
-        if tracker.tricks_left <= 2 && tracker.taroks_in_hand <= 2 {
-            return if would_win { 500.0 } else { -500.0 };
-        }
+        // Last trick: play it if it wins
         if tracker.tricks_left == 1 {
             return if would_win { 600.0 } else { -600.0 };
         }
-        return -250.0;
+        // Ultimo attempt: only with 10+ starting taroks and near the end
+        if tracker.starting_taroks_estimate >= 10
+            && tracker.tricks_left <= 2
+            && tracker.taroks_in_hand <= 2
+        {
+            return if would_win { 500.0 } else { -500.0 };
+        }
+        // Can safely play if ally is winning (šmir the pagat to partner's trick)
+        if best_is_ally && !would_win {
+            // Only šmir pagat if no taroks remain (safe from capture next trick)
+            if tracker.taroks_remaining.len() == 0 {
+                return 200.0;
+            }
+        }
+        // Otherwise: do not play pagat unless absolutely forced
+        return -400.0;
     }
 
     // Mond
@@ -989,9 +923,9 @@ fn eval_following_v5(
         }
         let skis_out = tracker.taroks_remaining.contains(Card::tarok(SKIS));
         if skis_out && !is_last {
-            return -100.0;
+            return -120.0;
         }
-        return trick_pts * 2.0 + 40.0;
+        return trick_pts * 1.8 + 35.0;
     }
 
     // Škis
@@ -999,20 +933,14 @@ fn eval_following_v5(
         if tracker.tricks_left <= 1 {
             return -400.0;
         }
-        return trick_pts * 2.5 + 35.0;
+        return trick_pts * 2.2 + 30.0;
     }
 
     // === Partner preservation: don't overtrump ally if outcome unchanged ===
     if would_win && best_is_ally && card.card_type() == CardType::Tarok {
-        // If our ally is already winning, don't play a *higher* tarok
-        // unless there are opponents yet to play who could beat ally
         if !is_last {
-            // Check if any remaining opponent could potentially beat ally's card
             let opponents_remaining = NUM_PLAYERS - 1 - num_played;
             if opponents_remaining > 0 {
-                // If our tarok is higher than partner's winning card but there
-                // are opponents left, still might be useful to overrule.
-                // But if ally's card is already very strong, don't waste ours.
                 let ally_val = if best_card.card_type() == CardType::Tarok {
                     best_card.value()
                 } else {
@@ -1020,63 +948,55 @@ fn eval_following_v5(
                 };
                 let higher_than_ally_out = tracker.higher_taroks_out(ally_val);
                 if higher_than_ally_out == 0 {
-                    // Nobody can beat ally — don't waste our tarok
                     return -wo * 2.0 - 50.0;
                 }
             }
         } else {
-            // We're last and ally is winning — don't overtrump
             return -wo * 2.0 - 50.0;
         }
     }
 
     // === Last-seat economy: play lowest winning tarok ===
     if would_win && is_last && !best_is_ally && card.card_type() == CardType::Tarok {
-        // Reward low taroks that still win (economy bonus)
         let min_winning_val = if best_card.card_type() == CardType::Tarok {
             best_card.value() + 1
         } else {
-            1 // any tarok beats suit cards
+            1
         };
         if card.value() == min_winning_val || card.value() <= min_winning_val + 1 {
-            // This is the cheapest (or nearly cheapest) winning tarok — bonus
-            return trick_pts * 4.0 + 50.0 - wo * 0.1;
+            return trick_pts * 3.5 + 45.0 - wo * 0.1;
         }
-        // Higher tarok than needed in last seat — penalty proportional to waste
         let waste = (card.value() - min_winning_val) as f64;
-        return trick_pts * 3.0 - waste * 8.0;
+        return trick_pts * 2.5 - waste * 9.0;
     }
 
-    // === Normal following ===
+    // === Normal following (slightly less aggressive multipliers) ===
     if would_win {
         if best_is_ally {
             if is_last {
-                pts * 4.5 // šmir
+                pts * 4.0
             } else {
-                -wo * 0.6 - (wo / 3.0).powf(1.5)
+                -wo * 0.7 - (wo / 3.0).powf(1.5)
             }
         } else if is_last {
-            trick_pts * 3.5 - wo
+            trick_pts * 3.0 - wo
         } else if num_played == 1 {
-            // 2nd seat: be careful with high taroks if more players to come
-            if card.card_type() == CardType::Tarok
-                && tracker.higher_taroks_out(card.value()) > 0
-            {
-                trick_pts * 0.6 - wo * 0.4
+            if card.card_type() == CardType::Tarok && tracker.higher_taroks_out(card.value()) > 0 {
+                trick_pts * 0.5 - wo * 0.5
             } else {
-                trick_pts * 2.0 + wo * 0.2
+                trick_pts * 1.7 + wo * 0.15
             }
         } else {
-            trick_pts * 2.0 + wo * 0.3
+            trick_pts * 1.7 + wo * 0.2
         }
     } else if best_is_ally {
-        // Šmir — dump high-value cards to ally
+        // Šmir
         if is_last {
-            pts * 6.0
+            pts * 5.5
         } else if tracker.phase == GamePhase::Late {
-            pts * 4.5
+            pts * 4.0
         } else {
-            pts * 3.0
+            pts * 2.8
         }
     } else {
         // Losing to enemy — dump lowest value
@@ -1088,8 +1008,6 @@ fn eval_following_v5(
                 }
             }
         }
-        // Use beliefs: if opponents likely have no taroks,
-        // suit cards in hand are more valuable to keep
         if card.card_type() != CardType::Tarok {
             let mut opp_tarok_pressure = 0.0;
             for p in 0..NUM_PLAYERS {
@@ -1098,7 +1016,6 @@ fn eval_following_v5(
                 }
             }
             if opp_tarok_pressure < 0.3 {
-                // Opponents low on taroks, suit cards cheaper to shed
                 score += 2.0;
             }
         }
@@ -1106,7 +1023,6 @@ fn eval_following_v5(
     }
 }
 
-/// Check if a player is an ally given the current playing status.
 fn is_ally(p: u8, state: &GameState, is_playing: bool) -> bool {
     if is_playing {
         p == state.declarer.unwrap_or(255) || state.partner == Some(p)
@@ -1119,7 +1035,7 @@ fn is_ally(p: u8, state: &GameState, is_playing: bool) -> bool {
 // Main entry point
 // -----------------------------------------------------------------------
 
-pub fn choose_card_v5(hand: CardSet, state: &GameState, player: u8) -> Card {
+pub fn choose_card_m6(hand: CardSet, state: &GameState, player: u8) -> Card {
     let ctx = legal_moves::MoveCtx::from_state(state, player);
     let legal = legal_moves::generate_legal_moves(&ctx);
     let legal_vec: Vec<Card> = legal.iter().collect();
@@ -1137,7 +1053,7 @@ pub fn choose_card_v5(hand: CardSet, state: &GameState, player: u8) -> Card {
     let mut best_card = legal_vec[0];
     let mut best_score = f64::NEG_INFINITY;
     for &card in &legal_vec {
-        let score = evaluate_card_play_v5(card, hand, state, player, is_leading, &tracker);
+        let score = evaluate_card_play_m6(card, hand, state, player, is_leading, &tracker);
         if score > best_score {
             best_score = score;
             best_card = card;
@@ -1160,6 +1076,37 @@ fn worth_over(card: Card) -> i32 {
         };
         suit_base + card.value() as i32
     }
+}
+
+// -----------------------------------------------------------------------
+// Announcements — pagat ultimo only with 10+ taroks
+// -----------------------------------------------------------------------
+
+pub fn choose_announcements_m6(hand: CardSet, state: &GameState, player: u8) -> Vec<u8> {
+    let mut anns = Vec::new();
+
+    // King ultimo for partner holding the called king
+    if let Some(partner) = state.partner {
+        if player == partner {
+            if let Some(king) = state.called_king {
+                if hand.contains(king) {
+                    if let Some(suit) = king.suit() {
+                        if hand.suit_count(suit) >= 3 {
+                            anns.push(4); // King Ultimo
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    // Pagat ultimo: only if we hold pagat AND started with 10+ taroks
+    let has_pagat = hand.contains(Card::tarok(PAGAT));
+    if has_pagat && hand.tarok_count() >= 10 {
+        anns.push(3); // Pagat Ultimo
+    }
+
+    anns
 }
 
 // -----------------------------------------------------------------------
@@ -1198,275 +1145,127 @@ mod tests {
         state
     }
 
-    // --- Bidding tests ---
+    // --- King calling: prefer queen/jack with ~2 cards ---
 
     #[test]
-    fn berac_rejects_more_than_two_taroks() {
-        let hand = hand_from(&[
-            Card::tarok(2),
-            Card::tarok(3),
-            Card::tarok(4),
-            Card::suit_card(Suit::Hearts, SuitRank::Pip1),
-            Card::suit_card(Suit::Hearts, SuitRank::Pip2),
-            Card::suit_card(Suit::Hearts, SuitRank::Pip3),
-            Card::suit_card(Suit::Diamonds, SuitRank::Pip1),
-            Card::suit_card(Suit::Diamonds, SuitRank::Pip2),
-            Card::suit_card(Suit::Diamonds, SuitRank::Pip3),
-            Card::suit_card(Suit::Clubs, SuitRank::Pip1),
-            Card::suit_card(Suit::Clubs, SuitRank::Pip2),
-            Card::suit_card(Suit::Spades, SuitRank::Pip1),
-        ]);
-        assert_ne!(evaluate_bid_v5(hand, None), Some(Contract::Berac));
-    }
-
-    #[test]
-    fn berac_rejects_singleton_suit() {
-        let hand = hand_from(&[
-            Card::tarok(2),
-            Card::suit_card(Suit::Hearts, SuitRank::Pip1),
-            Card::suit_card(Suit::Hearts, SuitRank::Pip2),
-            Card::suit_card(Suit::Hearts, SuitRank::Pip3),
-            Card::suit_card(Suit::Diamonds, SuitRank::Pip1),
-            Card::suit_card(Suit::Diamonds, SuitRank::Pip2),
-            Card::suit_card(Suit::Diamonds, SuitRank::Pip3),
-            Card::suit_card(Suit::Clubs, SuitRank::Pip1),
-            Card::suit_card(Suit::Clubs, SuitRank::Pip2),
-            Card::suit_card(Suit::Clubs, SuitRank::Pip3),
-            Card::suit_card(Suit::Spades, SuitRank::Pip1),
-            Card::suit_card(Suit::Spades, SuitRank::Pip2),
-        ]);
-        // Spades has only 2 cards, but Hearts has 3, Diamonds 3, Clubs 3
-        // Actually this hand has no singleton. Let's make one:
-        let hand2 = hand_from(&[
-            Card::tarok(2),
-            Card::suit_card(Suit::Hearts, SuitRank::Pip1),
-            Card::suit_card(Suit::Hearts, SuitRank::Pip2),
-            Card::suit_card(Suit::Hearts, SuitRank::Pip3),
-            Card::suit_card(Suit::Hearts, SuitRank::Pip4),
-            Card::suit_card(Suit::Diamonds, SuitRank::Pip1),
-            Card::suit_card(Suit::Diamonds, SuitRank::Pip2),
-            Card::suit_card(Suit::Diamonds, SuitRank::Pip3),
-            Card::suit_card(Suit::Clubs, SuitRank::Pip1),
-            Card::suit_card(Suit::Clubs, SuitRank::Pip2),
-            Card::suit_card(Suit::Clubs, SuitRank::Pip3),
-            Card::suit_card(Suit::Spades, SuitRank::Pip1), // singleton
-        ]);
-        assert_ne!(evaluate_bid_v5(hand2, None), Some(Contract::Berac));
-    }
-
-    #[test]
-    fn berac_rejects_void_suit() {
-        let hand = hand_from(&[
-            Card::tarok(2),
-            Card::suit_card(Suit::Hearts, SuitRank::Pip1),
-            Card::suit_card(Suit::Hearts, SuitRank::Pip2),
-            Card::suit_card(Suit::Hearts, SuitRank::Pip3),
-            Card::suit_card(Suit::Hearts, SuitRank::Pip4),
-            Card::suit_card(Suit::Diamonds, SuitRank::Pip1),
-            Card::suit_card(Suit::Diamonds, SuitRank::Pip2),
-            Card::suit_card(Suit::Diamonds, SuitRank::Pip3),
-            Card::suit_card(Suit::Clubs, SuitRank::Pip1),
-            Card::suit_card(Suit::Clubs, SuitRank::Pip2),
-            Card::suit_card(Suit::Clubs, SuitRank::Pip3),
-            Card::suit_card(Suit::Clubs, SuitRank::Pip4),
-            // No spades = void
-        ]);
-        assert_ne!(evaluate_bid_v5(hand, None), Some(Contract::Berac));
-    }
-
-    #[test]
-    fn berac_rejects_tarok_9_or_above() {
-        let hand = hand_from(&[
-            Card::tarok(9), // too high
-            Card::suit_card(Suit::Hearts, SuitRank::Pip1),
-            Card::suit_card(Suit::Hearts, SuitRank::Pip2),
-            Card::suit_card(Suit::Hearts, SuitRank::Pip3),
-            Card::suit_card(Suit::Diamonds, SuitRank::Pip1),
-            Card::suit_card(Suit::Diamonds, SuitRank::Pip2),
-            Card::suit_card(Suit::Diamonds, SuitRank::Pip3),
-            Card::suit_card(Suit::Clubs, SuitRank::Pip1),
-            Card::suit_card(Suit::Clubs, SuitRank::Pip2),
-            Card::suit_card(Suit::Clubs, SuitRank::Pip3),
-            Card::suit_card(Suit::Spades, SuitRank::Pip1),
-            Card::suit_card(Suit::Spades, SuitRank::Pip2),
-        ]);
-        assert_ne!(evaluate_bid_v5(hand, None), Some(Contract::Berac));
-    }
-
-    #[test]
-    fn berac_rejects_skis() {
-        let hand = hand_from(&[
-            Card::tarok(SKIS),
-            Card::suit_card(Suit::Hearts, SuitRank::Pip1),
-            Card::suit_card(Suit::Hearts, SuitRank::Pip2),
-            Card::suit_card(Suit::Hearts, SuitRank::Pip3),
-            Card::suit_card(Suit::Diamonds, SuitRank::Pip1),
-            Card::suit_card(Suit::Diamonds, SuitRank::Pip2),
-            Card::suit_card(Suit::Diamonds, SuitRank::Pip3),
-            Card::suit_card(Suit::Clubs, SuitRank::Pip1),
-            Card::suit_card(Suit::Clubs, SuitRank::Pip2),
-            Card::suit_card(Suit::Clubs, SuitRank::Pip3),
-            Card::suit_card(Suit::Spades, SuitRank::Pip1),
-            Card::suit_card(Suit::Spades, SuitRank::Pip2),
-        ]);
-        assert_ne!(evaluate_bid_v5(hand, None), Some(Contract::Berac));
-    }
-
-    #[test]
-    fn berac_rejects_king_without_5_in_suit() {
-        let hand = hand_from(&[
-            Card::tarok(2),
-            Card::suit_card(Suit::Hearts, SuitRank::King), // only 3 hearts
-            Card::suit_card(Suit::Hearts, SuitRank::Pip1),
-            Card::suit_card(Suit::Hearts, SuitRank::Pip2),
-            Card::suit_card(Suit::Diamonds, SuitRank::Pip1),
-            Card::suit_card(Suit::Diamonds, SuitRank::Pip2),
-            Card::suit_card(Suit::Diamonds, SuitRank::Pip3),
-            Card::suit_card(Suit::Clubs, SuitRank::Pip1),
-            Card::suit_card(Suit::Clubs, SuitRank::Pip2),
-            Card::suit_card(Suit::Clubs, SuitRank::Pip3),
-            Card::suit_card(Suit::Spades, SuitRank::Pip1),
-            Card::suit_card(Suit::Spades, SuitRank::Pip2),
-        ]);
-        assert_ne!(evaluate_bid_v5(hand, None), Some(Contract::Berac));
-    }
-
-    #[test]
-    fn solo_requires_guaranteed_points_above_30() {
-        // Hand with only 2 kings (10 pts) and no škis/mond — shouldn't solo
+    fn king_call_prefers_queen_with_two_cards() {
         let hand = hand_from(&[
             Card::tarok(15),
-            Card::tarok(16),
-            Card::tarok(17),
-            Card::tarok(18),
-            Card::tarok(19),
-            Card::tarok(20),
-            Card::suit_card(Suit::Hearts, SuitRank::King),
-            Card::suit_card(Suit::Diamonds, SuitRank::King),
-            Card::suit_card(Suit::Clubs, SuitRank::Pip1),
-            Card::suit_card(Suit::Clubs, SuitRank::Pip2),
-            Card::suit_card(Suit::Spades, SuitRank::Pip1),
-            Card::suit_card(Suit::Spades, SuitRank::Pip2),
-        ]);
-        let bid = evaluate_bid_v5(hand, None);
-        match bid {
-            Some(c) => assert!(!c.is_solo(), "Should not bid solo with only 10 guaranteed pts"),
-            None => {} // passing is also fine
-        }
-    }
-
-    #[test]
-    fn solo_rejected_with_fewer_than_4_taroks() {
-        // Very strong hand but only 3 taroks
-        let hand = hand_from(&[
-            Card::tarok(SKIS),
-            Card::tarok(MOND),
-            Card::tarok(20),
-            Card::suit_card(Suit::Hearts, SuitRank::King),
-            Card::suit_card(Suit::Diamonds, SuitRank::King),
-            Card::suit_card(Suit::Clubs, SuitRank::King),
-            Card::suit_card(Suit::Spades, SuitRank::King),
-            Card::suit_card(Suit::Hearts, SuitRank::Queen),
-            Card::suit_card(Suit::Diamonds, SuitRank::Queen),
-            Card::suit_card(Suit::Clubs, SuitRank::Queen),
-            Card::suit_card(Suit::Spades, SuitRank::Queen),
-            Card::suit_card(Suit::Hearts, SuitRank::Knight),
-        ]);
-        let bid = evaluate_bid_v5(hand, None);
-        match bid {
-            Some(c) => assert!(!c.is_solo(), "Should not bid solo with only 3 taroks"),
-            None => {}
-        }
-    }
-
-    #[test]
-    fn no_aggressive_solo_with_weak_hand() {
-        // Only 1 tarok — absolutely should not solo
-        let hand = hand_from(&[
+            Card::tarok(10),
             Card::tarok(5),
-            Card::suit_card(Suit::Hearts, SuitRank::King),
+            Card::tarok(3),
+            Card::tarok(8),
+            Card::tarok(12),
+            // Hearts: queen + 1 pip = 2 cards, no king
+            Card::suit_card(Suit::Hearts, SuitRank::Queen),
             Card::suit_card(Suit::Hearts, SuitRank::Pip1),
-            Card::suit_card(Suit::Hearts, SuitRank::Pip2),
+            // Diamonds: 4 pips, no king
             Card::suit_card(Suit::Diamonds, SuitRank::Pip1),
             Card::suit_card(Suit::Diamonds, SuitRank::Pip2),
             Card::suit_card(Suit::Diamonds, SuitRank::Pip3),
+            Card::suit_card(Suit::Diamonds, SuitRank::Pip4),
+        ]);
+        let chosen = choose_king_m6(hand);
+        assert_eq!(
+            chosen,
+            Some(Card::suit_card(Suit::Hearts, SuitRank::King)),
+            "Should call king of hearts (queen + 2 cards)"
+        );
+    }
+
+    #[test]
+    fn king_call_prefers_jack_over_empty_long_suit() {
+        let hand = hand_from(&[
+            Card::tarok(15),
+            Card::tarok(10),
+            Card::tarok(5),
+            Card::tarok(3),
+            Card::tarok(8),
+            Card::tarok(12),
+            Card::tarok(18),
+            // Spades: jack + 1 pip = 2 cards
+            Card::suit_card(Suit::Spades, SuitRank::Jack),
+            Card::suit_card(Suit::Spades, SuitRank::Pip1),
+            // Clubs: 3 low pips
             Card::suit_card(Suit::Clubs, SuitRank::Pip1),
             Card::suit_card(Suit::Clubs, SuitRank::Pip2),
+            Card::suit_card(Suit::Clubs, SuitRank::Pip3),
+        ]);
+        let chosen = choose_king_m6(hand);
+        assert_eq!(
+            chosen,
+            Some(Card::suit_card(Suit::Spades, SuitRank::King)),
+            "Should call king of spades (jack + 2 cards = high card bonus)"
+        );
+    }
+
+    // --- Discarding: queens first for points ---
+
+    #[test]
+    fn discard_puts_down_queens_for_points() {
+        let hand = hand_from(&[
+            Card::tarok(15),
+            Card::tarok(10),
+            Card::tarok(5),
+            Card::tarok(3),
+            Card::tarok(8),
+            Card::tarok(12),
+            Card::tarok(18),
+            Card::suit_card(Suit::Hearts, SuitRank::Queen),
+            Card::suit_card(Suit::Hearts, SuitRank::Pip1),
+            Card::suit_card(Suit::Diamonds, SuitRank::Pip1),
+            Card::suit_card(Suit::Clubs, SuitRank::Pip1),
             Card::suit_card(Suit::Spades, SuitRank::Pip1),
-            Card::suit_card(Suit::Spades, SuitRank::Pip2),
-            Card::suit_card(Suit::Spades, SuitRank::Pip3),
         ]);
-        let bid = evaluate_bid_v5(hand, None);
-        match bid {
-            Some(c) => assert!(!c.is_solo(), "Should not bid solo with 1 tarok"),
-            None => {}
-        }
+        let discards = choose_discards_m6(hand, 3, None);
+        assert!(
+            discards.contains(&Card::suit_card(Suit::Hearts, SuitRank::Queen)),
+            "Should discard queen to secure 4 points"
+        );
     }
 
-    // --- Card play tests ---
+    // --- Pagat: never lead unless guaranteed ---
 
     #[test]
-    fn partner_prefers_highest_tarok_lead() {
+    fn never_lead_pagat_with_taroks_remaining() {
         let hand = hand_from(&[
-            Card::tarok(20),
-            Card::tarok(15),
-            Card::suit_card(Suit::Hearts, SuitRank::Pip1),
-            Card::suit_card(Suit::Clubs, SuitRank::Pip2),
-        ]);
-        let state = make_state(hand, 1, 0, Some(1));
-        assert_eq!(choose_card_v5(hand, &state, 1), Card::tarok(20));
-    }
-
-    #[test]
-    fn last_seat_plays_lowest_winning_tarok() {
-        // Player is last to play, opponent is currently winning with tarok 10
-        let hand = hand_from(&[
-            Card::tarok(11),
-            Card::tarok(15),
-            Card::tarok(19),
-            Card::suit_card(Suit::Hearts, SuitRank::Pip1),
-        ]);
-        let mut state = make_state(hand, 3, 3, None);
-        state.contract = Some(Contract::SoloThree);
-
-        // Set up a trick where player 3 is last (3 cards already played)
-        let mut trick = Trick::new(0);
-        trick.play(0, Card::suit_card(Suit::Diamonds, SuitRank::Pip1)); // opponent leads
-        trick.play(1, Card::suit_card(Suit::Diamonds, SuitRank::Pip2)); // opponent
-        trick.play(2, Card::tarok(10)); // opponent trumps
-        state.current_trick = Some(trick);
-
-        let chosen = choose_card_v5(hand, &state, 3);
-        // Should pick tarok 11 (lowest that still wins) over 15 or 19
-        assert_eq!(chosen, Card::tarok(11));
-    }
-
-    #[test]
-    fn do_not_overtrump_winning_ally() {
-        // Declarer (player 0) is winning with tarok 18.
-        // Player 2 is partner — should NOT waste tarok 20 on top of ally's winner.
-        let hand = hand_from(&[
-            Card::tarok(20),
+            Card::tarok(PAGAT),
+            Card::tarok(5),
             Card::tarok(10),
             Card::suit_card(Suit::Hearts, SuitRank::Pip1),
-            Card::suit_card(Suit::Clubs, SuitRank::Pip2),
         ]);
-        let mut state = make_state(hand, 2, 0, Some(2));
-
-        // Trick: opponent (3) leads diamond, declarer (0) trumps with tarok 18
-        // Opponent 1 follows suit.  Now partner (2) plays.
-        let mut trick = Trick::new(3);
-        trick.play(3, Card::suit_card(Suit::Diamonds, SuitRank::King));
-        trick.play(0, Card::tarok(18)); // ally winning
-        trick.play(1, Card::suit_card(Suit::Diamonds, SuitRank::Pip1));
-        state.current_trick = Some(trick);
-
-        // Player 2 has no diamonds — free to play any tarok (no overtrump
-        // obligation in normal contracts).
-        let chosen = choose_card_v5(hand, &state, 2);
-        // Should NOT play tarok 20 — ally is already winning and nobody left
-        assert_ne!(chosen, Card::tarok(20));
+        let state = make_state(hand, 0, 0, None);
+        let chosen = choose_card_m6(hand, &state, 0);
+        assert_ne!(
+            chosen,
+            Card::tarok(PAGAT),
+            "Should never lead pagat when opponents likely have higher taroks"
+        );
     }
+
+    #[test]
+    fn pagat_ok_on_last_trick() {
+        let hand = hand_from(&[Card::tarok(PAGAT)]);
+        let mut state = make_state(hand, 0, 0, None);
+        state.contract = Some(Contract::SoloThree);
+        // Simulate that 11 tricks have been played (last trick)
+        for _ in 0..11 {
+            let mut trick = Trick::new(0);
+            trick.play(0, Card::tarok(2)); // placeholder
+            trick.play(1, Card::tarok(3));
+            trick.play(2, Card::tarok(4));
+            trick.play(3, Card::tarok(5));
+            state.tricks.push(trick);
+        }
+        let chosen = choose_card_m6(hand, &state, 0);
+        assert_eq!(
+            chosen,
+            Card::tarok(PAGAT),
+            "Pagat is fine on the very last trick"
+        );
+    }
+
+    // --- Less aggressive: opposition preserves taroks ---
 
     #[test]
     fn opposition_preserves_taroks_on_lead() {
@@ -1477,13 +1276,50 @@ mod tests {
             Card::suit_card(Suit::Spades, SuitRank::Pip2),
         ]);
         let state = make_state(hand, 2, 0, Some(1));
-
-        let chosen = choose_card_v5(hand, &state, 2);
-        // Opposition should prefer suit lead over taroks
+        let chosen = choose_card_m6(hand, &state, 2);
         assert_ne!(
             chosen.card_type(),
             CardType::Tarok,
             "Opposition should lead suits, not taroks"
         );
+    }
+
+    #[test]
+    fn do_not_overtrump_winning_ally() {
+        let hand = hand_from(&[
+            Card::tarok(20),
+            Card::tarok(10),
+            Card::suit_card(Suit::Hearts, SuitRank::Pip1),
+            Card::suit_card(Suit::Clubs, SuitRank::Pip2),
+        ]);
+        let mut state = make_state(hand, 2, 0, Some(2));
+        let mut trick = Trick::new(3);
+        trick.play(3, Card::suit_card(Suit::Diamonds, SuitRank::King));
+        trick.play(0, Card::tarok(18));
+        trick.play(1, Card::suit_card(Suit::Diamonds, SuitRank::Pip1));
+        state.current_trick = Some(trick);
+
+        let chosen = choose_card_m6(hand, &state, 2);
+        assert_ne!(chosen, Card::tarok(20));
+    }
+
+    #[test]
+    fn last_seat_plays_lowest_winning_tarok() {
+        let hand = hand_from(&[
+            Card::tarok(11),
+            Card::tarok(15),
+            Card::tarok(19),
+            Card::suit_card(Suit::Hearts, SuitRank::Pip1),
+        ]);
+        let mut state = make_state(hand, 3, 3, None);
+        state.contract = Some(Contract::SoloThree);
+        let mut trick = Trick::new(0);
+        trick.play(0, Card::suit_card(Suit::Diamonds, SuitRank::Pip1));
+        trick.play(1, Card::suit_card(Suit::Diamonds, SuitRank::Pip2));
+        trick.play(2, Card::tarok(10));
+        state.current_trick = Some(trick);
+
+        let chosen = choose_card_m6(hand, &state, 3);
+        assert_eq!(chosen, Card::tarok(11));
     }
 }

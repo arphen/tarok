@@ -1,69 +1,245 @@
-//! StockŠkis heuristic bot implementing [`BatchPlayer`].
+//! Heuristic bot infrastructure for Tarok self-play.
 //!
-//! Wraps the `stockskis_v5` / `stockskis_v6` heuristic functions behind
-//! the stable [`BatchPlayer`] trait.  Each call to `batch_decide` loops
-//! over the contexts and calls the appropriate v5/v6 function.
+//! # Adding a new bot
+//!
+//! 1. Implement the [`HeuristicStrategy`] trait for a zero-size struct.
+//! 2. Add a match arm in [`try_make_bot_by_seat_label`].
+//! 3. Add the seat label string to [`SUPPORTED_BOT_SEAT_LABELS`].
+//!
+//! Nothing else needs to change — `StockSkisPlayer` and `py_bindings`
+//! consume the open interface automatically.
 
 use crate::card::*;
 use crate::game_state::*;
+use crate::bots::lustrek;
+use crate::bots::stockskis_m6;
+use crate::bots::stockskis_pozrl;
+use crate::bots::stockskis_v1;
+use crate::bots::stockskis_v3;
+use crate::bots::stockskis_v5;
+use crate::bots::stockskis_v6;
 use crate::player::*;
-use crate::stockskis_m6;
-use crate::stockskis_pozrl;
-use crate::stockskis_v1;
-use crate::stockskis_v3;
-use crate::stockskis_v5;
-use crate::stockskis_v6;
 
 // -----------------------------------------------------------------------
-// Bot version selector
+// HeuristicStrategy — the extension point
 // -----------------------------------------------------------------------
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum BotVersion {
-    V1,
-    V3,
-    V5,
-    V6,
-    M6,
-    Pozrl,
+/// Implement this trait to add a new heuristic bot.
+///
+/// All methods receive only the information they need, extracted from
+/// `DecisionContext` or `GameState` before the call, so implementations
+/// stay focused on decision logic.
+pub trait HeuristicStrategy: Send + Sync {
+    /// Seat-token string used in `run_self_play` seat_config (e.g. `"bot_v5"`).
+    fn seat_label(&self) -> &'static str;
+    /// Human-readable name used in logging.
+    fn name(&self) -> &'static str;
+
+    fn evaluate_bid(&self, hand: CardSet, highest: Option<Contract>) -> Option<Contract>;
+    fn choose_king(&self, hand: CardSet) -> Option<Card>;
+    fn choose_talon_group(
+        &self,
+        groups: &[Vec<Card>],
+        hand: CardSet,
+        called_king: Option<Card>,
+    ) -> usize;
+    fn choose_discards(
+        &self,
+        hand: CardSet,
+        must_discard: usize,
+        called_king: Option<Card>,
+    ) -> Vec<Card>;
+    fn choose_card(&self, hand: CardSet, gs: &GameState, player: u8) -> Card;
 }
 
 // -----------------------------------------------------------------------
-// StockSkisPlayer
+// Per-bot strategy structs
+// -----------------------------------------------------------------------
+
+pub struct BotLustrek;
+impl HeuristicStrategy for BotLustrek {
+    fn seat_label(&self) -> &'static str { "bot_lustrek" }
+    fn name(&self) -> &'static str { "bot_lustrek" }
+    fn evaluate_bid(&self, hand: CardSet, highest: Option<Contract>) -> Option<Contract> {
+        lustrek::evaluate_bid_lustrek(hand, highest)
+    }
+    fn choose_king(&self, hand: CardSet) -> Option<Card> {
+        lustrek::choose_king_lustrek(hand)
+    }
+    fn choose_talon_group(&self, groups: &[Vec<Card>], hand: CardSet, called_king: Option<Card>) -> usize {
+        lustrek::choose_talon_group_lustrek(groups, hand, called_king)
+    }
+    fn choose_discards(&self, hand: CardSet, must_discard: usize, called_king: Option<Card>) -> Vec<Card> {
+        lustrek::choose_discards_lustrek(hand, must_discard, called_king)
+    }
+    fn choose_card(&self, hand: CardSet, gs: &GameState, player: u8) -> Card {
+        lustrek::choose_card_lustrek(hand, gs, player)
+    }
+}
+
+pub struct BotV1;
+impl HeuristicStrategy for BotV1 {
+    fn seat_label(&self) -> &'static str { "bot_v1" }
+    fn name(&self) -> &'static str { "stockskis_v1" }
+    fn evaluate_bid(&self, hand: CardSet, highest: Option<Contract>) -> Option<Contract> {
+        stockskis_v1::evaluate_bid_v1(hand, highest)
+    }
+    fn choose_king(&self, hand: CardSet) -> Option<Card> {
+        stockskis_v1::choose_king_v1(hand)
+    }
+    fn choose_talon_group(&self, groups: &[Vec<Card>], hand: CardSet, called_king: Option<Card>) -> usize {
+        stockskis_v1::choose_talon_group_v1(groups, hand, called_king)
+    }
+    fn choose_discards(&self, hand: CardSet, must_discard: usize, called_king: Option<Card>) -> Vec<Card> {
+        stockskis_v1::choose_discards_v1(hand, must_discard, called_king)
+    }
+    fn choose_card(&self, hand: CardSet, gs: &GameState, player: u8) -> Card {
+        stockskis_v1::choose_card_v1(hand, gs, player)
+    }
+}
+
+pub struct BotV3;
+impl HeuristicStrategy for BotV3 {
+    fn seat_label(&self) -> &'static str { "bot_v3" }
+    fn name(&self) -> &'static str { "stockskis_v3" }
+    fn evaluate_bid(&self, hand: CardSet, highest: Option<Contract>) -> Option<Contract> {
+        stockskis_v3::evaluate_bid_v3(hand, highest)
+    }
+    fn choose_king(&self, hand: CardSet) -> Option<Card> {
+        stockskis_v3::choose_king_v3(hand)
+    }
+    fn choose_talon_group(&self, groups: &[Vec<Card>], hand: CardSet, called_king: Option<Card>) -> usize {
+        stockskis_v3::choose_talon_group_v3(groups, hand, called_king)
+    }
+    fn choose_discards(&self, hand: CardSet, must_discard: usize, called_king: Option<Card>) -> Vec<Card> {
+        stockskis_v3::choose_discards_v3(hand, must_discard, called_king)
+    }
+    fn choose_card(&self, hand: CardSet, gs: &GameState, player: u8) -> Card {
+        stockskis_v3::choose_card_v3(hand, gs, player)
+    }
+}
+
+pub struct BotV5;
+impl HeuristicStrategy for BotV5 {
+    fn seat_label(&self) -> &'static str { "bot_v5" }
+    fn name(&self) -> &'static str { "stockskis_v5" }
+    fn evaluate_bid(&self, hand: CardSet, highest: Option<Contract>) -> Option<Contract> {
+        stockskis_v5::evaluate_bid_v5(hand, highest)
+    }
+    fn choose_king(&self, hand: CardSet) -> Option<Card> {
+        stockskis_v5::choose_king_v5(hand)
+    }
+    fn choose_talon_group(&self, groups: &[Vec<Card>], hand: CardSet, called_king: Option<Card>) -> usize {
+        stockskis_v5::choose_talon_group_v5(groups, hand, called_king)
+    }
+    fn choose_discards(&self, hand: CardSet, must_discard: usize, called_king: Option<Card>) -> Vec<Card> {
+        stockskis_v5::choose_discards_v5(hand, must_discard, called_king)
+    }
+    fn choose_card(&self, hand: CardSet, gs: &GameState, player: u8) -> Card {
+        stockskis_v5::choose_card_v5(hand, gs, player)
+    }
+}
+
+pub struct BotV6;
+impl HeuristicStrategy for BotV6 {
+    fn seat_label(&self) -> &'static str { "bot_v6" }
+    fn name(&self) -> &'static str { "stockskis_v6" }
+    fn evaluate_bid(&self, hand: CardSet, highest: Option<Contract>) -> Option<Contract> {
+        stockskis_v6::evaluate_bid_v6(hand, highest)
+    }
+    fn choose_king(&self, hand: CardSet) -> Option<Card> {
+        stockskis_v6::choose_king_v6(hand)
+    }
+    fn choose_talon_group(&self, groups: &[Vec<Card>], hand: CardSet, called_king: Option<Card>) -> usize {
+        stockskis_v6::choose_talon_group_v6(groups, hand, called_king)
+    }
+    fn choose_discards(&self, hand: CardSet, must_discard: usize, called_king: Option<Card>) -> Vec<Card> {
+        stockskis_v6::choose_discards_v6(hand, must_discard, called_king)
+    }
+    fn choose_card(&self, hand: CardSet, gs: &GameState, player: u8) -> Card {
+        stockskis_v6::choose_card_v6(hand, gs, player)
+    }
+}
+
+pub struct BotM6;
+impl HeuristicStrategy for BotM6 {
+    fn seat_label(&self) -> &'static str { "bot_m6" }
+    fn name(&self) -> &'static str { "stockskis_m6" }
+    fn evaluate_bid(&self, hand: CardSet, highest: Option<Contract>) -> Option<Contract> {
+        stockskis_m6::evaluate_bid_m6(hand, highest)
+    }
+    fn choose_king(&self, hand: CardSet) -> Option<Card> {
+        stockskis_m6::choose_king_m6(hand)
+    }
+    fn choose_talon_group(&self, groups: &[Vec<Card>], hand: CardSet, called_king: Option<Card>) -> usize {
+        stockskis_m6::choose_talon_group_m6(groups, hand, called_king)
+    }
+    fn choose_discards(&self, hand: CardSet, must_discard: usize, called_king: Option<Card>) -> Vec<Card> {
+        stockskis_m6::choose_discards_m6(hand, must_discard, called_king)
+    }
+    fn choose_card(&self, hand: CardSet, gs: &GameState, player: u8) -> Card {
+        stockskis_m6::choose_card_m6(hand, gs, player)
+    }
+}
+
+pub struct BotPozrl;
+impl HeuristicStrategy for BotPozrl {
+    fn seat_label(&self) -> &'static str { "bot_pozrl" }
+    fn name(&self) -> &'static str { "stockskis_pozrl" }
+    fn evaluate_bid(&self, hand: CardSet, highest: Option<Contract>) -> Option<Contract> {
+        stockskis_pozrl::evaluate_bid_pozrl(hand, highest)
+    }
+    fn choose_king(&self, hand: CardSet) -> Option<Card> {
+        stockskis_pozrl::choose_king_pozrl(hand)
+    }
+    fn choose_talon_group(&self, groups: &[Vec<Card>], hand: CardSet, called_king: Option<Card>) -> usize {
+        stockskis_pozrl::choose_talon_group_pozrl(groups, hand, called_king)
+    }
+    fn choose_discards(&self, hand: CardSet, must_discard: usize, called_king: Option<Card>) -> Vec<Card> {
+        stockskis_pozrl::choose_discards_pozrl(hand, must_discard, called_king)
+    }
+    fn choose_card(&self, hand: CardSet, gs: &GameState, player: u8) -> Card {
+        stockskis_pozrl::choose_card_pozrl(hand, gs, player)
+    }
+}
+
+// -----------------------------------------------------------------------
+// Registry — the only two places to edit when adding a new bot
+// -----------------------------------------------------------------------
+
+/// All recognised heuristic seat-label strings, used for error messages.
+pub const SUPPORTED_BOT_SEAT_LABELS: [&str; 7] = [
+    "bot_lustrek",
+    "bot_v1",
+    "bot_v3",
+    "bot_v5",
+    "bot_v6",
+    "bot_m6",
+    "bot_pozrl",
+];
+
+/// Construct a `StockSkisPlayer` from a seat-config label.
+/// Returns `None` for labels that are not heuristic bots (e.g. `"nn"` or paths).
+pub fn try_make_bot_by_seat_label(label: &str) -> Option<StockSkisPlayer> {
+    let strategy: Box<dyn HeuristicStrategy> = match label {
+        "bot_lustrek" => Box::new(BotLustrek),
+        "bot_v1"      => Box::new(BotV1),
+        "bot_v3"      => Box::new(BotV3),
+        "bot_v5"      => Box::new(BotV5),
+        "bot_v6"      => Box::new(BotV6),
+        "bot_m6"      => Box::new(BotM6),
+        "bot_pozrl"   => Box::new(BotPozrl),
+        _             => return None,
+    };
+    Some(StockSkisPlayer { strategy })
+}
+
+// -----------------------------------------------------------------------
+// StockSkisPlayer — generic heuristic player backed by any HeuristicStrategy
 // -----------------------------------------------------------------------
 
 pub struct StockSkisPlayer {
-    version: BotVersion,
-}
-
-impl StockSkisPlayer {
-    pub fn new(version: BotVersion) -> Self {
-        StockSkisPlayer { version }
-    }
-
-    pub fn v3() -> Self {
-        Self::new(BotVersion::V3)
-    }
-
-    pub fn v1() -> Self {
-        Self::new(BotVersion::V1)
-    }
-
-    pub fn v5() -> Self {
-        Self::new(BotVersion::V5)
-    }
-
-    pub fn v6() -> Self {
-        Self::new(BotVersion::V6)
-    }
-
-    pub fn m6() -> Self {
-        Self::new(BotVersion::M6)
-    }
-
-    pub fn pozrl() -> Self {
-        Self::new(BotVersion::Pozrl)
-    }
+    strategy: Box<dyn HeuristicStrategy>,
 }
 
 impl BatchPlayer for StockSkisPlayer {
@@ -77,91 +253,32 @@ impl BatchPlayer for StockSkisPlayer {
                     DecisionType::TalonPick => self.decide_talon(ctx),
                     DecisionType::CardPlay => self.decide_card(ctx),
                 };
-                DecisionResult {
-                    action,
-                    log_prob: 0.0,
-                    value: 0.0,
-                }
+                DecisionResult { action, log_prob: 0.0, value: 0.0 }
             })
             .collect()
     }
 
-    fn choose_discards(
-        &self,
-        gs: &GameState,
-        player: u8,
-        must_discard: usize,
-    ) -> Option<Vec<Card>> {
+    fn choose_discards(&self, gs: &GameState, player: u8, must_discard: usize) -> Option<Vec<Card>> {
         let hand = gs.hands[player as usize];
-        let called_king = gs.called_king;
-        let discards = match self.version {
-            BotVersion::V1 => stockskis_v1::choose_discards_v1(hand, must_discard, called_king),
-            BotVersion::V3 => stockskis_v3::choose_discards_v3(hand, must_discard, called_king),
-            BotVersion::V5 => stockskis_v5::choose_discards_v5(hand, must_discard, called_king),
-            BotVersion::V6 => stockskis_v6::choose_discards_v6(hand, must_discard, called_king),
-            BotVersion::M6 => stockskis_m6::choose_discards_m6(hand, must_discard, called_king),
-            BotVersion::Pozrl => {
-                stockskis_pozrl::choose_discards_pozrl(hand, must_discard, called_king)
-            }
-        };
-        Some(discards)
+        Some(self.strategy.choose_discards(hand, must_discard, gs.called_king))
     }
 
     fn name(&self) -> &str {
-        match self.version {
-            BotVersion::V1 => "stockskis_v1",
-            BotVersion::V3 => "stockskis_v3",
-            BotVersion::V5 => "stockskis_v5",
-            BotVersion::V6 => "stockskis_v6",
-            BotVersion::M6 => "stockskis_m6",
-            BotVersion::Pozrl => "stockskis_pozrl",
-        }
+        self.strategy.name()
     }
 }
-
-// -----------------------------------------------------------------------
-// Per-decision-type dispatch
-// -----------------------------------------------------------------------
 
 impl StockSkisPlayer {
     fn decide_bid(&self, ctx: &DecisionContext<'_>) -> usize {
         let hand = ctx.gs.hands[ctx.player as usize];
-        let highest = ctx
-            .gs
-            .bids
-            .iter()
-            .filter_map(|b| b.contract)
-            .max_by_key(|c| c.strength());
-
-        let chosen = match self.version {
-            BotVersion::V1 => stockskis_v1::evaluate_bid_v1(hand, highest),
-            BotVersion::V3 => stockskis_v3::evaluate_bid_v3(hand, highest),
-            BotVersion::V5 => stockskis_v5::evaluate_bid_v5(hand, highest),
-            BotVersion::V6 => stockskis_v6::evaluate_bid_v6(hand, highest),
-            BotVersion::M6 => stockskis_m6::evaluate_bid_m6(hand, highest),
-            BotVersion::Pozrl => stockskis_pozrl::evaluate_bid_pozrl(hand, highest),
-        };
-
-        let action = contract_to_bid_action(chosen);
-        // Verify legality; fall back to pass
-        if ctx.legal_mask.get(action).map_or(false, |&v| v > 0.5) {
-            action
-        } else {
-            0 // pass
-        }
+        let highest = ctx.gs.bids.iter().filter_map(|b| b.contract).max_by_key(|c| c.strength());
+        let action = contract_to_bid_action(self.strategy.evaluate_bid(hand, highest));
+        if ctx.legal_mask.get(action).map_or(false, |&v| v > 0.5) { action } else { 0 }
     }
 
     fn decide_king(&self, ctx: &DecisionContext<'_>) -> usize {
         let hand = ctx.gs.hands[ctx.player as usize];
-        let chosen = match self.version {
-            BotVersion::V1 => stockskis_v1::choose_king_v1(hand),
-            BotVersion::V3 => stockskis_v3::choose_king_v3(hand),
-            BotVersion::V5 => stockskis_v5::choose_king_v5(hand),
-            BotVersion::V6 => stockskis_v6::choose_king_v6(hand),
-            BotVersion::M6 => stockskis_m6::choose_king_m6(hand),
-            BotVersion::Pozrl => stockskis_pozrl::choose_king_pozrl(hand),
-        };
-
+        let chosen = self.strategy.choose_king(hand);
         match chosen.and_then(|c| card_suit_idx(c.0)) {
             Some(idx) if ctx.legal_mask.get(idx).map_or(false, |&v| v > 0.5) => idx,
             _ => ctx.legal_mask.iter().position(|&v| v > 0.5).unwrap_or(0),
@@ -170,20 +287,9 @@ impl StockSkisPlayer {
 
     fn decide_talon(&self, ctx: &DecisionContext<'_>) -> usize {
         let hand = ctx.gs.hands[ctx.player as usize];
-        let called_king = ctx.gs.called_king;
-        let groups = &ctx.gs.talon_revealed;
-
-        let chosen = match self.version {
-            BotVersion::V1 => stockskis_v1::choose_talon_group_v1(groups, hand, called_king),
-            BotVersion::V3 => stockskis_v3::choose_talon_group_v3(groups, hand, called_king),
-            BotVersion::V5 => stockskis_v5::choose_talon_group_v5(groups, hand, called_king),
-            BotVersion::V6 => stockskis_v6::choose_talon_group_v6(groups, hand, called_king),
-            BotVersion::M6 => stockskis_m6::choose_talon_group_m6(groups, hand, called_king),
-            BotVersion::Pozrl => {
-                stockskis_pozrl::choose_talon_group_pozrl(groups, hand, called_king)
-            }
-        };
-
+        let chosen = self.strategy.choose_talon_group(
+            &ctx.gs.talon_revealed, hand, ctx.gs.called_king,
+        );
         if ctx.legal_mask.get(chosen).map_or(false, |&v| v > 0.5) {
             chosen
         } else {
@@ -193,15 +299,7 @@ impl StockSkisPlayer {
 
     fn decide_card(&self, ctx: &DecisionContext<'_>) -> usize {
         let hand = ctx.gs.hands[ctx.player as usize];
-        let card = match self.version {
-            BotVersion::V1 => stockskis_v1::choose_card_v1(hand, &ctx.gs, ctx.player),
-            BotVersion::V3 => stockskis_v3::choose_card_v3(hand, &ctx.gs, ctx.player),
-            BotVersion::V5 => stockskis_v5::choose_card_v5(hand, &ctx.gs, ctx.player),
-            BotVersion::V6 => stockskis_v6::choose_card_v6(hand, &ctx.gs, ctx.player),
-            BotVersion::M6 => stockskis_m6::choose_card_m6(hand, &ctx.gs, ctx.player),
-            BotVersion::Pozrl => stockskis_pozrl::choose_card_pozrl(hand, &ctx.gs, ctx.player),
-        };
-
+        let card = self.strategy.choose_card(hand, ctx.gs, ctx.player);
         let action = card.0 as usize;
         if ctx.legal_mask.get(action).map_or(false, |&v| v > 0.5) {
             action

@@ -337,7 +337,7 @@ fn fill_discards(
 }
 
 fn lead_card_choice(legal_cards: &[Card]) -> Card {
-    let mut non_tarok_faces: Vec<Card> = legal_cards
+    let non_tarok_faces: Vec<Card> = legal_cards
         .iter()
         .copied()
         .filter(|c| c.card_type() == CardType::Suit && c.points() >= 3)
@@ -346,7 +346,7 @@ fn lead_card_choice(legal_cards: &[Card]) -> Card {
         return pick_max_points_then_strength(&non_tarok_faces);
     }
 
-    let mut non_tarok: Vec<Card> = legal_cards
+    let non_tarok: Vec<Card> = legal_cards
         .iter()
         .copied()
         .filter(|c| c.card_type() == CardType::Suit)

@@ -45,6 +45,8 @@ def agent_type_to_seat_label(agent_type: str) -> str | None:
         return "bot_m6"
     if t in ("stockskis_pozrl", "bot_pozrl", "pozrl"):
         return "bot_pozrl"
+    if t in ("lustrek", "stockskis_lustrek", "bot_lustrek"):
+        return "bot_lustrek"
     if t == "rl":
         return "nn"
     return None
