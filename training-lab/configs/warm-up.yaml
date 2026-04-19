@@ -16,9 +16,9 @@ best_model_metric: "elo"
 gamma: 0.995
 gae_lambda: 0.98
 clip_epsilon: 0.2
-policy_coef: 1.0
+policy_coef: 0
 value_coef: 0.5
-explore_rate: 0.10
+explore_rate: 0
 
 # --- Optimization Setup ---
 ppo_epochs: 4
@@ -60,7 +60,7 @@ league:
   min_nn_per_game: 1        # learner seat 0 + three sampled opponents
   sampling: uniform         # single-opponent pool during bootstrap
   snapshot_interval: 9999   # Disabled: Do not fill the pool with clone checkpoints
-  elo_outplace_unit_weight: 50  # effective K multiplier baseline for session-based outplacing
+  elo_outplace_unit_weight: 5
 
   opponents:
     - name: StockSkis_Classroom

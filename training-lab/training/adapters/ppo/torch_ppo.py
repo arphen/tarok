@@ -154,6 +154,7 @@ class PPOAdapter(PPOPort):
         oracle_states: torch.Tensor | None,
         game_modes: np.ndarray,
         behavioral_clone_mask: torch.Tensor,
+        oracle_valid_mask: torch.Tensor | None = None,
     ) -> dict[str, float]:
         old_log_probs = log_probs
 
@@ -201,6 +202,11 @@ class PPOAdapter(PPOPort):
             g_vad = compute.to_device(vad[idx])  # (n, 3): old_values | advantages | returns
             g_masks = compute.to_device(legal_masks[idx, :action_size])
             g_oracle_states = compute.to_device(oracle_states[idx]) if oracle_states is not None else None
+            g_oracle_valid = (
+                compute.to_device(oracle_valid_mask[idx])
+                if oracle_valid_mask is not None and oracle_states is not None
+                else None
+            )
             g_bc_mask = compute.to_device(behavioral_clone_mask[idx])
 
             for _ in range(self._config.ppo_epochs):
@@ -219,6 +225,7 @@ class PPOAdapter(PPOPort):
                     b_returns = b_vad[:, 2]
                     b_masks = g_masks[batch_idx]
                     b_oracle_states = g_oracle_states[batch_idx] if g_oracle_states is not None else None
+                    b_oracle_valid = g_oracle_valid[batch_idx] if g_oracle_valid is not None else None
                     b_bc_mask = g_bc_mask[batch_idx]
 
                     new_log_probs, new_values, entropy = network.evaluate_action(
@@ -256,17 +263,28 @@ class PPOAdapter(PPOPort):
                     value_loss = 0.5 * torch.max(v_loss_unclipped, v_loss_clipped).mean()
                     il_loss = torch.zeros((), device=b_states.device, dtype=b_states.dtype)
                     if use_oracle_distill and b_oracle_states is not None:
-                        actor_features = network.get_actor_features(b_states)
-                        with torch.no_grad():
-                            critic_target = network.get_critic_features(b_oracle_states)
-                        actor_features = nn.functional.normalize(actor_features, p=2, dim=-1, eps=1e-8)
-                        critic_target = nn.functional.normalize(critic_target, p=2, dim=-1, eps=1e-8)
-                        il_loss = 1.0 - nn.functional.cosine_similarity(
-                            actor_features,
-                            critic_target,
-                            dim=-1,
-                            eps=1e-8,
-                        ).mean()
+                        if b_oracle_valid is not None:
+                            if torch.any(b_oracle_valid):
+                                il_states = b_states[b_oracle_valid]
+                                il_oracle = b_oracle_states[b_oracle_valid]
+                            else:
+                                il_states = None
+                                il_oracle = None
+                        else:
+                            il_states = b_states
+                            il_oracle = b_oracle_states
+                        if il_states is not None:
+                            actor_features = network.get_actor_features(il_states)
+                            with torch.no_grad():
+                                critic_target = network.get_critic_features(il_oracle)
+                            actor_features = nn.functional.normalize(actor_features, p=2, dim=-1, eps=1e-8)
+                            critic_target = nn.functional.normalize(critic_target, p=2, dim=-1, eps=1e-8)
+                            il_loss = 1.0 - nn.functional.cosine_similarity(
+                                actor_features,
+                                critic_target,
+                                dim=-1,
+                                eps=1e-8,
+                            ).mean()
                     bc_loss = torch.zeros((), device=b_states.device, dtype=b_states.dtype)
                     if self._behavioral_clone_coef > 0.0 and torch.any(b_bc_mask):
                         bc_loss = -new_log_probs[b_bc_mask].mean()

@@ -58,7 +58,7 @@ league:
   min_nn_per_game: 2       # Start playing against other NNs (Self-Play)
   sampling: matchmaking    # Match against opponents of similar skill
   snapshot_interval: 10    # Start saving checkpoints to the pool
-  elo_outplace_unit_weight: 50
+  elo_outplace_unit_weight: 5
 
   opponents:
     - name: StockSkis
