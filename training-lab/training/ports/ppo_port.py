@@ -34,5 +34,9 @@ class PPOPort(ABC):
         """Load human replay data from directory. Returns None if no data found."""
 
     @abstractmethod
+    def load_expert_data(self, teacher: str, num_games: int) -> dict[str, Any] | None:
+        """Load expert replay data for behavioral cloning. Returns None if unavailable."""
+
+    @abstractmethod
     def merge_experiences(self, primary: dict[str, Any], extra: dict[str, Any]) -> dict[str, Any]:
         """Merge two experience dicts (e.g. self-play + human replay) into one."""

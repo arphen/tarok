@@ -7,7 +7,7 @@ endif
 .PHONY: run backend frontend test train clean install test-e2e setup setup-hooks \
 	test-backend test-lab test-frontend test-frontend-unit test-coverage test-coverage-backend test-coverage-lab check-coverage test-lookahead \
 	lint-architecture pipeline imitation-pretrain generate-expert-data build-engine ensure-engine kill stop \
-	train-with-humans ec2-train ec2-attach ec2-logs ec2-pull ec2-terminate
+	train-with-humans cartpole cartpole-ppo ec2-train ec2-attach ec2-logs ec2-pull ec2-terminate
 
 UV_RUN = cd backend && PYTHONPATH=src:../model/src uv run --default-index https://pypi.org/simple
 UV_RUN_LAB = cd backend && PYTHONPATH=src:../model/src:../training-lab uv run --default-index https://pypi.org/simple
@@ -316,6 +316,25 @@ train-new: ensure-engine
 		--new \
 		--model-arch v4 \
 		$(EXTRA)
+
+# CartPole sanity check for validating custom optimization loops via Gymnasium.
+# Keeps Tarok core untouched by running as an adapter-level script.
+# Usage:
+#   make cartpole
+#   make cartpole EXTRA="--episodes 800 --strict"
+cartpole:
+	source backend/.venv/bin/activate && \
+		PYTHONPATH=backend/src:model/src:training-lab python \
+		training-lab/training/adapters/evaluation/gymnasium_cartpole_adapter.py \
+		$(EXTRA)
+
+# Full PPO math sanity check on CartPole (GAE + clip + multi-epoch updates).
+# This mirrors key warm-up RL math knobs while excluding Tarok-specific IL/concurrency.
+# Usage:
+#   make cartpole-ppo
+#   make cartpole-ppo EXTRA="--episodes 1000 --strict"
+cartpole-ppo:
+	$(MAKE) cartpole EXTRA="--ppo-epochs 4 --clip-epsilon 0.2 --value-clip-epsilon 0.2 --gae-lambda 0.98 --value-coef 0.5 --entropy-coef 0.001 --lr 2e-4 --episodes 800 --window 50 --target-avg-reward 200 $(EXTRA)"
 
 # Launch a g5.2xlarge spot instance, deploy the repo, and start tmux-based training.
 # Required vars:

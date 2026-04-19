@@ -34,13 +34,18 @@ class TrainingConfig:
     imitation_coef_min: float = 0.0
     imitation_center_elo: float = 1500.0   # gaussian_elo: bell curve centre
     imitation_width_elo: float = 250.0     # gaussian_elo: bell curve σ
+    # Behavioral cloning (action-level) controls.
+    behavioral_clone_coef: float = 0.0
+    behavioral_clone_teacher: str | None = None
+    behavioral_clone_games_per_iteration: int = 0
     # PPO hyperparams (all have sensible defaults)
     gamma: float = 0.99
     gae_lambda: float = 0.95
     clip_epsilon: float = 0.2
+    policy_coef: float = 1.0
     value_coef: float = 0.5
     entropy_coef: float = 0.01
-    entropy_schedule: str = "constant"  # constant | linear | cosine
+    entropy_schedule: str = "constant"  # constant | linear | cosine | exponential | geometric
     entropy_coef_min: float = 0.005
     iteration_runner_mode: str = "in-process"
     iteration_runner_restart_every: int = 10
@@ -104,4 +109,10 @@ def scheduled_coef(
         return coef_max + (coef_min - coef_max) * frac
     if schedule == "cosine":
         return coef_min + 0.5 * (coef_max - coef_min) * (1 + math.cos(math.pi * frac))
+    if schedule in ("exponential", "geometric"):
+        # Multiplicative decay: coef_max * (coef_min / coef_max) ** frac
+        # Clamps to coef_min when coef_max is zero or ratio is degenerate.
+        if coef_max <= 0 or coef_min <= 0:
+            return coef_max
+        return coef_max * (coef_min / coef_max) ** frac
     return coef_max

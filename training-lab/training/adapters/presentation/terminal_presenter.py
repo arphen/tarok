@@ -39,6 +39,30 @@ def _section(text: str) -> str:
     return f"┌{'─' * (_W - 2)}┐\n│  {text}{' ' * max(0, _W - 4 - len(text))}│\n└{'─' * (_W - 2)}┘"
 
 
+def _fmt_scalar(value: float) -> str:
+    if value == 0:
+        return "0"
+    mag = abs(value)
+    if mag < 1e-3 or mag >= 1e3:
+        return f"{value:.1e}"
+    return f"{value:.6f}".rstrip("0").rstrip(".")
+
+
+def _fmt_schedule(max_value: float, min_value: float, schedule: str) -> str:
+    if schedule == "constant":
+        return f"{_fmt_scalar(max_value)} ({schedule})"
+    return f"{_fmt_scalar(max_value)} -> {_fmt_scalar(min_value)} ({schedule})"
+
+
+def _fmt_imitation_schedule(config: TrainingConfig) -> str:
+    if config.imitation_schedule == "gaussian_elo":
+        return (
+            f"peak={_fmt_scalar(config.imitation_coef)} @ elo={config.imitation_center_elo:.0f} "
+            f"(width={config.imitation_width_elo:.0f})"
+        )
+    return _fmt_schedule(config.imitation_coef, config.imitation_coef_min, config.imitation_schedule)
+
+
 def _delta_arrow(delta: float, lower_is_better: bool = True) -> str:
     if delta == 0:
         return "  ─"
@@ -74,15 +98,45 @@ class TerminalPresenter(PresenterPort):
         print()
 
     def on_training_loop_start(self, config: TrainingConfig) -> None:
-        lr_info = f"lr={config.lr}"
-        if config.lr_schedule != "constant":
-            lr_info += f"→{config.effective_lr_min} ({config.lr_schedule})"
         ckpts = ",".join(str(i) for i in config.benchmark_checkpoints)
         print(_banner("TRAINING PLAN"))
-        print(f"  {config.iterations} iters × {config.games} games    "
-              f"train={config.seats}    bench={config.effective_bench_seats}")
-        print(f"  PPO {config.ppo_epochs}ep  batch={config.batch_size}  {lr_info}    "
-              f"bench={config.bench_games}g @ [{ckpts}]")
+        print(f"  Run       : {config.iterations} iterations x {config.games:,} games")
+        print(f"  Seats     : train={config.seats}")
+        print(f"              bench={config.effective_bench_seats}")
+        print(
+            f"  Bench     : {config.bench_games:,} games @ [{ckpts}]  "
+            f"metric={config.best_model_metric}  session={config.outplace_session_size}g"
+        )
+        print(
+            f"  PPO       : epochs={config.ppo_epochs}  batch={config.batch_size:,}  "
+            f"gamma={config.gamma:.3f}  gae={config.gae_lambda:.3f}  "
+            f"clip={config.clip_epsilon:.3f}  policy={config.policy_coef:.3f}  value={config.value_coef:.3f}  "
+            f"epsilon={config.explore_rate:.3f}"
+        )
+        print("  Schedules :")
+        print(f"              lr       {_fmt_schedule(config.lr, config.effective_lr_min, config.lr_schedule)}")
+        print(
+            f"              entropy  "
+            f"{_fmt_schedule(config.entropy_coef, config.entropy_coef_min, config.entropy_schedule)}"
+        )
+        print(f"              oracle-distill {_fmt_imitation_schedule(config)}")
+        if config.behavioral_clone_coef > 0.0 and config.behavioral_clone_games_per_iteration > 0:
+            print(
+                f"              behavior-clone coef={config.behavioral_clone_coef:.3f} "
+                f"teacher={config.behavioral_clone_teacher} "
+                f"games/iter={config.behavioral_clone_games_per_iteration:,}"
+            )
+        print(
+            f"  Runtime   : device={config.device}  concurrency={config.concurrency}  "
+            f"runner={config.iteration_runner_mode}  restart_every={config.iteration_runner_restart_every}"
+        )
+        if config.league is not None and config.league.enabled:
+            print(
+                f"  League    : enabled  opponents={len(config.league.opponents)}  "
+                f"sampling={config.league.sampling}  min_nn={config.league.min_nn_per_game}  "
+                f"snapshot_every={config.league.snapshot_interval}"
+            )
+            print(f"              elo_outplace_unit_weight={config.league.elo_outplace_unit_weight}")
         print()
 
     # ── Iteration loop ────────────────────────────────────────────────────
@@ -130,8 +184,13 @@ class TerminalPresenter(PresenterPort):
         v = metrics["value_loss"]
         e = metrics["entropy"]
         il = metrics.get("il_loss", 0.0)
+        bc = metrics.get("bc_loss", 0.0)
         il_str = f"  il={il:.4f}" if il > 0.0 else ""
-        print(f"loss={metrics['total_loss']:.4f}  (π={p:.4f}  v={v:.4f}  H={e:.4f}{il_str})  [{_format_time(elapsed)}]")
+        bc_str = f"  bc={bc:.4f}" if bc > 0.0 else ""
+        print(
+            f"loss={metrics['total_loss']:.4f}  "
+            f"(π={p:.4f}  v={v:.4f}  H={e:.4f}{il_str}{bc_str})  [{_format_time(elapsed)}]"
+        )
 
     def on_benchmark_start(self, config: TrainingConfig) -> None:
         print(f"  ③ Benchmark    {config.bench_games:,} games  (greedy)")

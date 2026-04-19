@@ -1,6 +1,6 @@
 # ---------------------------------------------------------
 # BOOTSTRAP PHASE: Behavioral Cloning
-# Goal: Force network to memorize bot_v5 strategy
+# Goal: copy V5 behavior with action-level cloning while keeping PPO value learning healthy
 # ---------------------------------------------------------
 
 bench_seats: "nn,bot_v1,bot_v3,bot_m6"
@@ -12,10 +12,11 @@ bench_games: 3000
 benchmark_checkpoints: [0, 10, 20, 30, 40, 50]
 best_model_metric: "elo"
 
-# --- Core PPO Settings (Restored!) ---
+# --- Core PPO Settings ---
 gamma: 0.995
 gae_lambda: 0.98
 clip_epsilon: 0.2
+policy_coef: 1.0
 value_coef: 0.5
 explore_rate: 0.10
 
@@ -24,19 +25,28 @@ ppo_epochs: 4
 batch_size: 16384
 
 # --- Learning Rate (Linear for Bootstrap) ---
-# We disable Elo-based LR because losing to V5 will tank the learner's Elo initially
+# We disable Elo-based LR during bootstrap to keep optimization predictable.
 lr: 0.0003
 lr_schedule: linear
 lr_min: 0.00001
 
 # --- Entropy ---
-entropy_coef: 0.05         # High starting entropy is fine; IL will quickly crush it
-entropy_schedule: linear
-entropy_coef_min: 0.005
+# Low entropy during BC warm-up: we want memorization, not exploration.
+# BC loss already drives entropy down; 0.001 prevents dead logits without fighting the clone signal.
+entropy_coef: 0.001
+entropy_schedule: constant
+entropy_coef_min: 0.001
 
-# --- The Sledgehammer (Imitation Learning) ---
-imitation_coef: 0.50       
-imitation_schedule: constant 
+# --- Oracle Latent Distillation (disabled in warm-up) ---
+# This controls privileged-oracle feature matching, not behavior cloning.
+imitation_coef: 0.00
+imitation_schedule: constant
+
+# --- Behavioral Cloning (action-level warm-up) ---
+# This is true BC: cross-entropy on expert actions from V5 games.
+behavioral_clone_coef: 1.50
+behavioral_clone_teacher: bot_v5
+behavioral_clone_games_per_iteration: 20000
 
 # --- Runner Hardware ---
 concurrency: 256
@@ -47,12 +57,12 @@ iteration_runner_restart_every: 10
 # --- The Classroom (League) ---
 league:
   enabled: true
-  min_nn_per_game: 1        # CRITICAL: 1 Learner + 3 Tutors
-  sampling: uniform         # Uniform is fine, there is only one opponent
+  min_nn_per_game: 1        # learner seat 0 + three sampled opponents
+  sampling: uniform         # single-opponent pool during bootstrap
   snapshot_interval: 9999   # Disabled: Do not fill the pool with clone checkpoints
   elo_outplace_unit_weight: 50  # effective K multiplier baseline for session-based outplacing
 
   opponents:
-    - name: V5_Tutor
-      type: bot_v5
-      initial_elo: 1600
+    - name: StockSkis_Classroom
+      type: bot_v1
+      initial_elo: 800

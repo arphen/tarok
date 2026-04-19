@@ -78,6 +78,12 @@ class ResolveConfig:
             imitation_coef_min=merged.get("imitation_coef_min", 0.0),
             imitation_center_elo=float(merged.get("imitation_center_elo", 1500.0)),
             imitation_width_elo=float(merged.get("imitation_width_elo", 250.0)),
+            behavioral_clone_coef=float(merged.get("behavioral_clone_coef", 0.0)),
+            behavioral_clone_teacher=merged.get("behavioral_clone_teacher"),
+            behavioral_clone_games_per_iteration=max(
+                0, int(merged.get("behavioral_clone_games_per_iteration", 0))
+            ),
+            policy_coef=float(merged.get("policy_coef", 1.0)),
             entropy_coef=merged.get("entropy_coef", 0.01),
             entropy_schedule=merged.get("entropy_schedule", "constant"),
             entropy_coef_min=float(merged.get("entropy_coef_min", 0.005)),

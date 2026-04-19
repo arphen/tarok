@@ -22,6 +22,7 @@ from tarok_model.encoding import (
 )
 from tarok_model.network import TarokNetV4
 
+from training.adapters.ppo.expert_replay import load_expert_experiences
 from training.adapters.ppo.jsonl_human_replay import load_human_experiences, merge_experiences
 from training.adapters.ppo.ppo_batch_preparation import prepare_batched, release_allocator_memory
 from training.adapters.ppo.ppo_contract_validation import validate_v4_contract_indices_with_rust
@@ -63,9 +64,11 @@ class PPOAdapter(PPOPort):
         self._gamma: float = 0.99
         self._gae_lambda: float = 0.95
         self._clip_epsilon: float = 0.2
+        self._policy_coef: float = 1.0
         self._value_coef: float = 0.5
         self._entropy_coef: float = 0.01
         self._imitation_coef: float = 0.0
+        self._behavioral_clone_coef: float = 0.0
 
     def setup(self, weights: dict, config: TrainingConfig, device: str) -> None:
         self._config = config
@@ -74,8 +77,10 @@ class PPOAdapter(PPOPort):
         self._gamma = float(config.gamma)
         self._gae_lambda = float(config.gae_lambda)
         self._clip_epsilon = float(config.clip_epsilon)
+        self._policy_coef = float(config.policy_coef)
         self._value_coef = float(config.value_coef)
         self._entropy_coef = float(config.entropy_coef)
+        self._behavioral_clone_coef = float(config.behavioral_clone_coef)
 
         hidden_size = weights["shared.0.weight"].shape[0]
         oracle = any(k.startswith("critic_backbone") for k in weights)
@@ -131,6 +136,9 @@ class PPOAdapter(PPOPort):
     def merge_experiences(self, primary: dict[str, Any], extra: dict[str, Any]) -> dict[str, Any]:
         return merge_experiences(primary, extra)
 
+    def load_expert_data(self, teacher: str, num_games: int) -> dict[str, Any] | None:
+        return load_expert_experiences(teacher=teacher, num_games=num_games)
+
     def _ppo_update_batched(
         self,
         *,
@@ -142,6 +150,7 @@ class PPOAdapter(PPOPort):
         legal_masks: torch.Tensor,
         oracle_states: torch.Tensor | None,
         game_modes: np.ndarray,
+        behavioral_clone_mask: torch.Tensor,
     ) -> dict[str, float]:
         old_log_probs = log_probs
 
@@ -169,6 +178,7 @@ class PPOAdapter(PPOPort):
         total_policy_loss = 0.0
         total_value_loss = 0.0
         total_il_loss = 0.0
+        total_bc_loss = 0.0
         total_entropy = 0.0
         total_loss = 0.0
         num_updates = 0
@@ -188,6 +198,7 @@ class PPOAdapter(PPOPort):
             g_vad = compute.to_device(vad[idx])  # (n, 3): old_values | advantages | returns
             g_masks = compute.to_device(legal_masks[idx, :action_size])
             g_oracle_states = compute.to_device(oracle_states[idx]) if oracle_states is not None else None
+            g_bc_mask = compute.to_device(behavioral_clone_mask[idx])
 
             for _ in range(self._config.ppo_epochs):
                 indices = torch.randperm(n, device=g_states.device)
@@ -205,6 +216,7 @@ class PPOAdapter(PPOPort):
                     b_returns = b_vad[:, 2]
                     b_masks = g_masks[batch_idx]
                     b_oracle_states = g_oracle_states[batch_idx] if g_oracle_states is not None else None
+                    b_bc_mask = g_bc_mask[batch_idx]
 
                     new_log_probs, new_values, entropy = network.evaluate_action(
                         b_states,
@@ -224,13 +236,20 @@ class PPOAdapter(PPOPort):
                     ) * b_advantages
                     policy_loss = -torch.min(surr1, surr2).mean()
 
-                    v_pred_clipped = b_old_values + torch.clamp(
-                        new_values - b_old_values,
+                    # Normalize value targets per minibatch so critic gradients stay bounded.
+                    ret_mean = b_returns.mean()
+                    ret_std = b_returns.std(unbiased=False).clamp_min(1.0)
+                    norm_returns = (b_returns - ret_mean) / ret_std
+                    norm_values = (new_values - ret_mean) / ret_std
+                    norm_old_values = (b_old_values - ret_mean) / ret_std
+
+                    norm_v_pred_clipped = norm_old_values + torch.clamp(
+                        norm_values - norm_old_values,
                         -self._clip_epsilon,
                         self._clip_epsilon,
                     )
-                    v_loss_unclipped = nn.functional.mse_loss(new_values, b_returns, reduction="none")
-                    v_loss_clipped = nn.functional.mse_loss(v_pred_clipped, b_returns, reduction="none")
+                    v_loss_unclipped = nn.functional.mse_loss(norm_values, norm_returns, reduction="none")
+                    v_loss_clipped = nn.functional.mse_loss(norm_v_pred_clipped, norm_returns, reduction="none")
                     value_loss = 0.5 * torch.max(v_loss_unclipped, v_loss_clipped).mean()
                     il_loss = torch.zeros((), device=b_states.device, dtype=b_states.dtype)
                     if use_oracle_distill and b_oracle_states is not None:
@@ -245,11 +264,15 @@ class PPOAdapter(PPOPort):
                             dim=-1,
                             eps=1e-8,
                         ).mean()
+                    bc_loss = torch.zeros((), device=b_states.device, dtype=b_states.dtype)
+                    if self._behavioral_clone_coef > 0.0 and torch.any(b_bc_mask):
+                        bc_loss = -new_log_probs[b_bc_mask].mean()
 
                     loss = (
-                        policy_loss
+                        self._policy_coef * policy_loss
                         + self._value_coef * value_loss
                         + self._imitation_coef * il_loss
+                        + self._behavioral_clone_coef * bc_loss
                         - self._entropy_coef * entropy.mean()
                     )
 
@@ -265,6 +288,7 @@ class PPOAdapter(PPOPort):
                     total_policy_loss += policy_loss.item()
                     total_value_loss += value_loss.item()
                     total_il_loss += il_loss.item()
+                    total_bc_loss += bc_loss.item()
                     total_entropy += entropy.mean().item()
                     total_loss += loss.item()
                     num_updates += 1
@@ -274,6 +298,7 @@ class PPOAdapter(PPOPort):
             "policy_loss": total_policy_loss / n,
             "value_loss": total_value_loss / n,
             "il_loss": total_il_loss / n,
+            "bc_loss": total_bc_loss / n,
             "entropy": total_entropy / n,
             "total_loss": total_loss / n,
         }

@@ -82,7 +82,6 @@ def _make_neutral_batch(network: TarokNetV4, include_oracle_states: bool) -> dic
         "legal_masks": legal_masks,
         "oracle_states": oracle_states if include_oracle_states else None,
         "game_modes": np.zeros(batch_size, dtype=np.int8),
-        "behavioral_clone_mask": torch.zeros(batch_size, dtype=torch.bool),
     }
 
 

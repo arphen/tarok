@@ -69,6 +69,17 @@ def test_clip_epsilon_from_config_is_respected() -> None:
     assert adapter._clip_epsilon == pytest.approx(clip)
 
 
+def test_policy_coef_from_config_is_respected() -> None:
+    policy_coef = 0.0
+    cfg = TrainingConfig(model_arch="v4", policy_coef=policy_coef)
+    weights = TarokNetV4(hidden_size=256, oracle_critic=False).state_dict()
+    adapter = PPOAdapter()
+
+    adapter.setup(weights=weights, config=cfg, device="cpu")
+
+    assert adapter._policy_coef == pytest.approx(policy_coef)
+
+
 def test_ppo_can_overfit_tiny_fixed_batch_when_unclipped() -> None:
     weights, model_path = _export_random_model(hidden_size=32, oracle_critic=False)
     try:

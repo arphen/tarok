@@ -43,6 +43,7 @@ def _make_selfplay(raw: dict | None = None, *, n_learner: int = 2) -> MagicMock:
 def _make_ppo(
     new_weights: dict | None = None,
     human_raw: dict | None = None,
+    expert_raw: dict | None = None,
 ) -> MagicMock:
     ppo = MagicMock()
     metrics = {
@@ -53,6 +54,7 @@ def _make_ppo(
     }
     ppo.update.return_value = (metrics, new_weights or {"w": 1.0})
     ppo.load_human_data.return_value = human_raw
+    ppo.load_expert_data.return_value = expert_raw
     ppo.merge_experiences.side_effect = lambda a, b: {**a, **b}
     return ppo
 
@@ -167,6 +169,33 @@ class TestCollectExperiences:
 
         ppo.load_human_data.assert_not_called()
         ppo.merge_experiences.assert_not_called()
+
+    def test_expert_data_merged_when_behavior_clone_enabled(self, tmp_path: Path) -> None:
+        expert_raw = _raw_data(4)
+        sp = _make_selfplay()
+        ppo = _make_ppo(expert_raw=expert_raw)
+        config = _base_config(
+            tmp_path,
+            behavioral_clone_coef=1.0,
+            behavioral_clone_teacher="bot_v5",
+            behavioral_clone_games_per_iteration=200,
+        )
+
+        uc = CollectExperiences(sp, ppo, MagicMock())
+        uc.execute(config, _identity(), "m.pt")
+
+        ppo.load_expert_data.assert_called_once_with(teacher="bot_v5", num_games=200)
+        ppo.merge_experiences.assert_called_once()
+
+    def test_expert_data_skipped_when_behavior_clone_disabled(self, tmp_path: Path) -> None:
+        sp = _make_selfplay()
+        ppo = _make_ppo(expert_raw=_raw_data(4))
+        config = _base_config(tmp_path, behavioral_clone_coef=0.0)
+
+        uc = CollectExperiences(sp, ppo, MagicMock())
+        uc.execute(config, _identity(), "m.pt")
+
+        ppo.load_expert_data.assert_not_called()
 
     def test_bundle_fields_populated_correctly(self, tmp_path: Path) -> None:
         raw = _raw_data(12)

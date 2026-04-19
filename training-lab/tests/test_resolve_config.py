@@ -47,3 +47,27 @@ def test_resolve_config_league_elo_weight_can_be_overridden_explicitly() -> None
 
     assert cfg.league is not None
     assert cfg.league.elo_outplace_unit_weight == 12.5
+
+
+def test_resolve_config_reads_policy_coef() -> None:
+    payload = {
+        "policy_coef": 0.0,
+    }
+
+    cfg = ResolveConfig(_Loader(payload)).resolve(cli={}, config_path="dummy.yaml")
+
+    assert cfg.policy_coef == 0.0
+
+
+def test_resolve_config_reads_behavioral_cloning_fields() -> None:
+    payload = {
+        "behavioral_clone_coef": 1.25,
+        "behavioral_clone_teacher": "bot_v5",
+        "behavioral_clone_games_per_iteration": 321,
+    }
+
+    cfg = ResolveConfig(_Loader(payload)).resolve(cli={}, config_path="dummy.yaml")
+
+    assert cfg.behavioral_clone_coef == 1.25
+    assert cfg.behavioral_clone_teacher == "bot_v5"
+    assert cfg.behavioral_clone_games_per_iteration == 321

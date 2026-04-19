@@ -139,6 +139,7 @@ def load_human_experiences(data_dir: str | Path) -> dict[str, Any] | None:
         "players": np.asarray(players_list, dtype=np.int8),
         "scores": scores_arr,
         "oracle_states": None,
+        "behavioral_clone_mask": np.zeros(len(actions_list), dtype=bool),
     }
 
 
@@ -150,13 +151,22 @@ def merge_experiences(primary: dict[str, Any], extra: dict[str, Any]) -> dict[st
     n_primary_games = int(primary["scores"].shape[0])
     extra_game_ids = np.asarray(extra["game_ids"], dtype=np.int64) + n_primary_games
     merged_scores = np.concatenate([primary["scores"], extra["scores"]], axis=0)
+    n_primary = int(np.asarray(primary["actions"]).shape[0])
+    n_extra = int(np.asarray(extra["actions"]).shape[0])
 
     def _cat(key: str) -> np.ndarray:
-        current = primary[key]
-        incoming = extra[key] if key != "game_ids" else extra_game_ids
+        current = primary.get(key)
+        incoming = (extra.get(key) if key != "game_ids" else extra_game_ids)
         if current is None or incoming is None:
             return None  # type: ignore[return-value]
         return np.concatenate([np.asarray(current), np.asarray(incoming)], axis=0)
+
+    primary_bc = primary.get("behavioral_clone_mask")
+    if primary_bc is None:
+        primary_bc = np.zeros(n_primary, dtype=bool)
+    extra_bc = extra.get("behavioral_clone_mask")
+    if extra_bc is None:
+        extra_bc = np.zeros(n_extra, dtype=bool)
 
     return {
         "states": _cat("states"),
@@ -170,4 +180,7 @@ def merge_experiences(primary: dict[str, Any], extra: dict[str, Any]) -> dict[st
         "players": _cat("players"),
         "scores": merged_scores,
         "oracle_states": primary.get("oracle_states"),
+        "behavioral_clone_mask": np.concatenate(
+            [np.asarray(primary_bc, dtype=bool), np.asarray(extra_bc, dtype=bool)], axis=0
+        ),
     }

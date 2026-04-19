@@ -41,6 +41,8 @@ def test_load_and_merge_human_experiences(tmp_path) -> None:
     # log_prob should be -log(n_legal); here all actions are legal.
     assert loaded["log_probs"].shape == (1,)
     assert loaded["log_probs"][0] == np.float32(-np.log(CARD_ACTION_SIZE))
+    assert loaded["behavioral_clone_mask"].shape == (1,)
+    assert bool(loaded["behavioral_clone_mask"][0]) is False
 
     # 3) Merge behavior with synthetic primary self-play batch.
     primary = {
@@ -55,6 +57,7 @@ def test_load_and_merge_human_experiences(tmp_path) -> None:
         "players": np.array([1, 2], dtype=np.int8),
         "scores": np.zeros((1, 4), dtype=np.float32),
         "oracle_states": None,
+        "behavioral_clone_mask": np.zeros(2, dtype=bool),
     }
 
     merged = merge_experiences(primary, loaded)
@@ -65,3 +68,7 @@ def test_load_and_merge_human_experiences(tmp_path) -> None:
     assert merged["game_ids"][2] == 1
     # Last merged action comes from loaded sample.
     assert merged["actions"][2] == 12
+    assert merged["behavioral_clone_mask"].shape == (3,)
+    assert bool(merged["behavioral_clone_mask"][0]) is False
+    assert bool(merged["behavioral_clone_mask"][1]) is False
+    assert bool(merged["behavioral_clone_mask"][2]) is False

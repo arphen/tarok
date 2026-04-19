@@ -71,6 +71,18 @@ class CollectExperiences:
             if human_raw is not None:
                 raw = self._ppo.merge_experiences(raw, human_raw)
 
+        if (
+            config.behavioral_clone_coef > 0.0
+            and config.behavioral_clone_games_per_iteration > 0
+            and config.behavioral_clone_teacher is not None
+        ):
+            expert_raw = self._ppo.load_expert_data(
+                teacher=config.behavioral_clone_teacher,
+                num_games=config.behavioral_clone_games_per_iteration,
+            )
+            if expert_raw is not None:
+                raw = self._ppo.merge_experiences(raw, expert_raw)
+
         return ExperienceBundle(
             raw=raw,
             nn_seats=nn_seats,

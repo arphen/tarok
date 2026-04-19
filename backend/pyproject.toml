@@ -29,6 +29,7 @@ dev = [
     "import-linter>=2.3",
     "ty",
     "maturin>=1.7",
+    "gymnasium>=1.1",
 ]
 
 [build-system]
