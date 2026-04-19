@@ -1094,7 +1094,7 @@ fn run_self_play(
 /// contract & declarer metadata with zero training-data overhead.
 ///
 /// `seat_config`: comma-separated, e.g. `"bot_v5,bot_v6,bot_v5,bot_v5"`.
-/// Only `bot_v5` and `bot_v6` are supported (no NN seats — use
+/// Supports `bot_lapajne`, `bot_v5`, and `bot_v6` (no NN seats — use
 /// [`run_self_play`] for that).
 ///
 /// Returns a dict with:
@@ -1124,6 +1124,7 @@ fn run_arena_games(
     let mut versions = [BotVersion::V5; 4];
     for (i, &label) in seat_labels.iter().enumerate() {
         versions[i] = match label {
+            "bot_lapajne" => BotVersion::Lapajne,
             "bot_lustrek" => BotVersion::Lustrek,
             "bot_v1"     => BotVersion::V1,
             "bot_v3"     => BotVersion::V3,

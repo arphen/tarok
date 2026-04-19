@@ -13,6 +13,7 @@ use rayon::prelude::*;
 
 use crate::card::*;
 use crate::game_state::*;
+use crate::lapajne;
 use crate::scoring;
 use crate::bots::lustrek;
 use crate::bots::stockskis_m6;
@@ -26,6 +27,7 @@ use crate::trick_eval;
 /// Per-bot version dispatch tag.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum BotVersion {
+    Lapajne,
     Lustrek,
     V1,
     V3,
@@ -61,6 +63,7 @@ pub fn run_arena_batch(n_games: u32, versions: [BotVersion; 4]) -> Vec<ArenaGame
 
 fn bot_bid(v: BotVersion, hand: CardSet, highest: Option<Contract>) -> Option<Contract> {
     match v {
+        BotVersion::Lapajne => lapajne::evaluate_bid_lapajne(hand, highest),
         BotVersion::Lustrek => lustrek::evaluate_bid_lustrek(hand, highest),
         BotVersion::V1     => stockskis_v1::evaluate_bid_v1(hand, highest),
         BotVersion::V3     => stockskis_v3::evaluate_bid_v3(hand, highest),
@@ -73,6 +76,7 @@ fn bot_bid(v: BotVersion, hand: CardSet, highest: Option<Contract>) -> Option<Co
 
 fn bot_king(v: BotVersion, hand: CardSet) -> Option<Card> {
     match v {
+        BotVersion::Lapajne => lapajne::choose_king_lapajne(hand),
         BotVersion::Lustrek => lustrek::choose_king_lustrek(hand),
         BotVersion::V1     => stockskis_v1::choose_king_v1(hand),
         BotVersion::V3     => stockskis_v3::choose_king_v3(hand),
@@ -90,6 +94,7 @@ fn bot_talon(
     called_king: Option<Card>,
 ) -> usize {
     match v {
+        BotVersion::Lapajne => lapajne::choose_talon_group_lapajne(groups, hand, called_king),
         BotVersion::Lustrek => lustrek::choose_talon_group_lustrek(groups, hand, called_king),
         BotVersion::V1     => stockskis_v1::choose_talon_group_v1(groups, hand, called_king),
         BotVersion::V3     => stockskis_v3::choose_talon_group_v3(groups, hand, called_king),
@@ -102,6 +107,7 @@ fn bot_talon(
 
 fn bot_discards(v: BotVersion, hand: CardSet, n: usize, called_king: Option<Card>) -> Vec<Card> {
     match v {
+        BotVersion::Lapajne => lapajne::choose_discards_lapajne(hand, n, called_king),
         BotVersion::Lustrek => lustrek::choose_discards_lustrek(hand, n, called_king),
         BotVersion::V1     => stockskis_v1::choose_discards_v1(hand, n, called_king),
         BotVersion::V3     => stockskis_v3::choose_discards_v3(hand, n, called_king),
@@ -114,6 +120,7 @@ fn bot_discards(v: BotVersion, hand: CardSet, n: usize, called_king: Option<Card
 
 fn bot_card(v: BotVersion, hand: CardSet, state: &GameState, player: u8) -> Card {
     match v {
+        BotVersion::Lapajne => lapajne::choose_card_lapajne(hand, state, player),
         BotVersion::Lustrek => lustrek::choose_card_lustrek(hand, state, player),
         BotVersion::V1     => stockskis_v1::choose_card_v1(hand, state, player),
         BotVersion::V3     => stockskis_v3::choose_card_v3(hand, state, player),

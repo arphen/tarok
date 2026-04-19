@@ -17,8 +17,9 @@ class LeagueOpponent:
     type: Literal[
         "nn_checkpoint",
         "bot_v1",
+        "bot_lapajne",
         "bot_v3",
-        "bot_lustrek",
+    "bot_lustrek",
         "bot_v5",
         "bot_v6",
         "bot_m6",
