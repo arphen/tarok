@@ -61,7 +61,7 @@ def export_checkpoint_to_torchscript(checkpoint_path: str) -> str:
     import torch
     from tarok_model.network import TarokNetV4
 
-    ckpt = torch.load(checkpoint_path, map_location="cpu", weights_only=True)
+    ckpt = torch.load(checkpoint_path, map_location="cpu", weights_only=False)
     sd = ckpt.get("model_state_dict", ckpt)
     model_arch = ckpt.get("model_arch")
     if model_arch != "v4":
