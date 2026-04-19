@@ -18,6 +18,7 @@ from __future__ import annotations
 import argparse
 import os
 import sys
+from dataclasses import replace as dc_replace
 from pathlib import Path
 
 import torch
@@ -35,7 +36,6 @@ sys.path.insert(0, str(_script_dir))
 os.chdir(str(_root))
 
 from training.container import Container
-from training.entities import ModelIdentity, TrainingConfig
 
 
 def _detect_device(requested: str) -> str:
@@ -121,6 +121,20 @@ Examples:
     parser.add_argument("--model-arch", type=str, default=None,
                         choices=["v4"],
                         help="Model architecture: v4")
+    oracle_group = parser.add_mutually_exclusive_group()
+    oracle_group.add_argument(
+        "--oracle-critic",
+        dest="oracle_critic",
+        action="store_true",
+        default=None,
+        help="Include the privileged oracle critic head when creating a fresh model (default: on)",
+    )
+    oracle_group.add_argument(
+        "--no-oracle-critic",
+        dest="oracle_critic",
+        action="store_false",
+        help="Skip the privileged oracle critic head when creating a fresh model",
+    )
     parser.add_argument("--lr-schedule", type=str, default="constant",
                         choices=["constant", "cosine", "linear"],
                         help="LR schedule across iterations: constant (default), cosine, or linear decay")
@@ -184,6 +198,7 @@ def main() -> None:
         "device": args.device,
         "concurrency": args.concurrency,
         "model_arch": getattr(args, "model_arch", None),
+        "oracle_critic": getattr(args, "oracle_critic", None),
         "human_data_dir": _resolve_path(getattr(args, "human_data", None)),
         "imitation_schedule": getattr(args, "imitation_schedule", None),
         "imitation_coef_min": getattr(args, "imitation_coef_min", None),
@@ -199,6 +214,7 @@ def main() -> None:
         hidden_size = getattr(args, "hidden_size", None) or 256
         identity, weights = resolve.from_scratch(
             hidden_size=hidden_size,
+            oracle=config.oracle_critic,
             model_arch=config.model_arch,
         )
     else:
@@ -211,94 +227,17 @@ def main() -> None:
                     f"Using checkpoint architecture {identity.model_arch} "
                     f"(config requested {config.model_arch})."
                 )
-            config = TrainingConfig(
-                seats=config.seats,
-                bench_seats=config.bench_seats,
-                iterations=config.iterations,
-                games=config.games,
-                bench_games=config.bench_games,
-                benchmark_checkpoints=config.benchmark_checkpoints,
-                best_model_metric=config.best_model_metric,
-                ppo_epochs=config.ppo_epochs,
-                batch_size=config.batch_size,
-                lr=config.lr,
-                lr_schedule=config.lr_schedule,
-                lr_min=config.lr_min,
-                explore_rate=config.explore_rate,
-                device=config.device,
-                save_dir=config.save_dir,
-                concurrency=config.concurrency,
-                entropy_coef=config.entropy_coef,
-                imitation_coef=config.imitation_coef,
-                imitation_schedule=config.imitation_schedule,
-                imitation_coef_min=config.imitation_coef_min,
-                imitation_center_elo=config.imitation_center_elo,
-                imitation_width_elo=config.imitation_width_elo,
-                behavioral_clone_coef=config.behavioral_clone_coef,
-                behavioral_clone_schedule=config.behavioral_clone_schedule,
-                behavioral_clone_coef_min=config.behavioral_clone_coef_min,
-                behavioral_clone_teacher=config.behavioral_clone_teacher,
-                behavioral_clone_games_per_iteration=config.behavioral_clone_games_per_iteration,
-                entropy_schedule=config.entropy_schedule,
-                entropy_coef_min=config.entropy_coef_min,
-                iteration_runner_mode=config.iteration_runner_mode,
-                iteration_runner_restart_every=config.iteration_runner_restart_every,
-                model_arch=identity.model_arch,
-                human_data_dir=config.human_data_dir,
-                league=config.league,
-            )
+            config = dc_replace(config, model_arch=identity.model_arch)
         elif config.model_arch != identity.model_arch:
             print(
                 f"Promoting architecture {identity.model_arch} -> {config.model_arch} "
                 f"from explicit CLI override"
             )
-            identity = ModelIdentity(
-                name=identity.name,
-                hidden_size=identity.hidden_size,
-                oracle_critic=identity.oracle_critic,
-                model_arch=config.model_arch,
-                is_new=identity.is_new,
-            )
+            identity = dc_replace(identity, model_arch=config.model_arch)
 
     # ── Resolve save directory ──────────────────────────────────────
     save_dir = args.save_dir if args.save_dir is not None else f"data/checkpoints/{identity.name}"
-
-    config = TrainingConfig(
-        seats=config.seats,
-        bench_seats=config.bench_seats,
-        iterations=config.iterations,
-        games=config.games,
-        bench_games=config.bench_games,
-        benchmark_checkpoints=config.benchmark_checkpoints,
-        best_model_metric=config.best_model_metric,
-        ppo_epochs=config.ppo_epochs,
-        batch_size=config.batch_size,
-        lr=config.lr,
-        lr_schedule=config.lr_schedule,
-        lr_min=config.lr_min,
-        explore_rate=config.explore_rate,
-        device=config.device,
-        save_dir=save_dir,
-        concurrency=config.concurrency,
-        entropy_coef=config.entropy_coef,
-        imitation_coef=config.imitation_coef,
-        imitation_schedule=config.imitation_schedule,
-        imitation_coef_min=config.imitation_coef_min,
-        imitation_center_elo=config.imitation_center_elo,
-        imitation_width_elo=config.imitation_width_elo,
-        behavioral_clone_coef=config.behavioral_clone_coef,
-        behavioral_clone_schedule=config.behavioral_clone_schedule,
-        behavioral_clone_coef_min=config.behavioral_clone_coef_min,
-        behavioral_clone_teacher=config.behavioral_clone_teacher,
-        behavioral_clone_games_per_iteration=config.behavioral_clone_games_per_iteration,
-        entropy_schedule=config.entropy_schedule,
-        entropy_coef_min=config.entropy_coef_min,
-        iteration_runner_mode=config.iteration_runner_mode,
-        iteration_runner_restart_every=config.iteration_runner_restart_every,
-        model_arch=config.model_arch,
-        human_data_dir=config.human_data_dir,
-        league=config.league,
-    )
+    config = dc_replace(config, save_dir=save_dir)
 
     device = _detect_device(config.device)
 

@@ -34,7 +34,20 @@ def prepare_batched(raw: dict[str, Any], gamma: float = 0.99, gae_lambda: float 
     game_modes_np = np.asarray(raw["game_modes"], dtype=np.int8)
 
     n_total = len(actions_np)
-    gids = game_ids_np % scores_np.shape[0]
+    # `scores_np` is expected to be [num_games, 4] aligned with game_ids. A stray
+    # game_id outside that range would silently wrap around via modulo and attribute
+    # rewards to the wrong game, so verify the invariant up front.
+    if n_total > 0 and scores_np.shape[0] > 0:
+        max_gid = int(game_ids_np.max())
+        if max_gid >= scores_np.shape[0]:
+            raise ValueError(
+                "game_ids contain id "
+                f"{max_gid} >= scores.shape[0]={scores_np.shape[0]}; "
+                "Rust self-play returned inconsistent batch alignment."
+            )
+        if int(game_ids_np.min()) < 0:
+            raise ValueError("game_ids must be non-negative")
+    gids = game_ids_np % scores_np.shape[0] if scores_np.shape[0] > 0 else game_ids_np
     rewards_np = scores_np[gids, players_np].astype(np.float32) / 100.0
 
     traj_keys = game_ids_np.astype(np.int64) * 4 + players_np.astype(np.int64)

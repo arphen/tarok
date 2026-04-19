@@ -52,6 +52,10 @@ class TrainingConfig:
     iteration_runner_mode: str = "in-process"
     iteration_runner_restart_every: int = 10
     model_arch: str = "v4"
+    # When creating a fresh model, include the privileged oracle critic head used for
+    # imitation / distillation (matches oracle features from PrivilegedState).
+    # Ignored when loading from a checkpoint — identity reflects what the checkpoint carries.
+    oracle_critic: bool = True
     human_data_dir: str | None = None
     league: LeagueConfig | None = None
 

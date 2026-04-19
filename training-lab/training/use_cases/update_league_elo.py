@@ -4,7 +4,27 @@ from __future__ import annotations
 
 from training.entities.league import LeaguePool
 
-_K = 32  # Elo K-factor
+# ── Elo K-factor ───────────────────────────────────────────────────────
+# Standard chess K=32 updates a rating by at most 32 points per decisive
+# outcome. We deliberately scale K by ``pool.config.elo_outplace_unit_weight``
+# so that one *session* aggregating N greedy games carries the same rating
+# impact as N individual games would have. With the default value of 50
+# (aligned to ``outplace_session_size``) the effective K becomes 1600, which
+# means a single lopsided iteration can shift learner Elo by several hundred
+# points — correct in expectation over many iterations, but intentionally
+# aggressive and thus "high variance" early in training.
+#
+# Implications for tuning:
+#   * ``elo_outplace_unit_weight = outplace_session_size`` (current default)
+#     treats a session as a single high-signal comparison unit. Use this
+#     when your schedules are Elo-driven and you want swift convergence.
+#   * ``elo_outplace_unit_weight = 1`` falls back to per-session K=32, which
+#     decays a lot more slowly and is less noisy — preferable if Elo is a
+#     monitoring signal rather than a scheduling signal.
+#   * Per-pairwise tapering (K / sqrt(games_seen)) is not implemented here;
+#     if you want it, replace ``k_factor`` inside ``execute`` with a decayed
+#     variant based on ``entry.games_played``.
+_K = 32  # Elo K-factor (scaled below by elo_outplace_unit_weight)
 
 
 def _elo_expected(rating_a: float, rating_b: float) -> float:

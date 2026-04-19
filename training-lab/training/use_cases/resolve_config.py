@@ -92,6 +92,7 @@ class ResolveConfig:
             iteration_runner_mode=str(merged.get("iteration_runner_mode", "in-process")),
             iteration_runner_restart_every=max(1, int(merged.get("iteration_runner_restart_every", 10))),
             model_arch=merged.get("model_arch", "v4"),
+            oracle_critic=bool(merged.get("oracle_critic", True)),
             human_data_dir=merged.get("human_data_dir"),
             league=league,
         )

@@ -63,7 +63,7 @@ class PrepareTraining:
         t0 = time.time()
         initial = self._benchmark.measure_placement(
             ts_path, config.bench_games, config.effective_bench_seats,
-            config.concurrency, session_size=50,
+            config.concurrency, session_size=config.outplace_session_size,
         )
         self._presenter.on_initial_benchmark(
             initial, config.bench_games, config.effective_bench_seats, time.time() - t0,

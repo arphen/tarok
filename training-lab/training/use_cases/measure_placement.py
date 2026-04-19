@@ -38,7 +38,7 @@ class MeasurePlacement:
                 config.bench_games,
                 config.effective_bench_seats,
                 config.concurrency,
-                session_size=50,
+                session_size=config.outplace_session_size,
             )
             bench_time = time.time() - t0
             self._presenter.on_benchmark_done(placement, bench_time)
