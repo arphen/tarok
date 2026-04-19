@@ -339,6 +339,31 @@ async def test_checkpoints_includes_root_level(client, tmp_path, monkeypatch):
     assert "tarok_agent_ep42.pt" in filenames
 
 
+async def test_checkpoints_lists_persona_test_pt(client, tmp_path, monkeypatch):
+    """Persona folders expose both _current.pt and _test.pt when present."""
+    import torch
+
+    backend_dir = tmp_path / "backend"
+    backend_dir.mkdir()
+    data_ckpt = tmp_path / "data" / "checkpoints"
+    persona = data_ckpt / "TestPersona"
+    persona.mkdir(parents=True)
+    dummy = {"episode": 1, "model_name": "M", "metrics": {"win_rate": 0.5}}
+    torch.save(dummy, persona / "_current.pt")
+    torch.save(dummy, persona / "_test.pt")
+
+    monkeypatch.chdir(backend_dir)
+
+    resp = await client.get("/api/checkpoints")
+    assert resp.status_code == 200
+    data = resp.json()
+    filenames = [c["filename"] for c in data["checkpoints"]]
+    assert "TestPersona/_current.pt" in filenames
+    assert "TestPersona/_test.pt" in filenames
+    test_entry = next(c for c in data["checkpoints"] if c["filename"] == "TestPersona/_test.pt")
+    assert "(test)" in (test_entry.get("model_name") or "")
+
+
 async def test_checkpoints_deduplicates(client, tmp_path, monkeypatch):
     """If same filename exists in both dirs, only one should appear."""
     import torch

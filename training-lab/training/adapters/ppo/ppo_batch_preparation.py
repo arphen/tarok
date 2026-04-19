@@ -30,6 +30,13 @@ def prepare_batched(raw: dict[str, Any], gamma: float = 0.99, gae_lambda: float 
     )
     oracle_states_raw = raw.get("oracle_states")
     oracle_states_np = np.asarray(oracle_states_raw, dtype=np.float32) if oracle_states_raw is not None else None
+    oracle_valid_raw = raw.get("oracle_valid_mask")
+    if oracle_states_np is None:
+        oracle_valid_mask_np = None
+    elif oracle_valid_raw is not None:
+        oracle_valid_mask_np = np.asarray(oracle_valid_raw, dtype=bool)
+    else:
+        oracle_valid_mask_np = np.ones(len(actions_np), dtype=bool)
 
     game_modes_np = np.asarray(raw["game_modes"], dtype=np.int8)
 
@@ -100,6 +107,9 @@ def prepare_batched(raw: dict[str, Any], gamma: float = 0.99, gae_lambda: float 
         "decision_types": decision_types_np,
         "legal_masks": torch.from_numpy(legal_masks_np),
         "oracle_states": torch.from_numpy(oracle_states_np) if oracle_states_np is not None else None,
+        "oracle_valid_mask": (
+            torch.from_numpy(oracle_valid_mask_np) if oracle_valid_mask_np is not None else None
+        ),
         "game_modes": game_modes_np,
         "behavioral_clone_mask": torch.from_numpy(behavioral_clone_mask_np),
     }

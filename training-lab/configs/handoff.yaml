@@ -48,6 +48,8 @@ imitation_coef_min: 0.10
 
 # --- Runner Hardware ---
 concurrency: 256
+lapajne_mc_worlds: 24   # Optional: worlds per Lapajne card decision (1..512)
+lapajne_mc_sims: 20   # Optional: sims per Lapajne MCTS tree (1..4096)
 device: auto
 iteration_runner_mode: spawn
 iteration_runner_restart_every: 10
@@ -58,7 +60,7 @@ league:
   min_nn_per_game: 2       # Start playing against other NNs (Self-Play)
   sampling: matchmaking    # Match against opponents of similar skill
   snapshot_interval: 10    # Start saving checkpoints to the pool
-  elo_outplace_unit_weight: 50
+  elo_outplace_unit_weight: 5
 
   opponents:
     - name: StockSkis

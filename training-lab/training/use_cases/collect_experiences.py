@@ -54,6 +54,8 @@ class CollectExperiences:
             config.explore_rate,
             config.concurrency,
             include_oracle_states=include_oracle_states,
+            lapajne_mc_worlds=config.lapajne_mc_worlds,
+            lapajne_mc_sims=config.lapajne_mc_sims,
         )
         seat_labels = [s.strip() for s in effective_seats.split(",")]
         nn_seats = [i for i, s in enumerate(seat_labels) if s == "nn"]

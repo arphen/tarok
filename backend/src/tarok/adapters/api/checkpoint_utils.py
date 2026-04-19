@@ -7,6 +7,7 @@ Supported token forms
 ---------------------
 - ``"PersonaName"``              →  ../data/checkpoints/PersonaName/_current.pt
 - ``"PersonaName/_current.pt"``  →  ../data/checkpoints/PersonaName/_current.pt
+- ``"PersonaName/_test.pt"``     →  ../data/checkpoints/PersonaName/_test.pt
 - ``"hall_of_fame/foo.pt"``      →  ../data/checkpoints/hall_of_fame/foo.pt
 - other relative path            →  tried under ../data/checkpoints/, then as literal
 """

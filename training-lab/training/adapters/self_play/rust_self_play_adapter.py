@@ -49,6 +49,8 @@ class RustSelfPlay(SelfPlayPort):
         concurrency: int,
         include_replay_data: bool = False,
         include_oracle_states: bool = False,
+        lapajne_mc_worlds: int | None = None,
+        lapajne_mc_sims: int | None = None,
     ) -> dict[str, Any]:
         raw = te.run_self_play(
             n_games=n_games,
@@ -58,6 +60,8 @@ class RustSelfPlay(SelfPlayPort):
             seat_config=seat_config,
             include_replay_data=include_replay_data,
             include_oracle_states=include_oracle_states,
+            lapajne_mc_worlds=lapajne_mc_worlds,
+            lapajne_mc_sims=lapajne_mc_sims,
         )
 
         # Compatibility shim for older engine builds that don't expose game_modes.

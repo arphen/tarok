@@ -147,6 +147,11 @@ def merge_experiences(primary: dict[str, Any], extra: dict[str, Any]) -> dict[st
     """Concatenate two raw-experience dicts along the sample axis.
 
     ``extra`` game IDs are offset so they don't collide with ``primary``.
+
+    Oracle state handling: if either side carries oracle states, the output
+    ``oracle_states`` is always aligned to the merged sample axis. Samples
+    without real oracle info are zero-padded and flagged ``False`` in the
+    returned ``oracle_valid_mask`` so downstream IL distillation can skip them.
     """
     n_primary_games = int(primary["scores"].shape[0])
     extra_game_ids = np.asarray(extra["game_ids"], dtype=np.int64) + n_primary_games
@@ -168,6 +173,8 @@ def merge_experiences(primary: dict[str, Any], extra: dict[str, Any]) -> dict[st
     if extra_bc is None:
         extra_bc = np.zeros(n_extra, dtype=bool)
 
+    merged_oracle, merged_oracle_valid = _merge_oracle_states(primary, extra, n_primary, n_extra)
+
     return {
         "states": _cat("states"),
         "actions": _cat("actions"),
@@ -179,8 +186,47 @@ def merge_experiences(primary: dict[str, Any], extra: dict[str, Any]) -> dict[st
         "game_ids": _cat("game_ids"),
         "players": _cat("players"),
         "scores": merged_scores,
-        "oracle_states": primary.get("oracle_states"),
+        "oracle_states": merged_oracle,
+        "oracle_valid_mask": merged_oracle_valid,
         "behavioral_clone_mask": np.concatenate(
             [np.asarray(primary_bc, dtype=bool), np.asarray(extra_bc, dtype=bool)], axis=0
         ),
     }
+
+
+def _merge_oracle_states(
+    primary: dict[str, Any],
+    extra: dict[str, Any],
+    n_primary: int,
+    n_extra: int,
+) -> tuple[np.ndarray | None, np.ndarray | None]:
+    """Concatenate oracle states across merged batches, zero-padding gaps."""
+    prim_oracle = primary.get("oracle_states")
+    extra_oracle = extra.get("oracle_states")
+    if prim_oracle is None and extra_oracle is None:
+        return None, None
+
+    reference = prim_oracle if prim_oracle is not None else extra_oracle
+    oracle_dim = int(np.asarray(reference).shape[1])
+
+    def _valid_for(side: dict[str, Any], n: int, side_oracle: Any) -> np.ndarray:
+        explicit = side.get("oracle_valid_mask")
+        if explicit is not None:
+            return np.asarray(explicit, dtype=bool)
+        return np.ones(n, dtype=bool) if side_oracle is not None else np.zeros(n, dtype=bool)
+
+    if prim_oracle is None:
+        prim_arr = np.zeros((n_primary, oracle_dim), dtype=np.float32)
+    else:
+        prim_arr = np.asarray(prim_oracle, dtype=np.float32)
+    if extra_oracle is None:
+        extra_arr = np.zeros((n_extra, oracle_dim), dtype=np.float32)
+    else:
+        extra_arr = np.asarray(extra_oracle, dtype=np.float32)
+
+    merged_oracle = np.concatenate([prim_arr, extra_arr], axis=0)
+    merged_valid = np.concatenate(
+        [_valid_for(primary, n_primary, prim_oracle), _valid_for(extra, n_extra, extra_oracle)],
+        axis=0,
+    )
+    return merged_oracle, merged_valid

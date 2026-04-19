@@ -40,7 +40,7 @@ def export_torchscript(checkpoint_path: str | None = None) -> str:
     """Export TarokNet to TorchScript, return path."""
     net = TarokNet(hidden_size=256)
     if checkpoint_path:
-        ckpt = torch.load(checkpoint_path, map_location="cpu", weights_only=True)
+        ckpt = torch.load(checkpoint_path, map_location="cpu", weights_only=False)
         sd = ckpt.get("model_state_dict", ckpt)
         net.load_state_dict(sd, strict=False)
     net.eval()

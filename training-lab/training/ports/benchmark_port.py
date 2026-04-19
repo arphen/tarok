@@ -14,5 +14,7 @@ class BenchmarkPort(ABC):
         seat_config: str,
         concurrency: int,
         session_size: int,
+        lapajne_mc_worlds: int | None = None,
+        lapajne_mc_sims: int | None = None,
     ) -> float:
         """Play greedy games and return average placement (1.0–4.0)."""

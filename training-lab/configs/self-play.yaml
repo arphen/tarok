@@ -37,6 +37,8 @@ imitation_width_elo: 250
 explore_rate: 0.10
 
 concurrency: 256
+lapajne_mc_worlds: 24   # Optional: worlds per Lapajne card decision (1..512)
+lapajne_mc_sims: 20   # Optional: sims per Lapajne MCTS tree (1..4096)
 device: auto
 iteration_runner_mode: spawn
 iteration_runner_restart_every: 10
@@ -48,7 +50,7 @@ league:
   snapshot_interval: 5      # auto-snapshot learner checkpoint every N iterations
   snapshot_elo_delta: 50    # admit snapshot only after this much learner Elo gain
   max_active_snapshots: 3   # cap active nn checkpoints kept in league pool
-  elo_outplace_unit_weight: 50  # effective K multiplier baseline for session-based outplacing
+  elo_outplace_unit_weight: 5
 
   opponents:
     - name: StockSkis

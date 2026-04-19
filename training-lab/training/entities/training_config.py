@@ -29,6 +29,8 @@ class TrainingConfig:
     device: str = "auto"
     save_dir: str = "data/checkpoints/training_run"
     concurrency: int = 128
+    lapajne_mc_worlds: int | None = None
+    lapajne_mc_sims: int | None = None
     imitation_coef: float = 0.3
     imitation_schedule: str = "constant"  # constant | linear | cosine | gaussian_elo
     imitation_coef_min: float = 0.0

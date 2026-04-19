@@ -46,7 +46,7 @@ async def list_checkpoints():
     """List checkpoints from the top-level checkpoints/ directory.
 
     - HOF: checkpoints/hall_of_fame/*.pt  (manually curated, committed to git)
-    - Persona models: checkpoints/{PersonaName}/_current.pt
+    - Persona models: checkpoints/{PersonaName}/_current.pt and optional _test.pt
     """
     import torch as _torch
 
@@ -101,39 +101,47 @@ async def list_checkpoints():
             result.append({"filename": f"hall_of_fame/{f.name}", "is_hof": True, "episode": 0})
             seen_filenames.add(f.name)
 
-    # 2. Persona subdirectories — expose _current.pt for each
+    # 2. Persona subdirectories — _current.pt and optional _test.pt
     for persona_dir in sorted(root_ckpt_dir.iterdir()):
         if not persona_dir.is_dir() or persona_dir.name == "hall_of_fame":
             continue
-        current = persona_dir / "_current.pt"
-        if not current.exists():
-            continue
         persona_name = persona_dir.name
-        try:
-            meta = _torch.load(current, map_location="cpu", weights_only=False)
-            model_name = meta.get("model_name") or meta.get("display_name") or persona_name
-            result.append(
-                {
-                    "filename": f"{persona_name}/_current.pt",
-                    "persona": persona_name,
-                    "model_name": model_name,
-                    "episode": meta.get("episode", 0),
-                    "session": meta.get("session", 0),
-                    "win_rate": meta.get("metrics", {}).get("win_rate", 0),
-                    "avg_reward": meta.get("metrics", {}).get("avg_reward", 0),
-                    "is_hof": False,
-                }
-            )
-            seen_filenames.add(f"{persona_name}/_current.pt")
-        except Exception:
-            result.append(
-                {
-                    "filename": f"{persona_name}/_current.pt",
-                    "persona": persona_name,
-                    "is_hof": False,
-                    "episode": 0,
-                }
-            )
-            seen_filenames.add(f"{persona_name}/_current.pt")
+        for basename in ("_current.pt", "_test.pt"):
+            ckpt_file = persona_dir / basename
+            if not ckpt_file.exists():
+                continue
+            rel = f"{persona_name}/{basename}"
+            if rel in seen_filenames:
+                continue
+            seen_filenames.add(rel)
+            try:
+                meta = _torch.load(ckpt_file, map_location="cpu", weights_only=False)
+                model_name = meta.get("model_name") or meta.get("display_name") or persona_name
+                if basename == "_test.pt":
+                    model_name = f"{model_name} (test)"
+                result.append(
+                    {
+                        "filename": rel,
+                        "persona": persona_name,
+                        "model_name": model_name,
+                        "episode": meta.get("episode", 0),
+                        "session": meta.get("session", 0),
+                        "win_rate": meta.get("metrics", {}).get("win_rate", 0),
+                        "avg_reward": meta.get("metrics", {}).get("avg_reward", 0),
+                        "is_hof": False,
+                    }
+                )
+            except Exception:
+                result.append(
+                    {
+                        "filename": rel,
+                        "persona": persona_name,
+                        "model_name": f"{persona_name} (test)"
+                        if basename == "_test.pt"
+                        else persona_name,
+                        "is_hof": False,
+                        "episode": 0,
+                    }
+                )
 
     return {"checkpoints": result}

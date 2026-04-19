@@ -3,7 +3,8 @@
  *
  * Cards won by a team are laid out in trick order, then split into groups of 3.
  * - Full group (3 cards): sum of card points − 2
- * - Incomplete last group (1–2 cards): each card − round(2/3 × card_points)
+ * - Incomplete last group of 2 cards: sum − 1
+ * - Incomplete last group of 1 card: sum − 0
  * Total over all 54 cards = ~70.
  */
 
@@ -51,9 +52,10 @@ export function groupCards(cards: CardInGroup[]): { groups: CountingGroup[]; tot
       deduction = 2;
       perCardValues = chunk.map(c => c.points);
     } else {
-      // Incomplete last group: each card − round(2/3 × card_value)
-      perCardValues = chunk.map(c => c.points - Math.round(c.points * 2 / 3));
-      deduction = chunk.reduce((s, c) => s + Math.round(c.points * 2 / 3), 0);
+      // Engine rule for incomplete trailing group:
+      // 2 cards => −1 total deduction, 1 card => −0.
+      deduction = chunk.length === 2 ? 1 : 0;
+      perCardValues = chunk.map(c => c.points);
     }
     const value = rawSum - deduction;
     groups.push({ cards: chunk, rawSum, deduction, value, isComplete, perCardValues });

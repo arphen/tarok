@@ -41,6 +41,15 @@ _STOCKSKIS_DESCRIPTIONS: dict[int, str] = {
 
 _STOCKSKIS_NAMED_VARIANTS: dict[str, tuple[str, str]] = {
     "m6": ("StockSkisPlayerM6", "Refined v5/v6 with cautious pagat, point-securing discards"),
+    "pozrl": ("StockSkisPlayerPozrl", "Heuristic policy based on Domen Požrl's 2021 Tarock thesis"),
+    "lapajne": (
+        "StockSkisPlayerLapajne",
+        "MCTS-based heuristic inspired by Lapajne (2011)",
+    ),
+    "lustrek": (
+        "StockSkisPlayerLustrek",
+        "Baseline heuristic inspired by Luštrek et al. (ICGA 2003)",
+    ),
 }
 
 

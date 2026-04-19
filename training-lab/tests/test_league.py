@@ -29,6 +29,11 @@ def test_league_opponent_seat_token_bot() -> None:
     assert bot.seat_token() == "bot_v5"
 
 
+def test_league_opponent_seat_token_bot_pozrl() -> None:
+    bot = LeagueOpponent(name="POZRL", type="bot_pozrl")
+    assert bot.seat_token() == "bot_pozrl"
+
+
 def test_league_opponent_seat_token_checkpoint() -> None:
     ckpt = LeagueOpponent(name="Iter10", type="nn_checkpoint", path="checkpoints/iter_10.pt")
     assert ckpt.seat_token() == "checkpoints/iter_10.pt"

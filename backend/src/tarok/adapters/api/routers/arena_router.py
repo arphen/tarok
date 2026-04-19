@@ -36,6 +36,8 @@ class ArenaRequest(BaseModel):
     agents: list[dict]  # [{name, type, checkpoint?}] — exactly 4
     total_games: int = 100000
     session_size: int = 50  # games per session for progress tracking
+    lapajne_mc_worlds: int | None = None
+    lapajne_mc_sims: int | None = None
 
 
 # ---- Endpoints ----
@@ -109,7 +111,7 @@ async def start_arena(req: ArenaRequest):
         if label is None:
             return {
                 "status": "error",
-                "message": f"Agent '{aname}' type '{atype}' is not supported. Use stockskis / stockskis_v5 / stockskis_v6 / stockskis_m6 / rl.",
+                "message": f"Agent '{aname}' type '{atype}' is not supported. Use stockskis / stockskis_lapajne / stockskis_v5 / stockskis_v6 / stockskis_m6 / stockskis_pozrl / stockskis_lustrek / rl.",
             }
         if label == "nn":
             has_nn = True
@@ -153,6 +155,8 @@ async def start_arena(req: ArenaRequest):
             seat_config=seat_config,
             has_nn=has_nn,
             ts_model_path=ts_model_path,
+            lapajne_mc_worlds=req.lapajne_mc_worlds,
+            lapajne_mc_sims=req.lapajne_mc_sims,
         )
     )
     return {"status": "started", "total_games": total, "session_size": session_size}
@@ -171,6 +175,8 @@ async def _run_arena(
     seat_config: str,
     has_nn: bool,
     ts_model_path: str | None,
+    lapajne_mc_worlds: int | None,
+    lapajne_mc_sims: int | None,
 ) -> None:
     global _arena_progress
 
@@ -472,7 +478,16 @@ async def _run_arena(
             notable_games,
         )
 
-    batch_size = min(2_000 if has_nn else 10_000, total)
+    # Lapajne uses per-move MCTS and is much slower than heuristic baselines;
+    # keep batches small so progress updates frequently and the UI doesn't look frozen.
+    has_lapajne = any(label == "bot_lapajne" for label in seat_config.split(","))
+    if has_lapajne:
+        batch_cap = 250
+    elif has_nn:
+        batch_cap = 2_000
+    else:
+        batch_cap = 10_000
+    batch_size = min(batch_cap, total)
 
     try:
         while games_done < total:
@@ -487,6 +502,8 @@ async def _run_arena(
                     explore_rate=0.0,
                     seat_config=seat_config,
                     include_replay_data=True,
+                    lapajne_mc_worlds=lapajne_mc_worlds,
+                    lapajne_mc_sims=lapajne_mc_sims,
                 ),
             )
 

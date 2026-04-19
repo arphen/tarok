@@ -135,7 +135,7 @@ async def run_dd_pretrain():
     net = TarokNet(hidden_size=256, oracle_critic=include_oracle).to(device)
     if resume_from:
         print(f"Resuming from {resume_from}")
-        net.load_state_dict(torch.load(resume_from, map_location=device, weights_only=True))
+        net.load_state_dict(torch.load(resume_from, map_location=device, weights_only=False))
 
     optimizer = torch.optim.Adam(net.parameters(), lr=lr)
 

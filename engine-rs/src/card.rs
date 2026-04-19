@@ -4,8 +4,6 @@
 /// the canonical deck order.  Hands and sets of cards are `CardSet` (a `u64`
 /// bitmask), giving O(1) membership tests, intersections, and suit filtering.
 
-
-
 // -----------------------------------------------------------------------
 // Card type / suit enums
 // -----------------------------------------------------------------------
@@ -196,9 +194,8 @@ impl Card {
                 22 => "Škis".to_string(),
                 _ => {
                     const ROMAN: [&str; 21] = [
-                        "I", "II", "III", "IV", "V", "VI", "VII", "VIII", "IX", "X",
-                        "XI", "XII", "XIII", "XIV", "XV", "XVI", "XVII", "XVIII", "XIX", "XX",
-                        "XXI",
+                        "I", "II", "III", "IV", "V", "VI", "VII", "VIII", "IX", "X", "XI", "XII",
+                        "XIII", "XIV", "XV", "XVI", "XVII", "XVIII", "XIX", "XX", "XXI",
                     ];
                     ROMAN[(v - 1) as usize].to_string()
                 }

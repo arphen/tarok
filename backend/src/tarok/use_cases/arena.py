@@ -39,23 +39,35 @@ def agent_type_to_seat_label(agent_type: str) -> str | None:
     t = agent_type.strip().lower()
     if t in ("stockskis", "stockskis_v5"):
         return "bot_v5"
+    if t in ("stockskis_lapajne", "lapajne", "bot_lapajne"):
+        return "bot_lapajne"
     if t == "stockskis_v6":
         return "bot_v6"
     if t in ("stockskis_m6", "bot_m6"):
         return "bot_m6"
+    if t in ("stockskis_pozrl", "bot_pozrl", "pozrl"):
+        return "bot_pozrl"
+    if t in ("lustrek", "stockskis_lustrek", "bot_lustrek"):
+        return "bot_lustrek"
     if t == "rl":
         return "nn"
     return None
 
 
 def export_checkpoint_to_torchscript(checkpoint_path: str) -> str:
-    """Load a regular PyTorch checkpoint and export a TorchScript model."""
+    """Return a path to a TorchScript .pt usable by the Rust arena NN seat.
+
+    If *checkpoint_path* is already a traced TorchScript module, returns that path.
+    Otherwise loads v4 training weights, traces ``_AllHeads``, and writes a temp file.
+    """
     import tempfile
 
     import torch
     from tarok_model.network import TarokNetV4
 
-    ckpt = torch.load(checkpoint_path, map_location="cpu", weights_only=True)
+    ckpt = torch.load(checkpoint_path, map_location="cpu", weights_only=False)
+    if isinstance(ckpt, torch.jit.ScriptModule):
+        return checkpoint_path
     sd = ckpt.get("model_state_dict", ckpt)
     model_arch = ckpt.get("model_arch")
     if model_arch != "v4":

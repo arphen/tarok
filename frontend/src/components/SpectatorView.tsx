@@ -768,7 +768,8 @@ export default function SpectatorView({ onBack, checkpoints, arenaReplayGameId }
                           </div>
                           <p className="breakdown-explanation">
                             Cards are grouped in threes. Full groups: sum of card points &minus; 2.
-                            Incomplete last group: each card &minus; round(2/3 &times; card value).
+                            Incomplete last group: 2 cards use sum &minus; 1, 1 card uses sum &minus; 0.
+                            {' '}Groups marked with * are incomplete final groups.
                             {' '}Grand total: {countingTeams.reduce((s, t) => s + t.total, 0)} (should be ~70).
                           </p>
                           <div className="counting-exam-grid">
@@ -811,12 +812,7 @@ export default function SpectatorView({ onBack, checkpoints, arenaReplayGameId }
                                         <td className="counting-calc-cell">
                                           {g.isComplete
                                             ? <>({g.cards.map(c => c.points).join(' + ')}) &minus; 2</>
-                                            : g.cards.map((c, ci) => (
-                                                <span key={ci}>
-                                                  {ci > 0 && ' + '}
-                                                  ({c.points} &minus; {Math.round(c.points * 2 / 3)})
-                                                </span>
-                                              ))
+                                            : <>({g.cards.map(c => c.points).join(' + ')}) &minus; {g.cards.length === 2 ? 1 : 0}</>
                                           }
                                         </td>
                                         <td className="counting-value-cell">{g.value}</td>

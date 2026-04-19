@@ -115,11 +115,14 @@ export default function BotArena({ onBack, checkpoints, onReplayGame }: BotArena
   const [agents, setAgents] = useState<AgentSetup[]>(DEFAULT_AGENTS.map(a => ({ ...a })));
   const [totalGames, setTotalGames] = useState(100000);
   const [sessionSize, setSessionSize] = useState(50);
+  const [lapajneMcWorlds, setLapajneMcWorlds] = useState(8);
+  const [lapajneMcSims, setLapajneMcSims] = useState(8);
   const [progress, setProgress] = useState<ArenaProgress | null>(null);
   const [running, setRunning] = useState(false);
   const [tab, setTab] = useState<Tab>('overview');
   const [stockskisTypes, setStockskisTypes] = useState<string[]>([]);
   const [historyRuns, setHistoryRuns] = useState<ArenaHistoryRun[]>([]);
+  const [startError, setStartError] = useState<string | null>(null);
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
   // Fetch available stockskis versions
@@ -139,6 +142,7 @@ export default function BotArena({ onBack, checkpoints, onReplayGame }: BotArena
       .then(r => r.json())
       .then((data: ArenaProgress) => {
         setProgress(data);
+        setRunning(data.status === 'running');
         if (data.status === 'done' || data.status === 'error' || data.status === 'cancelled') {
           setRunning(false);
           if (pollRef.current) {
@@ -162,29 +166,63 @@ export default function BotArena({ onBack, checkpoints, onReplayGame }: BotArena
   }, []);
 
   const startArena = async () => {
-    // Reset UI state
+    setStartError(null);
     setTab('overview');
     setRunning(false);
     setProgress({ status: 'running', games_done: 0, total_games: totalGames, analytics: null });
 
-    const resp = await fetch('/api/arena/start', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        agents: agents.map(a => ({
-          name: a.name,
-          type: a.type,
-          checkpoint: a.checkpoint || undefined,
-        })),
-        total_games: totalGames,
-        session_size: sessionSize,
-      }),
-    });
-    const data = await resp.json();
-    if (data.status === 'started') {
-      setRunning(true);
-      setProgress({ status: 'running', games_done: 0, total_games: totalGames, analytics: null });
-      pollRef.current = setInterval(pollProgress, 2000);
+    try {
+      const resp = await fetch('/api/arena/start', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          agents: agents.map(a => ({
+            name: a.name,
+            type: a.type,
+            checkpoint: a.checkpoint || undefined,
+          })),
+          total_games: totalGames,
+          session_size: sessionSize,
+          lapajne_mc_worlds: lapajneMcWorlds,
+          lapajne_mc_sims: lapajneMcSims,
+        }),
+      });
+      let data: { status?: string; message?: string; total_games?: number };
+      try {
+        data = await resp.json();
+      } catch {
+        setStartError(`Arena start failed (${resp.status}): could not read response.`);
+        setProgress(null);
+        return;
+      }
+      if (data.status === 'started') {
+        setRunning(true);
+        setProgress({
+          status: 'running',
+          games_done: 0,
+          total_games: data.total_games ?? totalGames,
+          analytics: null,
+        });
+        pollRef.current = setInterval(pollProgress, 2000);
+        return;
+      }
+      if (data.status === 'already_running') {
+        setRunning(true);
+        pollProgress();
+        if (!pollRef.current) pollRef.current = setInterval(pollProgress, 2000);
+        setStartError('Arena is already running. Showing live progress.');
+        return;
+      }
+      const msg =
+        data.message ||
+        (data.status === 'error'
+          ? 'The server rejected this arena configuration.'
+          : `Could not start arena (${data.status ?? 'unknown'}).`);
+      setStartError(msg);
+      setProgress(null);
+    } catch (e) {
+      setStartError(e instanceof Error ? e.message : 'Network error while starting arena.');
+      setProgress(null);
     }
   };
 
@@ -229,6 +267,7 @@ export default function BotArena({ onBack, checkpoints, onReplayGame }: BotArena
 
       {/* Configuration */}
       <div className="arena-config">
+        {startError && <div className="arena-error-banner">{startError}</div>}
         <div className="arena-agents">
           <h3>Agents</h3>
           <div className="arena-agent-grid">
@@ -283,6 +322,16 @@ export default function BotArena({ onBack, checkpoints, onReplayGame }: BotArena
             <input type="number" min={1} max={1000} step={10} value={sessionSize}
               onChange={e => setSessionSize(Number(e.target.value))} />
           </label>
+          <label>
+            Lapajne MC Worlds
+            <input type="number" min={1} max={512} step={1} value={lapajneMcWorlds}
+              onChange={e => setLapajneMcWorlds(Number(e.target.value))} />
+          </label>
+          <label>
+            Lapajne MC Sims
+            <input type="number" min={1} max={4096} step={1} value={lapajneMcSims}
+              onChange={e => setLapajneMcSims(Number(e.target.value))} />
+          </label>
           <div className="arena-actions">
             {!running ? (
               <button className="btn-gold btn-large" onClick={startArena}>
@@ -294,6 +343,7 @@ export default function BotArena({ onBack, checkpoints, onReplayGame }: BotArena
               </button>
             )}
           </div>
+          {startError && <div className="arena-error-banner" role="alert">{startError}</div>}
         </div>
       </div>
 
