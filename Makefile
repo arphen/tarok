@@ -88,6 +88,8 @@ setup-hooks:
 run: ensure-engine backend frontend
 
 backend:
+	@TORCH_LIB_DIR=$$(cd backend && uv run --default-index https://pypi.org/simple python -c 'import pathlib, torch; print(pathlib.Path(torch.__file__).resolve().parent / "lib")'); \
+	export DYLD_FALLBACK_LIBRARY_PATH="$$TORCH_LIB_DIR:$$DYLD_FALLBACK_LIBRARY_PATH"; \
 	cd backend && PYTHONPATH=src:../model/src uv run --default-index https://pypi.org/simple uvicorn tarok.adapters.api.server:app --reload --host 0.0.0.0 --port 8000 &
 
 frontend:

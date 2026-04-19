@@ -7,11 +7,12 @@
 use crate::card::*;
 use crate::game_state::*;
 use crate::player::*;
-use crate::stockskis_v3;
+use crate::stockskis_m6;
+use crate::stockskis_pozrl;
 use crate::stockskis_v1;
+use crate::stockskis_v3;
 use crate::stockskis_v5;
 use crate::stockskis_v6;
-use crate::stockskis_m6;
 
 // -----------------------------------------------------------------------
 // Bot version selector
@@ -24,6 +25,7 @@ pub enum BotVersion {
     V5,
     V6,
     M6,
+    Pozrl,
 }
 
 // -----------------------------------------------------------------------
@@ -57,6 +59,10 @@ impl StockSkisPlayer {
 
     pub fn m6() -> Self {
         Self::new(BotVersion::M6)
+    }
+
+    pub fn pozrl() -> Self {
+        Self::new(BotVersion::Pozrl)
     }
 }
 
@@ -94,6 +100,9 @@ impl BatchPlayer for StockSkisPlayer {
             BotVersion::V5 => stockskis_v5::choose_discards_v5(hand, must_discard, called_king),
             BotVersion::V6 => stockskis_v6::choose_discards_v6(hand, must_discard, called_king),
             BotVersion::M6 => stockskis_m6::choose_discards_m6(hand, must_discard, called_king),
+            BotVersion::Pozrl => {
+                stockskis_pozrl::choose_discards_pozrl(hand, must_discard, called_king)
+            }
         };
         Some(discards)
     }
@@ -105,6 +114,7 @@ impl BatchPlayer for StockSkisPlayer {
             BotVersion::V5 => "stockskis_v5",
             BotVersion::V6 => "stockskis_v6",
             BotVersion::M6 => "stockskis_m6",
+            BotVersion::Pozrl => "stockskis_pozrl",
         }
     }
 }
@@ -129,6 +139,7 @@ impl StockSkisPlayer {
             BotVersion::V5 => stockskis_v5::evaluate_bid_v5(hand, highest),
             BotVersion::V6 => stockskis_v6::evaluate_bid_v6(hand, highest),
             BotVersion::M6 => stockskis_m6::evaluate_bid_m6(hand, highest),
+            BotVersion::Pozrl => stockskis_pozrl::evaluate_bid_pozrl(hand, highest),
         };
 
         let action = contract_to_bid_action(chosen);
@@ -148,6 +159,7 @@ impl StockSkisPlayer {
             BotVersion::V5 => stockskis_v5::choose_king_v5(hand),
             BotVersion::V6 => stockskis_v6::choose_king_v6(hand),
             BotVersion::M6 => stockskis_m6::choose_king_m6(hand),
+            BotVersion::Pozrl => stockskis_pozrl::choose_king_pozrl(hand),
         };
 
         match chosen.and_then(|c| card_suit_idx(c.0)) {
@@ -167,6 +179,9 @@ impl StockSkisPlayer {
             BotVersion::V5 => stockskis_v5::choose_talon_group_v5(groups, hand, called_king),
             BotVersion::V6 => stockskis_v6::choose_talon_group_v6(groups, hand, called_king),
             BotVersion::M6 => stockskis_m6::choose_talon_group_m6(groups, hand, called_king),
+            BotVersion::Pozrl => {
+                stockskis_pozrl::choose_talon_group_pozrl(groups, hand, called_king)
+            }
         };
 
         if ctx.legal_mask.get(chosen).map_or(false, |&v| v > 0.5) {
@@ -184,6 +199,7 @@ impl StockSkisPlayer {
             BotVersion::V5 => stockskis_v5::choose_card_v5(hand, &ctx.gs, ctx.player),
             BotVersion::V6 => stockskis_v6::choose_card_v6(hand, &ctx.gs, ctx.player),
             BotVersion::M6 => stockskis_m6::choose_card_m6(hand, &ctx.gs, ctx.player),
+            BotVersion::Pozrl => stockskis_pozrl::choose_card_pozrl(hand, &ctx.gs, ctx.player),
         };
 
         let action = card.0 as usize;

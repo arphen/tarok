@@ -3,7 +3,6 @@
 /// The API is designed to be a drop-in replacement for the Python engine.
 /// Python code calls these functions with plain ints/lists and gets back
 /// plain lists/dicts.
-
 use numpy::{PyArray1, PyArrayMethods, PyReadonlyArray1};
 use pyo3::prelude::*;
 use rand::prelude::*;
@@ -430,7 +429,10 @@ impl PyGameState {
     /// V5 bidding: returns the chosen contract as Option<u8>, or None for pass.
     fn v5_choose_bid(&self, player: u8) -> Option<u8> {
         let hand = self.state.hands[player as usize];
-        let highest = self.state.bids.iter()
+        let highest = self
+            .state
+            .bids
+            .iter()
             .filter_map(|b| b.contract)
             .max_by_key(|c| c.strength());
         crate::stockskis_v5::evaluate_bid_v5(hand, highest).map(|c| c as u8)
@@ -445,19 +447,20 @@ impl PyGameState {
     /// V5 talon group selection: returns the group index (0 or 1, or 0-5).
     fn v5_choose_talon_group(&self, player: u8, groups: Vec<Vec<u8>>) -> usize {
         let hand = self.state.hands[player as usize];
-        let groups_cards: Vec<Vec<Card>> = groups.iter()
+        let groups_cards: Vec<Vec<Card>> = groups
+            .iter()
             .map(|g| g.iter().map(|&idx| Card(idx)).collect())
             .collect();
-        crate::stockskis_v5::choose_talon_group_v5(
-            &groups_cards, hand, self.state.called_king
-        )
+        crate::stockskis_v5::choose_talon_group_v5(&groups_cards, hand, self.state.called_king)
     }
 
     /// V5 discard selection: returns card indices to discard.
     fn v5_choose_discards(&self, player: u8, must_discard: usize) -> Vec<u8> {
         let hand = self.state.hands[player as usize];
         crate::stockskis_v5::choose_discards_v5(hand, must_discard, self.state.called_king)
-            .iter().map(|c| c.0).collect()
+            .iter()
+            .map(|c| c.0)
+            .collect()
     }
 
     /// V5 card play: returns the card index to play.
@@ -470,7 +473,10 @@ impl PyGameState {
 
     fn m6_choose_bid(&self, player: u8) -> Option<u8> {
         let hand = self.state.hands[player as usize];
-        let highest = self.state.bids.iter()
+        let highest = self
+            .state
+            .bids
+            .iter()
             .filter_map(|b| b.contract)
             .max_by_key(|c| c.strength());
         crate::stockskis_m6::evaluate_bid_m6(hand, highest).map(|c| c as u8)
@@ -483,23 +489,68 @@ impl PyGameState {
 
     fn m6_choose_talon_group(&self, player: u8, groups: Vec<Vec<u8>>) -> usize {
         let hand = self.state.hands[player as usize];
-        let groups_cards: Vec<Vec<Card>> = groups.iter()
+        let groups_cards: Vec<Vec<Card>> = groups
+            .iter()
             .map(|g| g.iter().map(|&idx| Card(idx)).collect())
             .collect();
-        crate::stockskis_m6::choose_talon_group_m6(
-            &groups_cards, hand, self.state.called_king
-        )
+        crate::stockskis_m6::choose_talon_group_m6(&groups_cards, hand, self.state.called_king)
     }
 
     fn m6_choose_discards(&self, player: u8, must_discard: usize) -> Vec<u8> {
         let hand = self.state.hands[player as usize];
         crate::stockskis_m6::choose_discards_m6(hand, must_discard, self.state.called_king)
-            .iter().map(|c| c.0).collect()
+            .iter()
+            .map(|c| c.0)
+            .collect()
     }
 
     fn m6_choose_card(&self, player: u8) -> u8 {
         let hand = self.state.hands[player as usize];
         crate::stockskis_m6::choose_card_m6(hand, &self.state, player).0
+    }
+
+    // -- POŽRL (Domen Požrl, 2021 thesis) decision functions --
+
+    fn pozrl_choose_bid(&self, player: u8) -> Option<u8> {
+        let hand = self.state.hands[player as usize];
+        let highest = self
+            .state
+            .bids
+            .iter()
+            .filter_map(|b| b.contract)
+            .max_by_key(|c| c.strength());
+        crate::stockskis_pozrl::evaluate_bid_pozrl(hand, highest).map(|c| c as u8)
+    }
+
+    fn pozrl_choose_king(&self, player: u8) -> Option<u8> {
+        let hand = self.state.hands[player as usize];
+        crate::stockskis_pozrl::choose_king_pozrl(hand).map(|c| c.0)
+    }
+
+    fn pozrl_choose_talon_group(&self, player: u8, groups: Vec<Vec<u8>>) -> usize {
+        let hand = self.state.hands[player as usize];
+        let groups_cards: Vec<Vec<Card>> = groups
+            .iter()
+            .map(|g| g.iter().map(|&idx| Card(idx)).collect())
+            .collect();
+        crate::stockskis_pozrl::choose_talon_group_pozrl(
+            &groups_cards,
+            hand,
+            self.state.called_king,
+        )
+    }
+
+    fn pozrl_choose_discards(&self, player: u8, must_discard: usize) -> Vec<u8> {
+        let hand = self.state.hands[player as usize];
+        crate::stockskis_pozrl::choose_discards_pozrl(hand, must_discard, self.state.called_king)
+            .iter()
+            .map(|c| c.0)
+            .collect()
+    }
+
+    fn pozrl_choose_card(&self, player: u8) -> u8 {
+        let hand = self.state.hands[player as usize];
+        crate::stockskis_pozrl::choose_card_pozrl(hand, &self.state, player).0
     }
 }
 
@@ -632,9 +683,15 @@ fn generate_warmup_data(
 /// Returns: winner player index (u8)
 #[pyfunction]
 #[pyo3(signature = (cards, is_last_trick=false, contract=None))]
-fn evaluate_trick_winner(cards: Vec<(u8, u8)>, is_last_trick: bool, contract: Option<u8>) -> PyResult<u8> {
+fn evaluate_trick_winner(
+    cards: Vec<(u8, u8)>,
+    is_last_trick: bool,
+    contract: Option<u8>,
+) -> PyResult<u8> {
     if cards.len() != 4 {
-        return Err(pyo3::exceptions::PyValueError::new_err("Trick must have exactly 4 cards"));
+        return Err(pyo3::exceptions::PyValueError::new_err(
+            "Trick must have exactly 4 cards",
+        ));
     }
     let mut trick = Trick::new(cards[0].0);
     for &(player, card_idx) in &cards {
@@ -656,7 +713,12 @@ fn evaluate_trick_winner(cards: Vec<(u8, u8)>, is_last_trick: bool, contract: Op
 /// Returns: list of card indices that are legal to play
 #[pyfunction]
 #[pyo3(signature = (hand, trick_cards, contract=None, is_last_trick=false))]
-fn compute_legal_plays(hand: Vec<u8>, trick_cards: Vec<(u8, u8)>, contract: Option<u8>, is_last_trick: bool) -> Vec<u8> {
+fn compute_legal_plays(
+    hand: Vec<u8>,
+    trick_cards: Vec<(u8, u8)>,
+    contract: Option<u8>,
+    is_last_trick: bool,
+) -> Vec<u8> {
     let mut hand_set = CardSet::EMPTY;
     for &idx in &hand {
         hand_set.insert(Card(idx));
@@ -743,11 +805,11 @@ fn run_self_play(
     include_replay_data: bool,
     include_oracle_states: bool,
 ) -> PyResult<PyObject> {
-    use std::sync::Arc;
-    use crate::self_play::{SelfPlayRunner, GameResult};
     use crate::player::{BatchPlayer, CARD_ACTION_SIZE};
-    use crate::player_nn::NeuralNetPlayer;
     use crate::player_bot::StockSkisPlayer;
+    use crate::player_nn::NeuralNetPlayer;
+    use crate::self_play::{GameResult, SelfPlayRunner};
+    use std::sync::Arc;
 
     // Parse seat_config: "nn,nn,nn,nn" or "nn,bot_v5,bot_v5,bot_v5" etc.
     let seat_labels: Vec<&str> = seat_config.split(',').map(|s| s.trim()).collect();
@@ -760,7 +822,7 @@ fn run_self_play(
     let needs_nn = seat_labels.iter().any(|&s| s == "nn");
     if needs_nn && model_path.is_none() {
         return Err(pyo3::exceptions::PyValueError::new_err(
-            "model_path is required when seat_config contains 'nn'"
+            "model_path is required when seat_config contains 'nn'",
         ));
     }
 
@@ -776,13 +838,15 @@ fn run_self_play(
     };
 
     // Cache for path-based NN opponents (loaded once per unique path)
-    let mut path_players: std::collections::HashMap<String, Arc<dyn BatchPlayer>> = std::collections::HashMap::new();
+    let mut path_players: std::collections::HashMap<String, Arc<dyn BatchPlayer>> =
+        std::collections::HashMap::new();
 
     let mut bot_v1: Option<Arc<dyn BatchPlayer>> = None;
     let mut bot_v3: Option<Arc<dyn BatchPlayer>> = None;
     let mut bot_v5: Option<Arc<dyn BatchPlayer>> = None;
     let mut bot_v6: Option<Arc<dyn BatchPlayer>> = None;
     let mut bot_m6: Option<Arc<dyn BatchPlayer>> = None;
+    let mut bot_pozrl: Option<Arc<dyn BatchPlayer>> = None;
 
     let mut players: Vec<Arc<dyn BatchPlayer>> = Vec::with_capacity(4);
     for &label in &seat_labels {
@@ -818,6 +882,12 @@ fn run_self_play(
                 }
                 bot_m6.as_ref().unwrap().clone()
             }
+            "bot_pozrl" => {
+                if bot_pozrl.is_none() {
+                    bot_pozrl = Some(Arc::new(StockSkisPlayer::pozrl()));
+                }
+                bot_pozrl.as_ref().unwrap().clone()
+            }
             path if path.ends_with(".pt") || path.contains('/') || path.contains('\\') => {
                 // Path-based frozen NN checkpoint — cached by path
                 if !path_players.contains_key(path) {
@@ -832,7 +902,7 @@ fn run_self_play(
             }
             other => {
                 return Err(pyo3::exceptions::PyValueError::new_err(
-                    format!("Unknown seat type '{}'. Use 'nn', 'bot_v1', 'bot_v3', 'bot_v5', 'bot_v6', 'bot_m6', or a .pt path.", other)
+                    format!("Unknown seat type '{}'. Use 'nn', 'bot_v1', 'bot_v3', 'bot_v5', 'bot_v6', 'bot_m6', 'bot_pozrl', or a .pt path.", other)
                 ));
             }
         };
@@ -961,12 +1031,24 @@ fn run_self_play(
         .map_err(|e| pyo3::exceptions::PyValueError::new_err(format!("states: {e}")))?;
     dict.set_item("states", states_arr)?;
     dict.set_item("actions", numpy::PyArray1::<u16>::from_vec(py, all_actions))?;
-    dict.set_item("log_probs", numpy::PyArray1::<f32>::from_vec(py, all_log_probs))?;
+    dict.set_item(
+        "log_probs",
+        numpy::PyArray1::<f32>::from_vec(py, all_log_probs),
+    )?;
     dict.set_item("values", numpy::PyArray1::<f32>::from_vec(py, all_values))?;
-    dict.set_item("decision_types", numpy::PyArray1::<u8>::from_vec(py, all_dt))?;
-    dict.set_item("game_modes", numpy::PyArray1::<u8>::from_vec(py, all_game_modes))?;
+    dict.set_item(
+        "decision_types",
+        numpy::PyArray1::<u8>::from_vec(py, all_dt),
+    )?;
+    dict.set_item(
+        "game_modes",
+        numpy::PyArray1::<u8>::from_vec(py, all_game_modes),
+    )?;
     dict.set_item("rewards", numpy::PyArray1::<f32>::from_vec(py, all_rewards))?;
-    dict.set_item("game_ids", numpy::PyArray1::<u32>::from_vec(py, all_game_ids))?;
+    dict.set_item(
+        "game_ids",
+        numpy::PyArray1::<u32>::from_vec(py, all_game_ids),
+    )?;
     dict.set_item("players", numpy::PyArray1::<u8>::from_vec(py, all_players))?;
     if include_oracle_states {
         let oracle_arr = PyArray1::<f32>::from_vec(py, all_oracle_states)
@@ -987,15 +1069,30 @@ fn run_self_play(
     dict.set_item("scores", scores_arr)?;
 
     // Arena metadata arrays
-    dict.set_item("contracts", numpy::PyArray1::<u8>::from_vec(py, all_contracts))?;
-    dict.set_item("declarers", numpy::PyArray1::<i8>::from_vec(py, all_declarers))?;
-    dict.set_item("partners", numpy::PyArray1::<i8>::from_vec(py, all_partners))?;
-    let flat_bid_contracts: Vec<i8> = all_bid_contracts.iter().flat_map(|b| b.iter().copied()).collect();
+    dict.set_item(
+        "contracts",
+        numpy::PyArray1::<u8>::from_vec(py, all_contracts),
+    )?;
+    dict.set_item(
+        "declarers",
+        numpy::PyArray1::<i8>::from_vec(py, all_declarers),
+    )?;
+    dict.set_item(
+        "partners",
+        numpy::PyArray1::<i8>::from_vec(py, all_partners),
+    )?;
+    let flat_bid_contracts: Vec<i8> = all_bid_contracts
+        .iter()
+        .flat_map(|b| b.iter().copied())
+        .collect();
     let bid_contracts_arr = PyArray1::<i8>::from_vec(py, flat_bid_contracts)
         .reshape([total_games, 4])
         .map_err(|e| pyo3::exceptions::PyValueError::new_err(format!("bid_contracts: {e}")))?;
     dict.set_item("bid_contracts", bid_contracts_arr)?;
-    let flat_taroks: Vec<u8> = all_taroks_in_hand.iter().flat_map(|t| t.iter().copied()).collect();
+    let flat_taroks: Vec<u8> = all_taroks_in_hand
+        .iter()
+        .flat_map(|t| t.iter().copied())
+        .collect();
     let taroks_arr = PyArray1::<u8>::from_vec(py, flat_taroks)
         .reshape([total_games, 4])
         .map_err(|e| pyo3::exceptions::PyValueError::new_err(format!("taroks_in_hand: {e}")))?;
@@ -1020,7 +1117,8 @@ fn run_self_play(
             let bids: Vec<(u8, u8)> = result.trace.bids.clone();
             let bids_list = pyo3::types::PyList::new(
                 py,
-                bids.iter().map(|(p, a)| pyo3::types::PyTuple::new(py, &[*p, *a]).unwrap()),
+                bids.iter()
+                    .map(|(p, a)| pyo3::types::PyTuple::new(py, &[*p, *a]).unwrap()),
             )?;
             trace_dict.set_item("bids", bids_list)?;
 
@@ -1042,15 +1140,17 @@ fn run_self_play(
                 }
             }
 
-            let put_down_list = pyo3::types::PyList::new(
-                py,
-                result.trace.put_down.iter().map(|&c| c),
-            )?;
+            let put_down_list =
+                pyo3::types::PyList::new(py, result.trace.put_down.iter().map(|&c| c))?;
             trace_dict.set_item("put_down", put_down_list)?;
 
             let cards_list = pyo3::types::PyList::new(
                 py,
-                result.trace.cards_played.iter().map(|(p, c)| pyo3::types::PyTuple::new(py, &[*p, *c]).unwrap()),
+                result
+                    .trace
+                    .cards_played
+                    .iter()
+                    .map(|(p, c)| pyo3::types::PyTuple::new(py, &[*p, *c]).unwrap()),
             )?;
             trace_dict.set_item("cards_played", cards_list)?;
 
@@ -1084,11 +1184,7 @@ fn run_self_play(
 ///   - `n_games`: int
 #[pyfunction]
 #[pyo3(signature = (n_games, seat_config="bot_v5,bot_v5,bot_v5,bot_v5"))]
-fn run_arena_games(
-    py: Python<'_>,
-    n_games: u32,
-    seat_config: &str,
-) -> PyResult<PyObject> {
+fn run_arena_games(py: Python<'_>, n_games: u32, seat_config: &str) -> PyResult<PyObject> {
     use crate::arena::{self, BotVersion};
 
     let seat_labels: Vec<&str> = seat_config.split(',').map(|s| s.trim()).collect();
@@ -1548,7 +1644,10 @@ fn compute_gae<'py>(
         returns[idx] = gae + values[idx];
     }
 
-    Ok((PyArray1::from_vec(py, advantages), PyArray1::from_vec(py, returns)))
+    Ok((
+        PyArray1::from_vec(py, advantages),
+        PyArray1::from_vec(py, returns),
+    ))
 }
 
 pub fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
@@ -1617,7 +1716,11 @@ pub fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
 /// for significantly better throughput with the more expensive v5 bot.
 #[pyfunction]
 #[pyo3(signature = (num_games, include_oracle=false))]
-fn generate_expert_data(py: Python<'_>, num_games: usize, include_oracle: bool) -> PyResult<PyObject> {
+fn generate_expert_data(
+    py: Python<'_>,
+    num_games: usize,
+    include_oracle: bool,
+) -> PyResult<PyObject> {
     // Release the GIL while running the CPU-intensive Rust computation
     let batch = py.allow_threads(|| {
         crate::expert_games_v5::generate_expert_batch_v5(num_games, include_oracle)
@@ -1641,10 +1744,22 @@ fn generate_expert_data(py: Python<'_>, num_games: usize, include_oracle: bool) 
         dict.set_item("oracle_states", py.None())?;
     }
 
-    dict.set_item("decision_types", numpy::PyArray1::<u8>::from_vec(py, batch.decision_types))?;
-    dict.set_item("actions", numpy::PyArray1::<u16>::from_vec(py, batch.actions))?;
-    dict.set_item("rewards", numpy::PyArray1::<f32>::from_vec(py, batch.rewards))?;
-    dict.set_item("legal_masks", numpy::PyArray1::<u8>::from_vec(py, batch.legal_masks))?;
+    dict.set_item(
+        "decision_types",
+        numpy::PyArray1::<u8>::from_vec(py, batch.decision_types),
+    )?;
+    dict.set_item(
+        "actions",
+        numpy::PyArray1::<u16>::from_vec(py, batch.actions),
+    )?;
+    dict.set_item(
+        "rewards",
+        numpy::PyArray1::<f32>::from_vec(py, batch.rewards),
+    )?;
+    dict.set_item(
+        "legal_masks",
+        numpy::PyArray1::<u8>::from_vec(py, batch.legal_masks),
+    )?;
     dict.set_item("num_experiences", n_exp)?;
 
     Ok(dict.into())
