@@ -4,6 +4,7 @@
 /// The key insight: even from random play, the VALUE FUNCTION can learn
 /// which game states tend to lead to positive or negative outcomes.
 /// This gives the critic a head start before self-play begins.
+
 use rand::prelude::*;
 use rand::rng;
 
@@ -32,7 +33,10 @@ struct WarmupExp {
 /// Each decision point in each game produces one experience.
 /// The reward is the final game score (divided by 100) for the player
 /// who made that decision.
-pub fn generate_warmup_batch(num_games: usize, include_oracle: bool) -> WarmupBatch {
+pub fn generate_warmup_batch(
+    num_games: usize,
+    include_oracle: bool,
+) -> WarmupBatch {
     let mut r = rng();
     let mut all_states: Vec<f32> = Vec::new();
     let mut all_oracle: Vec<f32> = Vec::new();
@@ -81,19 +85,14 @@ pub fn generate_warmup_batch(num_games: usize, include_oracle: bool) -> WarmupBa
             // Random bid: 60% pass, 40% bid something legal
             let do_pass = r.random_bool(0.6);
             if do_pass || highest == Some(Contract::Berac) {
-                state.bids.push(Bid {
-                    player: bidder,
-                    contract: None,
-                });
+                state.bids.push(Bid { player: bidder, contract: None });
             } else {
                 // Pick a random legal contract using forehand rules
                 let legal: Vec<Contract> = Contract::BIDDABLE
                     .iter()
                     .copied()
                     .filter(|&c| {
-                        if c == Contract::Three && !is_fh {
-                            return false;
-                        }
+                        if c == Contract::Three && !is_fh { return false; }
                         match highest {
                             Some(h) if is_fh => c.strength() >= h.strength(),
                             Some(h) => c.strength() > h.strength(),
@@ -102,16 +101,10 @@ pub fn generate_warmup_batch(num_games: usize, include_oracle: bool) -> WarmupBa
                     })
                     .collect();
                 if legal.is_empty() {
-                    state.bids.push(Bid {
-                        player: bidder,
-                        contract: None,
-                    });
+                    state.bids.push(Bid { player: bidder, contract: None });
                 } else {
                     let &choice = legal.choose(&mut r).unwrap();
-                    state.bids.push(Bid {
-                        player: bidder,
-                        contract: Some(choice),
-                    });
+                    state.bids.push(Bid { player: bidder, contract: Some(choice) });
                     highest = Some(choice);
                     winning_player = Some(bidder);
                 }
@@ -122,10 +115,7 @@ pub fn generate_warmup_batch(num_games: usize, include_oracle: bool) -> WarmupBa
 
         // Resolve bidding — forehand wins ties
         if let Some(h) = highest {
-            let forehand_bid = state
-                .bids
-                .iter()
-                .find(|b| b.player == forehand && b.contract == Some(h));
+            let forehand_bid = state.bids.iter().find(|b| b.player == forehand && b.contract == Some(h));
             if forehand_bid.is_some() {
                 winning_player = Some(forehand);
             }
@@ -186,10 +176,7 @@ pub fn generate_warmup_batch(num_games: usize, include_oracle: bool) -> WarmupBa
                 let mut exp_oracle = [0.0f32; encoding::ORACLE_STATE_SIZE];
                 if include_oracle {
                     encoding::encode_oracle_state(
-                        &mut exp_oracle,
-                        &state,
-                        player,
-                        encoding::DT_CARD_PLAY,
+                        &mut exp_oracle, &state, player, encoding::DT_CARD_PLAY,
                     );
                 }
                 exps.push(WarmupExp {
@@ -382,15 +369,8 @@ mod tests {
     fn warmup_batch_produces_experiences() {
         let batch = generate_warmup_batch(10, false);
         // Each game has at least 48 card plays + some bids
-        assert!(
-            batch.rewards.len() >= 10 * 48,
-            "Got {} exps",
-            batch.rewards.len()
-        );
-        assert_eq!(
-            batch.states.len(),
-            batch.rewards.len() * encoding::STATE_SIZE
-        );
+        assert!(batch.rewards.len() >= 10 * 48, "Got {} exps", batch.rewards.len());
+        assert_eq!(batch.states.len(), batch.rewards.len() * encoding::STATE_SIZE);
         assert_eq!(batch.decision_types.len(), batch.rewards.len());
         // Oracle should be empty when not requested
         assert!(batch.oracle_states.is_empty());

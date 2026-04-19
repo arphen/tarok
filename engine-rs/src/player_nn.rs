@@ -5,7 +5,7 @@
 //! masked softmax — entirely in Rust, no Python / GIL.
 
 use rand::Rng;
-use tch::{no_grad, CModule, Device, Tensor};
+use tch::{CModule, Device, Tensor, no_grad};
 
 use crate::player::*;
 
@@ -21,13 +21,9 @@ pub struct NeuralNetPlayer {
 
 impl NeuralNetPlayer {
     pub fn new(model_path: &str, device: Device, explore_rate: f64) -> Self {
-        let model =
-            CModule::load_on_device(model_path, device).expect("Failed to load TorchScript model");
-        NeuralNetPlayer {
-            model,
-            device,
-            explore_rate,
-        }
+        let model = CModule::load_on_device(model_path, device)
+            .expect("Failed to load TorchScript model");
+        NeuralNetPlayer { model, device, explore_rate }
     }
 }
 
@@ -44,7 +40,8 @@ impl BatchPlayer for NeuralNetPlayer {
         // Build flat state tensor [B, state_size]
         let mut flat_states = vec![0f32; batch_size * state_size];
         for (i, ctx) in contexts.iter().enumerate() {
-            flat_states[i * state_size..(i + 1) * state_size].copy_from_slice(&ctx.state_encoding);
+            flat_states[i * state_size..(i + 1) * state_size]
+                .copy_from_slice(&ctx.state_encoding);
         }
 
         // Forward pass — model returns (bid_logits, king_logits, talon_logits, card_logits, values)
@@ -54,9 +51,7 @@ impl BatchPlayer for NeuralNetPlayer {
                     .reshape([batch_size as i64, state_size as i64])
                     .to_device(self.device),
             );
-            self.model
-                .forward_is(&[input])
-                .expect("model forward failed")
+            self.model.forward_is(&[input]).expect("model forward failed")
         });
 
         let tuple = match outputs {
@@ -64,22 +59,10 @@ impl BatchPlayer for NeuralNetPlayer {
             _ => panic!("Expected tuple output from model"),
         };
         let logit_tensors: [Tensor; 4] = [
-            match &tuple[0] {
-                tch::IValue::Tensor(t) => t.to_device(Device::Cpu),
-                _ => panic!("bad"),
-            },
-            match &tuple[1] {
-                tch::IValue::Tensor(t) => t.to_device(Device::Cpu),
-                _ => panic!("bad"),
-            },
-            match &tuple[2] {
-                tch::IValue::Tensor(t) => t.to_device(Device::Cpu),
-                _ => panic!("bad"),
-            },
-            match &tuple[3] {
-                tch::IValue::Tensor(t) => t.to_device(Device::Cpu),
-                _ => panic!("bad"),
-            },
+            match &tuple[0] { tch::IValue::Tensor(t) => t.to_device(Device::Cpu), _ => panic!("bad") },
+            match &tuple[1] { tch::IValue::Tensor(t) => t.to_device(Device::Cpu), _ => panic!("bad") },
+            match &tuple[2] { tch::IValue::Tensor(t) => t.to_device(Device::Cpu), _ => panic!("bad") },
+            match &tuple[3] { tch::IValue::Tensor(t) => t.to_device(Device::Cpu), _ => panic!("bad") },
         ];
         let values_t = match &tuple[4] {
             tch::IValue::Tensor(t) => t.to_device(Device::Cpu),
@@ -95,20 +78,13 @@ impl BatchPlayer for NeuralNetPlayer {
 
             // Epsilon-greedy exploration
             if self.explore_rate > 0.0 && rng.random::<f64>() < self.explore_rate {
-                let legal: Vec<usize> = ctx
-                    .legal_mask
-                    .iter()
-                    .enumerate()
+                let legal: Vec<usize> = ctx.legal_mask.iter().enumerate()
                     .filter(|(_, &v)| v > 0.5)
                     .map(|(j, _)| j)
                     .collect();
                 if !legal.is_empty() {
                     let action = legal[rng.random_range(0..legal.len())];
-                    results.push(DecisionResult {
-                        action,
-                        log_prob: 0.0,
-                        value,
-                    });
+                    results.push(DecisionResult { action, log_prob: 0.0, value });
                     continue;
                 }
             }
@@ -117,13 +93,8 @@ impl BatchPlayer for NeuralNetPlayer {
             let logits: Vec<f32> = (0..action_size)
                 .map(|j| logit_tensors[head_idx].double_value(&[i as i64, j as i64]) as f32)
                 .collect();
-            let (action, log_prob) =
-                sample_masked(&logits, &ctx.legal_mask[..action_size], &mut rng);
-            results.push(DecisionResult {
-                action,
-                log_prob,
-                value,
-            });
+            let (action, log_prob) = sample_masked(&logits, &ctx.legal_mask[..action_size], &mut rng);
+            results.push(DecisionResult { action, log_prob, value });
         }
 
         results
@@ -161,11 +132,7 @@ pub(crate) fn sample_masked(logits: &[f32], mask: &[f32], rng: &mut impl Rng) ->
         }
     } else {
         let legal_count = mask.iter().filter(|&&m| m > 0.5).count();
-        let uniform = if legal_count > 0 {
-            1.0 / legal_count as f32
-        } else {
-            0.0
-        };
+        let uniform = if legal_count > 0 { 1.0 / legal_count as f32 } else { 0.0 };
         for (i, p) in probs.iter_mut().enumerate() {
             *p = if mask[i] > 0.5 { uniform } else { 0.0 };
         }
@@ -182,9 +149,7 @@ pub(crate) fn sample_masked(logits: &[f32], mask: &[f32], rng: &mut impl Rng) ->
             break;
         }
     }
-    if chosen >= n {
-        chosen = n - 1;
-    }
+    if chosen >= n { chosen = n - 1; }
     if mask.get(chosen).map_or(true, |&m| m < 0.5) {
         chosen = mask.iter().position(|&m| m > 0.5).unwrap_or(0);
     }

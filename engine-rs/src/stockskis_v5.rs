@@ -17,6 +17,7 @@
 ///   change who wins the trick.
 /// - **Opposition coordination**: Defenders avoid wasting high taroks
 ///   and lead through declarer's weak suits.
+
 use crate::card::*;
 use crate::game_state::*;
 use crate::legal_moves;
@@ -171,8 +172,8 @@ impl CardTracker {
                     winner = trick.cards[i].0;
                 }
             }
-            let winner_is_declarer_team =
-                state.declarer == Some(winner) || state.partner == Some(winner);
+            let winner_is_declarer_team = state.declarer == Some(winner)
+                || state.partner == Some(winner);
             if winner_is_declarer_team {
                 declarer_team_points += trick_pts;
             } else {
@@ -180,9 +181,7 @@ impl CardTracker {
             }
         }
 
-        let tricks_left = (hand.len() as usize)
-            .saturating_sub(state.tricks.len())
-            .max(1);
+        let tricks_left = (hand.len() as usize).saturating_sub(state.tricks.len()).max(1);
         let phase = match state.tricks.len() {
             0..=3 => GamePhase::Early,
             4..=8 => GamePhase::Mid,
@@ -431,11 +430,7 @@ pub fn evaluate_bid_v5(hand: CardSet, highest_so_far: Option<Contract>) -> Optio
     }
 
     // Berač override
-    if can_berac
-        && best.map_or(true, |current| {
-            Contract::Berac.strength() > current.strength()
-        })
-    {
+    if can_berac && best.map_or(true, |current| Contract::Berac.strength() > current.strength()) {
         best = Some(Contract::Berac);
     }
 
@@ -643,15 +638,27 @@ pub fn evaluate_card_play_v5(
     let is_declarer = state.declarer == Some(player);
     let is_partner = state.partner == Some(player);
     let _is_playing = is_declarer || is_partner;
-    let is_klop = state.contract.map_or(false, |contract| contract.is_klop());
-    let is_berac = state.contract.map_or(false, |contract| contract.is_berac());
+    let is_klop = state
+        .contract
+        .map_or(false, |contract| contract.is_klop());
+    let is_berac = state
+        .contract
+        .map_or(false, |contract| contract.is_berac());
 
     if is_klop || is_berac {
         return eval_klop_berac_v5(card, hand, state, player, is_leading, tracker);
     }
 
     if is_leading {
-        eval_leading_v5(card, hand, state, player, is_declarer, is_partner, tracker)
+        eval_leading_v5(
+            card,
+            hand,
+            state,
+            player,
+            is_declarer,
+            is_partner,
+            tracker,
+        )
     } else {
         eval_following_v5(card, hand, state, player, is_declarer, is_partner, tracker)
     }
@@ -1052,7 +1059,9 @@ fn eval_following_v5(
             trick_pts * 3.5 - wo
         } else if num_played == 1 {
             // 2nd seat: be careful with high taroks if more players to come
-            if card.card_type() == CardType::Tarok && tracker.higher_taroks_out(card.value()) > 0 {
+            if card.card_type() == CardType::Tarok
+                && tracker.higher_taroks_out(card.value()) > 0
+            {
                 trick_pts * 0.6 - wo * 0.4
             } else {
                 trick_pts * 2.0 + wo * 0.2
@@ -1341,10 +1350,7 @@ mod tests {
         ]);
         let bid = evaluate_bid_v5(hand, None);
         match bid {
-            Some(c) => assert!(
-                !c.is_solo(),
-                "Should not bid solo with only 10 guaranteed pts"
-            ),
+            Some(c) => assert!(!c.is_solo(), "Should not bid solo with only 10 guaranteed pts"),
             None => {} // passing is also fine
         }
     }

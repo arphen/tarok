@@ -2,6 +2,7 @@
 ///
 /// Cards are counted in groups of 3: (sum of 3 cards) - 2.
 /// Total game points = 70. Declarer wins with > 35 (≥ 36).
+
 use crate::card::*;
 use crate::game_state::*;
 use crate::trick_eval::evaluate_trick;
@@ -279,30 +280,17 @@ fn score_normal(state: &GameState, contract: Contract) -> [i32; NUM_PLAYERS] {
 
     // Valat — when achieved, replaces ALL other scoring (base game + bonuses).
     // Only the valat value applies (250 silent / 500 announced), with kontra.
-    let decl_all = winners
-        .iter()
-        .all(|&w| state.get_team(w) == Team::DeclarerTeam);
-    let opp_all = winners
-        .iter()
-        .all(|&w| state.get_team(w) == Team::OpponentTeam);
+    let decl_all = winners.iter().all(|&w| state.get_team(w) == Team::DeclarerTeam);
+    let opp_all = winners.iter().all(|&w| state.get_team(w) == Team::OpponentTeam);
     let valat_achieved = decl_all || opp_all;
 
     let total_declarer;
     if valat_achieved {
         if let Some(ann_team) = announced_by(state, Announcement::Valat) {
-            let valat_sign = if (ann_team == Team::DeclarerTeam) == decl_all {
-                1
-            } else {
-                -1
-            };
-            total_declarer =
-                valat_sign * ANNOUNCED_VALAT * state.kontra_multiplier(KontraTarget::Valat);
+            let valat_sign = if (ann_team == Team::DeclarerTeam) == decl_all { 1 } else { -1 };
+            total_declarer = valat_sign * ANNOUNCED_VALAT * state.kontra_multiplier(KontraTarget::Valat);
         } else {
-            let valat_base = if decl_all {
-                SILENT_VALAT
-            } else {
-                -SILENT_VALAT
-            };
+            let valat_base = if decl_all { SILENT_VALAT } else { -SILENT_VALAT };
             total_declarer = valat_base * state.kontra_multiplier(KontraTarget::Valat);
         }
     } else {
@@ -433,9 +421,7 @@ fn build_trick_summary(state: &GameState) -> Vec<TrickSummaryEntry> {
 /// Full scoring breakdown for UI display. Returns all intermediate values
 /// so Python never re-derives scoring decisions.
 pub fn score_game_breakdown(state: &GameState) -> ScoreBreakdown {
-    let contract = state
-        .contract
-        .expect("score_game_breakdown without contract");
+    let contract = state.contract.expect("score_game_breakdown without contract");
     let scores = score_game(state);
     let trick_summary = build_trick_summary(state);
 
@@ -509,12 +495,7 @@ fn breakdown_berac(
             detail: Some(contract_label(contract).to_string()),
         },
         BreakdownLine {
-            label: if won {
-                "Declarer won all tricks avoided"
-            } else {
-                "Declarer won a trick — loss"
-            }
-            .to_string(),
+            label: if won { "Declarer won all tricks avoided" } else { "Declarer won a trick — loss" }.to_string(),
             value: Some(scores[declarer]),
             detail: Some(format!("Declarer tricks: {}", decl_tricks)),
         },
@@ -559,12 +540,7 @@ fn breakdown_barvni_valat(
             detail: Some(contract_label(contract).to_string()),
         },
         BreakdownLine {
-            label: if all_won {
-                "All tricks won"
-            } else {
-                "Failed — didn't win all tricks"
-            }
-            .to_string(),
+            label: if all_won { "All tricks won" } else { "Failed — didn't win all tricks" }.to_string(),
             value: Some(scores[declarer]),
             detail: None,
         },
@@ -630,11 +606,7 @@ fn breakdown_normal(
         )),
     });
 
-    let game_score = if declarer_won {
-        base + point_diff
-    } else {
-        -(base + point_diff)
-    };
+    let game_score = if declarer_won { base + point_diff } else { -(base + point_diff) };
     let km_game = state.kontra_multiplier(KontraTarget::Game);
     lines.push(BreakdownLine {
         label: "Game score".to_string(),
@@ -650,11 +622,7 @@ fn breakdown_normal(
     let decl_has_trula = full_decl_set.has_trula();
     let opp_has_trula = full_opp_set.has_trula();
     if let Some(ann_team) = announced_by(state, Announcement::Trula) {
-        let succeeded = if ann_team == Team::DeclarerTeam {
-            decl_has_trula
-        } else {
-            opp_has_trula
-        };
+        let succeeded = if ann_team == Team::DeclarerTeam { decl_has_trula } else { opp_has_trula };
         let km = state.kontra_multiplier(KontraTarget::Trula);
         let raw = if (ann_team == Team::DeclarerTeam) == succeeded {
             ANNOUNCED_TRULA
@@ -684,11 +652,7 @@ fn breakdown_normal(
     let decl_has_kings = full_decl_set.has_all_kings();
     let opp_has_kings = full_opp_set.has_all_kings();
     if let Some(ann_team) = announced_by(state, Announcement::Kings) {
-        let succeeded = if ann_team == Team::DeclarerTeam {
-            decl_has_kings
-        } else {
-            opp_has_kings
-        };
+        let succeeded = if ann_team == Team::DeclarerTeam { decl_has_kings } else { opp_has_kings };
         let km = state.kontra_multiplier(KontraTarget::Kings);
         let raw = if (ann_team == Team::DeclarerTeam) == succeeded {
             ANNOUNCED_KINGS
@@ -718,11 +682,7 @@ fn breakdown_normal(
     let decl_pagat = pagat_ultimo(state, Team::DeclarerTeam, &winners);
     let opp_pagat = pagat_ultimo(state, Team::OpponentTeam, &winners);
     if let Some(ann_team) = announced_by(state, Announcement::PagatUltimo) {
-        let succeeded = if ann_team == Team::DeclarerTeam {
-            decl_pagat
-        } else {
-            opp_pagat
-        };
+        let succeeded = if ann_team == Team::DeclarerTeam { decl_pagat } else { opp_pagat };
         let km = state.kontra_multiplier(KontraTarget::PagatUltimo);
         let raw = if (ann_team == Team::DeclarerTeam) == succeeded {
             ANNOUNCED_PAGAT_ULTIMO
@@ -749,21 +709,13 @@ fn breakdown_normal(
     }
 
     // Valat
-    let decl_all = winners
-        .iter()
-        .all(|&w| state.get_team(w) == Team::DeclarerTeam);
-    let opp_all = winners
-        .iter()
-        .all(|&w| state.get_team(w) == Team::OpponentTeam);
+    let decl_all = winners.iter().all(|&w| state.get_team(w) == Team::DeclarerTeam);
+    let opp_all = winners.iter().all(|&w| state.get_team(w) == Team::OpponentTeam);
     let valat_achieved = decl_all || opp_all;
 
     if valat_achieved {
         if let Some(ann_team) = announced_by(state, Announcement::Valat) {
-            let succeeded = if ann_team == Team::DeclarerTeam {
-                decl_all
-            } else {
-                opp_all
-            };
+            let succeeded = if ann_team == Team::DeclarerTeam { decl_all } else { opp_all };
             let km = state.kontra_multiplier(KontraTarget::Valat);
             let raw = if (ann_team == Team::DeclarerTeam) == succeeded {
                 ANNOUNCED_VALAT
@@ -776,19 +728,13 @@ fn breakdown_normal(
                 detail: None,
             });
         } else {
-            let raw = if decl_all {
-                SILENT_VALAT
-            } else {
-                -SILENT_VALAT
-            };
+            let raw = if decl_all { SILENT_VALAT } else { -SILENT_VALAT };
             let km = state.kontra_multiplier(KontraTarget::Valat);
             lines.push(BreakdownLine {
                 label: "VALAT (silent) — replaces all other scoring".to_string(),
                 value: Some(raw * km),
-                detail: Some(format!(
-                    "{} team won all tricks",
-                    if decl_all { "Declarer" } else { "Opponent" }
-                )),
+                detail: Some(format!("{} team won all tricks",
+                    if decl_all { "Declarer" } else { "Opponent" })),
             });
         }
     } else if let Some(ann_team) = announced_by(state, Announcement::Valat) {

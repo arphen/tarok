@@ -6,6 +6,7 @@
 ///
 /// Used by the expert-game generator to play millions of competent games
 /// at full Rust speed (~350K games/sec) for imitation learning pre-training.
+
 use crate::card::*;
 use crate::game_state::*;
 use crate::legal_moves;
@@ -179,11 +180,7 @@ fn evaluate_talon_group(group: &[Card], called_king: Option<Card>) -> f64 {
 }
 
 /// Choose best talon group index.
-pub fn choose_talon_group_v1(
-    groups: &[Vec<Card>],
-    _hand: CardSet,
-    called_king: Option<Card>,
-) -> usize {
+pub fn choose_talon_group_v1(groups: &[Vec<Card>], _hand: CardSet, called_king: Option<Card>) -> usize {
     let mut best_idx = 0;
     let mut best_score = f64::NEG_INFINITY;
     for (i, group) in groups.iter().enumerate() {
@@ -201,11 +198,7 @@ pub fn choose_talon_group_v1(
 // -----------------------------------------------------------------------
 
 /// Choose cards to discard. Prefers low-value suit cards, void-building.
-pub fn choose_discards_v1(
-    hand: CardSet,
-    must_discard: usize,
-    called_king: Option<Card>,
-) -> Vec<Card> {
+pub fn choose_discards_v1(hand: CardSet, must_discard: usize, called_king: Option<Card>) -> Vec<Card> {
     let called_suit = called_king.and_then(|k| k.suit());
 
     let mut discardable: Vec<Card> = hand
@@ -218,7 +211,9 @@ pub fn choose_discards_v1(
         let mut extra: Vec<Card> = hand
             .iter()
             .filter(|c| {
-                c.card_type() == CardType::Tarok && !c.is_trula() && !discardable.contains(c)
+                c.card_type() == CardType::Tarok
+                    && !c.is_trula()
+                    && !discardable.contains(c)
             })
             .collect();
         extra.sort_by_key(|c| c.value());
@@ -343,9 +338,11 @@ pub fn evaluate_card_play(
         };
 
         let best_is_ally = if is_playing {
-            best_player == state.declarer.unwrap_or(255) || state.partner == Some(best_player)
+            best_player == state.declarer.unwrap_or(255)
+                || state.partner == Some(best_player)
         } else {
-            best_player != state.declarer.unwrap_or(255) && state.partner != Some(best_player)
+            best_player != state.declarer.unwrap_or(255)
+                && state.partner != Some(best_player)
         };
 
         let trick_pts: f64 = (0..trick.count as usize)
@@ -409,7 +406,10 @@ pub fn choose_card_v1(hand: CardSet, state: &GameState, player: u8) -> Card {
         return legal_vec[0];
     }
 
-    let is_leading = state.current_trick.as_ref().map_or(true, |t| t.count == 0);
+    let is_leading = state
+        .current_trick
+        .as_ref()
+        .map_or(true, |t| t.count == 0);
 
     let mut best_card = legal_vec[0];
     let mut best_score = f64::NEG_INFINITY;

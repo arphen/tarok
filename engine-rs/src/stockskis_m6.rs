@@ -9,6 +9,7 @@
 ///   accounted for.  Only attempt pagat ultimo with 10+ taroks.
 /// - **Less aggressive play**: Toned-down multipliers on trick-point scoring
 ///   and more conservative tarok usage.
+
 use crate::card::*;
 use crate::game_state::*;
 use crate::legal_moves;
@@ -145,9 +146,7 @@ impl CardTracker {
         }
 
         let taroks_in_hand = hand.tarok_count();
-        let tricks_left = (hand.len() as usize)
-            .saturating_sub(state.tricks.len())
-            .max(1);
+        let tricks_left = (hand.len() as usize).saturating_sub(state.tricks.len()).max(1);
         let phase = match state.tricks.len() {
             0..=3 => GamePhase::Early,
             4..=8 => GamePhase::Mid,
@@ -199,6 +198,7 @@ impl CardTracker {
         }
         count
     }
+
 }
 
 // -----------------------------------------------------------------------
@@ -386,11 +386,7 @@ pub fn evaluate_bid_m6(hand: CardSet, highest_so_far: Option<Contract>) -> Optio
         }
     }
 
-    if can_berac
-        && best.map_or(true, |current| {
-            Contract::Berac.strength() > current.strength()
-        })
-    {
+    if can_berac && best.map_or(true, |current| Contract::Berac.strength() > current.strength()) {
         best = Some(Contract::Berac);
     }
 
@@ -571,15 +567,27 @@ pub fn evaluate_card_play_m6(
 ) -> f64 {
     let is_declarer = state.declarer == Some(player);
     let is_partner = state.partner == Some(player);
-    let is_klop = state.contract.map_or(false, |contract| contract.is_klop());
-    let is_berac = state.contract.map_or(false, |contract| contract.is_berac());
+    let is_klop = state
+        .contract
+        .map_or(false, |contract| contract.is_klop());
+    let is_berac = state
+        .contract
+        .map_or(false, |contract| contract.is_berac());
 
     if is_klop || is_berac {
         return eval_klop_berac_m6(card, hand, state, player, is_leading, tracker);
     }
 
     if is_leading {
-        eval_leading_m6(card, hand, state, player, is_declarer, is_partner, tracker)
+        eval_leading_m6(
+            card,
+            hand,
+            state,
+            player,
+            is_declarer,
+            is_partner,
+            tracker,
+        )
     } else {
         eval_following_m6(card, hand, state, player, is_declarer, is_partner, tracker)
     }
@@ -981,7 +989,9 @@ fn eval_following_m6(
         } else if is_last {
             trick_pts * 3.0 - wo
         } else if num_played == 1 {
-            if card.card_type() == CardType::Tarok && tracker.higher_taroks_out(card.value()) > 0 {
+            if card.card_type() == CardType::Tarok
+                && tracker.higher_taroks_out(card.value()) > 0
+            {
                 trick_pts * 0.5 - wo * 0.5
             } else {
                 trick_pts * 1.7 + wo * 0.15
@@ -1082,7 +1092,11 @@ fn worth_over(card: Card) -> i32 {
 // Announcements — pagat ultimo only with 10+ taroks
 // -----------------------------------------------------------------------
 
-pub fn choose_announcements_m6(hand: CardSet, state: &GameState, player: u8) -> Vec<u8> {
+pub fn choose_announcements_m6(
+    hand: CardSet,
+    state: &GameState,
+    player: u8,
+) -> Vec<u8> {
     let mut anns = Vec::new();
 
     // King ultimo for partner holding the called king

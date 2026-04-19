@@ -18,8 +18,8 @@ use crate::encoding;
 use crate::game_state::*;
 use crate::legal_moves;
 use crate::player::{
-    card_suit_idx, BatchPlayer, DecisionContext, DecisionResult, DecisionType, BID_IDX_TO_CONTRACT,
-    CARD_ACTION_SIZE, TALON_ACTION_SIZE,
+    BatchPlayer, DecisionContext, DecisionResult, DecisionType, TALON_ACTION_SIZE, CARD_ACTION_SIZE,
+    BID_IDX_TO_CONTRACT, card_suit_idx,
 };
 use crate::scoring;
 
@@ -141,7 +141,11 @@ impl SelfPlayRunner {
         SelfPlayRunner { players }
     }
 
-    pub fn run(&self, n_games: u32, concurrency: usize) -> Vec<GameResult> {
+    pub fn run(
+        &self,
+        n_games: u32,
+        concurrency: usize,
+    ) -> Vec<GameResult> {
         let mut rng = rand::rng();
         let mut results: Vec<GameResult> = Vec::with_capacity(n_games as usize);
         let mut slots: Vec<Option<InFlightGame>> = (0..concurrency).map(|_| None).collect();
@@ -218,28 +222,18 @@ impl SelfPlayRunner {
             }
 
             // Step 2: dispatch decisions grouped by unique player
-            let mut all_results: Vec<DecisionResult> = vec![
-                DecisionResult {
-                    action: 0,
-                    log_prob: 0.0,
-                    value: 0.0
-                };
-                pending.len()
-            ];
+            let mut all_results: Vec<DecisionResult> =
+                vec![DecisionResult { action: 0, log_prob: 0.0, value: 0.0 }; pending.len()];
 
             // Route pending indices into per-player index buffers (no alloc).
-            for buf in idx_bufs.iter_mut() {
-                buf.clear();
-            }
+            for buf in idx_bufs.iter_mut() { buf.clear(); }
             for (pi, pd) in pending.iter().enumerate() {
                 idx_bufs[seat_to_uid[pd.player as usize]].push(pi);
             }
 
             for (uid, up) in unique_players.iter().enumerate() {
                 let idx_buf = &idx_bufs[uid];
-                if idx_buf.is_empty() {
-                    continue;
-                }
+                if idx_buf.is_empty() { continue; }
 
                 // Build a borrowed context batch; this avoids deep-cloning GameState.
                 let mut contexts: Vec<DecisionContext<'_>> = Vec::with_capacity(idx_buf.len());
@@ -271,14 +265,18 @@ impl SelfPlayRunner {
                 // Move the game's scratch buffers into RawExperience (zero clones),
                 // replacing each with a fresh pre-allocated buffer for the next
                 // decision in this slot.
-                let state =
-                    std::mem::replace(&mut game.state_buf, vec![0f32; encoding::STATE_SIZE]);
+                let state = std::mem::replace(
+                    &mut game.state_buf,
+                    vec![0f32; encoding::STATE_SIZE],
+                );
                 let oracle_state = std::mem::replace(
                     &mut game.oracle_state_buf,
                     vec![0f32; encoding::ORACLE_STATE_SIZE],
                 );
-                let legal_mask =
-                    std::mem::replace(&mut game.legal_mask, vec![0f32; CARD_ACTION_SIZE]);
+                let legal_mask = std::mem::replace(
+                    &mut game.legal_mask,
+                    vec![0f32; CARD_ACTION_SIZE],
+                );
                 game_exps[gid].push(RawExperience {
                     state,
                     oracle_state,
@@ -437,12 +435,7 @@ impl SelfPlayRunner {
         game.state_buf.fill(0.0);
         encoding::encode_state(&mut game.state_buf, &game.gs, bidder, encoding::DT_BID);
         game.oracle_state_buf.fill(0.0);
-        encoding::encode_oracle_state(
-            &mut game.oracle_state_buf,
-            &game.gs,
-            bidder,
-            encoding::DT_BID,
-        );
+        encoding::encode_oracle_state(&mut game.oracle_state_buf, &game.gs, bidder, encoding::DT_BID);
 
         game.legal_mask.fill(0.0);
         game.legal_mask[0] = 1.0; // pass always legal
@@ -565,19 +558,9 @@ impl SelfPlayRunner {
         }
 
         game.state_buf.fill(0.0);
-        encoding::encode_state(
-            &mut game.state_buf,
-            &game.gs,
-            declarer,
-            encoding::DT_KING_CALL,
-        );
+        encoding::encode_state(&mut game.state_buf, &game.gs, declarer, encoding::DT_KING_CALL);
         game.oracle_state_buf.fill(0.0);
-        encoding::encode_oracle_state(
-            &mut game.oracle_state_buf,
-            &game.gs,
-            declarer,
-            encoding::DT_KING_CALL,
-        );
+        encoding::encode_oracle_state(&mut game.oracle_state_buf, &game.gs, declarer, encoding::DT_KING_CALL);
 
         game.legal_mask.fill(0.0);
         for &card in &callable {
@@ -660,19 +643,9 @@ impl SelfPlayRunner {
         game.gs.talon_revealed = groups;
 
         game.state_buf.fill(0.0);
-        encoding::encode_state(
-            &mut game.state_buf,
-            &game.gs,
-            declarer,
-            encoding::DT_TALON_PICK,
-        );
+        encoding::encode_state(&mut game.state_buf, &game.gs, declarer, encoding::DT_TALON_PICK);
         game.oracle_state_buf.fill(0.0);
-        encoding::encode_oracle_state(
-            &mut game.oracle_state_buf,
-            &game.gs,
-            declarer,
-            encoding::DT_TALON_PICK,
-        );
+        encoding::encode_oracle_state(&mut game.oracle_state_buf, &game.gs, declarer, encoding::DT_TALON_PICK);
 
         game.legal_mask.fill(0.0);
         for i in 0..num_groups.min(TALON_ACTION_SIZE) {
@@ -687,7 +660,11 @@ impl SelfPlayRunner {
         })
     }
 
-    fn apply_talon_pick(game: &mut InFlightGame, action_idx: usize, player: &Arc<dyn BatchPlayer>) {
+    fn apply_talon_pick(
+        game: &mut InFlightGame,
+        action_idx: usize,
+        player: &Arc<dyn BatchPlayer>,
+    ) {
         let declarer = match game.gs.declarer {
             Some(d) => d,
             None => return,
@@ -766,19 +743,9 @@ impl SelfPlayRunner {
         game.gs.current_player = player;
 
         game.state_buf.fill(0.0);
-        encoding::encode_state(
-            &mut game.state_buf,
-            &game.gs,
-            player,
-            encoding::DT_CARD_PLAY,
-        );
+        encoding::encode_state(&mut game.state_buf, &game.gs, player, encoding::DT_CARD_PLAY);
         game.oracle_state_buf.fill(0.0);
-        encoding::encode_oracle_state(
-            &mut game.oracle_state_buf,
-            &game.gs,
-            player,
-            encoding::DT_CARD_PLAY,
-        );
+        encoding::encode_oracle_state(&mut game.oracle_state_buf, &game.gs, player, encoding::DT_CARD_PLAY);
 
         let ctx = legal_moves::MoveCtx::from_state(&game.gs, player);
         let legal = legal_moves::generate_legal_moves(&ctx);

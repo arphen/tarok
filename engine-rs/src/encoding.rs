@@ -5,6 +5,7 @@
 ///  - Belief probabilities: 3×54 opponent card likelihoods with void inference
 ///  - Opponent card-play stats: 3×4 features (taroks, suits, kings, total)
 ///  - Trick context: 6 features (position + lead suit)
+
 use crate::card::*;
 use crate::game_state::*;
 use crate::trick_eval::evaluate_trick;
@@ -193,7 +194,7 @@ pub fn encode_state(buf: &mut [f32], state: &GameState, player: u8, decision_typ
     // Role one-hot (3 features: is_declarer, is_partner, is_opposition)
     if let Some(decl) = state.declarer {
         if player == decl {
-            buf[o] = 1.0; // is_declarer
+            buf[o] = 1.0;     // is_declarer
         } else if state.partner == Some(player) {
             buf[o + 1] = 1.0; // is_partner (revealed)
         } else if state.get_team(player) == Team::DeclarerTeam {

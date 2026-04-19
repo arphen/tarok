@@ -1,5 +1,3 @@
-use rand::prelude::*;
-use rand::rng;
 /// Lightweight arena runner for bot-vs-bot mass simulation.
 ///
 /// Unlike [`SelfPlayRunner`], this module does NOT collect training
@@ -9,7 +7,10 @@ use rand::rng;
 ///
 /// Uses Rayon parallelism: each game is fully independent, so all CPU
 /// cores are utilised without any synchronisation overhead.
+
 use rayon::prelude::*;
+use rand::prelude::*;
+use rand::rng;
 
 use crate::card::*;
 use crate::game_state::*;
@@ -28,10 +29,10 @@ pub enum BotVersion {
 /// Lightweight result for a single arena game.
 pub struct ArenaGameResult {
     pub scores: [i32; 4],
-    pub contract: u8,            // Contract as u8 (0=Klop..9=BarvniValat)
-    pub declarer: i8,            // -1 if nobody (Klop)
-    pub partner: i8,             // -1 if none
-    pub bid_contracts: [i8; 4],  // Per-seat chosen bid in this auction (-1=pass)
+    pub contract: u8,   // Contract as u8 (0=Klop..9=BarvniValat)
+    pub declarer: i8,   // -1 if nobody (Klop)
+    pub partner: i8,    // -1 if none
+    pub bid_contracts: [i8; 4], // Per-seat chosen bid in this auction (-1=pass)
     pub taroks_in_hand: [u8; 4], // Tarok count in dealt 12-card hand
 }
 
@@ -63,12 +64,7 @@ fn bot_king(v: BotVersion, hand: CardSet) -> Option<Card> {
     }
 }
 
-fn bot_talon(
-    v: BotVersion,
-    groups: &[Vec<Card>],
-    hand: CardSet,
-    called_king: Option<Card>,
-) -> usize {
+fn bot_talon(v: BotVersion, groups: &[Vec<Card>], hand: CardSet, called_king: Option<Card>) -> usize {
     match v {
         BotVersion::V5 => stockskis_v5::choose_talon_group_v5(groups, hand, called_king),
         BotVersion::V6 => stockskis_v6::choose_talon_group_v6(groups, hand, called_king),
@@ -123,37 +119,27 @@ fn play_one_game(game_idx: u32, versions: &[BotVersion; 4]) -> ArenaGameResult {
 
     for _ in 0..NUM_PLAYERS {
         let is_fh = bidder == forehand;
-        let bid = bot_bid(
-            versions[bidder as usize],
-            state.hands[bidder as usize],
-            highest,
-        )
-        .filter(|&c| {
-            if c == Contract::Three && !is_fh {
-                return false;
-            }
-            match highest {
-                Some(h) if is_fh => c.strength() >= h.strength(),
-                Some(h) => c.strength() > h.strength(),
-                None => true,
-            }
-        });
+        let bid = bot_bid(versions[bidder as usize], state.hands[bidder as usize], highest)
+            .filter(|&c| {
+                if c == Contract::Three && !is_fh {
+                    return false;
+                }
+                match highest {
+                    Some(h) if is_fh => c.strength() >= h.strength(),
+                    Some(h) => c.strength() > h.strength(),
+                    None => true,
+                }
+            });
 
         match bid {
             Some(contract) => {
-                state.bids.push(Bid {
-                    player: bidder,
-                    contract: Some(contract),
-                });
+                state.bids.push(Bid { player: bidder, contract: Some(contract) });
                 bid_contracts[bidder as usize] = contract as i8;
                 highest = Some(contract);
                 winning_player = Some(bidder);
             }
             None => {
-                state.bids.push(Bid {
-                    player: bidder,
-                    contract: None,
-                });
+                state.bids.push(Bid { player: bidder, contract: None });
             }
         }
 
@@ -162,10 +148,7 @@ fn play_one_game(game_idx: u32, versions: &[BotVersion; 4]) -> ArenaGameResult {
 
     // Resolve bidding — forehand wins ties
     if let Some(h) = highest {
-        let forehand_bid = state
-            .bids
-            .iter()
-            .find(|b| b.player == forehand && b.contract == Some(h));
+        let forehand_bid = state.bids.iter().find(|b| b.player == forehand && b.contract == Some(h));
         if forehand_bid.is_some() {
             winning_player = Some(forehand);
         }
@@ -309,12 +292,7 @@ fn handle_talon(state: &mut GameState, versions: &[BotVersion; 4]) {
     }
     state.talon_revealed = groups.clone();
 
-    let group_idx = bot_talon(
-        versions[declarer as usize],
-        &groups,
-        hand,
-        state.called_king,
-    );
+    let group_idx = bot_talon(versions[declarer as usize], &groups, hand, state.called_king);
     let picked = &groups[group_idx.min(groups.len().saturating_sub(1))];
     for &card in picked {
         state.hands[declarer as usize].insert(card);

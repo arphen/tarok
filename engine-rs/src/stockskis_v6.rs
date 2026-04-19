@@ -17,6 +17,7 @@
 ///   change who wins the trick.
 /// - **Opposition coordination**: Defenders avoid wasting high taroks
 ///   and lead through declarer's weak suits.
+
 use crate::card::*;
 use crate::game_state::*;
 use crate::legal_moves;
@@ -149,9 +150,7 @@ impl CardTracker {
             }
         }
 
-        let tricks_left = (hand.len() as usize)
-            .saturating_sub(state.tricks.len())
-            .max(1);
+        let tricks_left = (hand.len() as usize).saturating_sub(state.tricks.len()).max(1);
         let phase = match state.tricks.len() {
             0..=3 => GamePhase::Early,
             4..=8 => GamePhase::Mid,
@@ -202,6 +201,7 @@ impl CardTracker {
         }
         count
     }
+
 }
 
 // -----------------------------------------------------------------------
@@ -382,11 +382,7 @@ pub fn evaluate_bid_v6(hand: CardSet, highest_so_far: Option<Contract>) -> Optio
     }
 
     // Berač override
-    if can_berac
-        && best.map_or(true, |current| {
-            Contract::Berac.strength() > current.strength()
-        })
-    {
+    if can_berac && best.map_or(true, |current| Contract::Berac.strength() > current.strength()) {
         best = Some(Contract::Berac);
     }
 
@@ -449,30 +445,18 @@ pub fn choose_king_v6(hand: CardSet) -> Option<Card> {
 
 fn evaluate_talon_group_v6(group: &[Card], hand: CardSet, _called_king: Option<Card>) -> f64 {
     let mut score = 0.0;
-    if group.contains(&Card::tarok(21)) {
-        score += 100000.0;
-    }
-    if group.contains(&Card::tarok(22)) {
-        score += 10000.0;
-    }
-    if group.contains(&Card::tarok(1)) {
-        score += 1000.0;
-    }
+    if group.contains(&Card::tarok(21)) { score += 100000.0; }
+    if group.contains(&Card::tarok(22)) { score += 10000.0; }
+    if group.contains(&Card::tarok(1)) { score += 1000.0; }
 
     for &c in group {
         if c.card_type() == CardType::Tarok {
             score += 5.0;
-            if c.value() >= 15 {
-                score += 10.0;
-            }
-        } else if c.value() == 4 {
-            // King
+            if c.value() >= 15 { score += 10.0; }
+        } else if c.value() == 4 { // King
             let mut king_score = 25.0;
-            let suit_count = hand.suit_count(c.suit().unwrap())
-                + group.iter().filter(|&&g| g.suit() == c.suit()).count() as u32;
-            if suit_count >= 3 {
-                king_score -= 15.0;
-            }
+            let suit_count = hand.suit_count(c.suit().unwrap()) + group.iter().filter(|&&g| g.suit() == c.suit()).count() as u32;
+            if suit_count >= 3 { king_score -= 15.0; }
             score += king_score;
         } else if c.value() == 3 {
             score += 2.0;
@@ -505,16 +489,10 @@ pub fn choose_talon_group_v6(
 // -----------------------------------------------------------------------
 
 fn evaluate_discard_v6(c: Card, hand: CardSet) -> f64 {
-    if c.card_type() == CardType::Tarok || c.value() == 4 {
-        return -1000.0;
-    }
-    let mut score = c.value() as f64;
-    if c.value() == 3 {
-        score += 15.0;
-    }
-    if hand.suit_count(c.suit().unwrap()) == 1 {
-        score += 20.0;
-    }
+    if c.card_type() == CardType::Tarok || c.value() == 4 { return -1000.0; } 
+    let mut score = c.value() as f64; 
+    if c.value() == 3 { score += 15.0; } 
+    if hand.suit_count(c.suit().unwrap()) == 1 { score += 20.0; } 
     score
 }
 
@@ -531,9 +509,7 @@ pub fn choose_discards_v6(
     discardable.sort_by(|a, b| {
         let score_a = evaluate_discard_v6(*a, hand);
         let score_b = evaluate_discard_v6(*b, hand);
-        score_b
-            .partial_cmp(&score_a)
-            .unwrap_or(std::cmp::Ordering::Equal)
+        score_b.partial_cmp(&score_a).unwrap_or(std::cmp::Ordering::Equal)
     });
 
     discardable.into_iter().take(must_discard).collect()
@@ -551,15 +527,27 @@ pub fn evaluate_card_play_v6(
     let is_declarer = state.declarer == Some(player);
     let is_partner = state.partner == Some(player);
     let _is_playing = is_declarer || is_partner;
-    let is_klop = state.contract.map_or(false, |contract| contract.is_klop());
-    let is_berac = state.contract.map_or(false, |contract| contract.is_berac());
+    let is_klop = state
+        .contract
+        .map_or(false, |contract| contract.is_klop());
+    let is_berac = state
+        .contract
+        .map_or(false, |contract| contract.is_berac());
 
     if is_klop || is_berac {
         return eval_klop_berac_v6(card, hand, state, player, is_leading, tracker);
     }
 
     if is_leading {
-        eval_leading_v6(card, hand, state, player, is_declarer, is_partner, tracker)
+        eval_leading_v6(
+            card,
+            hand,
+            state,
+            player,
+            is_declarer,
+            is_partner,
+            tracker,
+        )
     } else {
         eval_following_v6(card, hand, state, player, is_declarer, is_partner, tracker)
     }
@@ -837,12 +825,10 @@ fn eval_following_v6(
     tracker: &CardTracker,
 ) -> f64 {
     let base = eval_following_v6_base(card, hand, state, player, is_declarer, is_partner, tracker);
-
+    
     let trick = state.current_trick.as_ref().unwrap();
     let num_played = trick.count as usize;
-    if num_played == 0 {
-        return base;
-    }
+    if num_played == 0 { return base; }
 
     let lead_suit = trick.lead_suit();
     let mut best_card = trick.cards[0].1;
@@ -863,11 +849,11 @@ fn eval_following_v6(
 
     let would_win = card.beats(best_card, lead_suit);
     let mut positional_bonus = 0.0;
-
+    
     if would_win {
         positional_bonus -= 10.0;
     } else if !best_is_ally {
-        positional_bonus += 25.0;
+        positional_bonus += 25.0; 
     }
 
     base + positional_bonus
@@ -1006,7 +992,9 @@ fn eval_following_v6_base(
             trick_pts * 3.5 - wo
         } else if num_played == 1 {
             // 2nd seat: be careful with high taroks if more players to come
-            if card.card_type() == CardType::Tarok && tracker.higher_taroks_out(card.value()) > 0 {
+            if card.card_type() == CardType::Tarok
+                && tracker.higher_taroks_out(card.value()) > 0
+            {
                 trick_pts * 0.6 - wo * 0.4
             } else {
                 trick_pts * 2.0 + wo * 0.2
@@ -1295,10 +1283,7 @@ mod tests {
         ]);
         let bid = evaluate_bid_v6(hand, None);
         match bid {
-            Some(c) => assert!(
-                !c.is_solo(),
-                "Should not bid solo with only 10 guaranteed pts"
-            ),
+            Some(c) => assert!(!c.is_solo(), "Should not bid solo with only 10 guaranteed pts"),
             None => {} // passing is also fine
         }
     }
@@ -1436,13 +1421,19 @@ mod tests {
     }
 }
 
+
 // -----------------------------------------------------------------------
 // Announcements
 // -----------------------------------------------------------------------
 
-pub fn choose_announcements_v6(hand: CardSet, state: &GameState, player: u8) -> Vec<u8> {
-    let mut anns = Vec::new();
 
+pub fn choose_announcements_v6(
+    hand: CardSet,
+    state: &GameState,
+    player: u8,
+) -> Vec<u8> {
+    let mut anns = Vec::new();
+    
     if let Some(partner) = state.partner {
         if player == partner {
             if let Some(king) = state.called_king {
@@ -1450,13 +1441,14 @@ pub fn choose_announcements_v6(hand: CardSet, state: &GameState, player: u8) -> 
                     if let Some(suit) = king.suit() {
                         if hand.suit_count(suit) >= 3 {
                             // Conceptually 4 is King Ultimo
-                            anns.push(4);
+                            anns.push(4); 
                         }
                     }
                 }
             }
         }
     }
-
+    
     anns
 }
+

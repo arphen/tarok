@@ -3,6 +3,7 @@
 /// The YAML-driven rules engine was great for Python prototyping. In Rust
 /// we compile the exact same cascading-filter + ban-list logic directly,
 /// gaining zero-overhead dispatch and bitmask operations.
+
 use crate::card::*;
 use crate::game_state::*;
 
@@ -161,7 +162,11 @@ fn cascading_pipeline(ctx: &MoveCtx) -> CardSet {
     }
 
     // P70: MustTrumpIn — can't follow suit, has taroks (non-overplay)
-    if !ctx.is_leading() && !ctx.lead_is_tarok() && !ctx.has_lead_suit() && ctx.has_taroks() {
+    if !ctx.is_leading()
+        && !ctx.lead_is_tarok()
+        && !ctx.has_lead_suit()
+        && ctx.has_taroks()
+    {
         return ctx.hand_taroks();
     }
 
@@ -211,19 +216,8 @@ fn mond_and_skis_in_trick(trick_cards: CardSet) -> bool {
 mod tests {
     use super::*;
 
-    fn ctx(
-        hand: CardSet,
-        lead: Option<Card>,
-        best: Option<Card>,
-        contract: Option<&'static str>,
-    ) -> MoveCtx {
-        let lead_suit = lead.and_then(|c| {
-            if c.card_type() == CardType::Tarok {
-                None
-            } else {
-                c.suit()
-            }
-        });
+    fn ctx(hand: CardSet, lead: Option<Card>, best: Option<Card>, contract: Option<&'static str>) -> MoveCtx {
+        let lead_suit = lead.and_then(|c| if c.card_type() == CardType::Tarok { None } else { c.suit() });
         MoveCtx {
             hand,
             lead_card: lead,

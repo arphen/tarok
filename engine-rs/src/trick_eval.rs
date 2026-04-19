@@ -1,6 +1,7 @@
 /// Trick evaluation — determine the winner and points for a completed trick.
 ///
 /// Compiles the YAML rule priorities directly into Rust match logic.
+
 use crate::card::*;
 use crate::game_state::*;
 
@@ -13,11 +14,7 @@ pub struct TrickResult {
 }
 
 /// Evaluate a completed trick, returning the winner and points.
-pub fn evaluate_trick(
-    trick: &Trick,
-    is_last_trick: bool,
-    contract: Option<Contract>,
-) -> TrickResult {
+pub fn evaluate_trick(trick: &Trick, is_last_trick: bool, contract: Option<Contract>) -> TrickResult {
     debug_assert!(trick.is_complete());
     let cards_set = trick.played_cards_set();
     let lead_suit = trick.lead_suit();
