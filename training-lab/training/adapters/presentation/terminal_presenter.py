@@ -122,7 +122,8 @@ class TerminalPresenter(PresenterPort):
         print(f"              oracle-distill {_fmt_imitation_schedule(config)}")
         if config.behavioral_clone_coef > 0.0 and config.behavioral_clone_games_per_iteration > 0:
             print(
-                f"              behavior-clone coef={config.behavioral_clone_coef:.3f} "
+                f"              behavior-clone "
+                f"{_fmt_schedule(config.behavioral_clone_coef, config.behavioral_clone_coef_min, config.behavioral_clone_schedule)} "
                 f"teacher={config.behavioral_clone_teacher} "
                 f"games/iter={config.behavioral_clone_games_per_iteration:,}"
             )
@@ -171,12 +172,14 @@ class TerminalPresenter(PresenterPort):
         config: TrainingConfig,
         iter_lr: float | None = None,
         iter_imitation_coef: float | None = None,
+        iter_behavioral_clone_coef: float | None = None,
         iter_entropy_coef: float | None = None,
     ) -> None:
         lr_tag = f"  lr={iter_lr:.1e}" if iter_lr is not None and config.lr_schedule != "constant" else ""
         il_tag = f"  il={iter_imitation_coef:.4f}" if iter_imitation_coef is not None else ""
+        bc_tag = f"  bc={iter_behavioral_clone_coef:.4f}" if iter_behavioral_clone_coef is not None else ""
         ent_tag = f"  ent={iter_entropy_coef:.5f}" if iter_entropy_coef is not None and config.entropy_schedule != "constant" else ""
-        print(f"  ② PPO update   {config.ppo_epochs}ep  batch={config.batch_size}{lr_tag}{il_tag}{ent_tag}")
+        print(f"  ② PPO update   {config.ppo_epochs}ep  batch={config.batch_size}{lr_tag}{il_tag}{bc_tag}{ent_tag}")
         print("      stats: ", end="", flush=True)
 
     def on_ppo_done(self, metrics: dict[str, float], elapsed: float) -> None:

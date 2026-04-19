@@ -29,12 +29,15 @@ class UpdatePolicy:
         config: TrainingConfig,
         iter_lr: float | None = None,
         iter_imitation_coef: float | None = None,
+        iter_behavioral_clone_coef: float | None = None,
         iter_entropy_coef: float | None = None,
     ) -> PolicyUpdateResult:
         if iter_lr is not None:
             self._ppo.set_lr(iter_lr)
         if iter_imitation_coef is not None:
             self._ppo.set_imitation_coef(iter_imitation_coef)
+        if iter_behavioral_clone_coef is not None:
+            self._ppo.set_behavioral_clone_coef(iter_behavioral_clone_coef)
         if iter_entropy_coef is not None:
             self._ppo.set_entropy_coef(iter_entropy_coef)
 
@@ -42,6 +45,7 @@ class UpdatePolicy:
             config,
             iter_lr=iter_lr,
             iter_imitation_coef=iter_imitation_coef,
+            iter_behavioral_clone_coef=iter_behavioral_clone_coef,
             iter_entropy_coef=iter_entropy_coef,
         )
 

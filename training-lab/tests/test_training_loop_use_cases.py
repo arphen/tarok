@@ -132,6 +132,7 @@ def test_advance_iteration_applies_policies_and_updates_context(
     runner = MagicMock()
     lr_policy = MagicMock()
     imitation_policy = MagicMock()
+    behavioral_clone_policy = MagicMock()
     entropy_policy = MagicMock()
     presenter = MagicMock()
     league_maintenance = MagicMock()
@@ -139,6 +140,7 @@ def test_advance_iteration_applies_policies_and_updates_context(
 
     lr_policy.compute.return_value = 1.23e-4
     imitation_policy.compute.return_value = 0.77
+    behavioral_clone_policy.compute.return_value = 0.33
     entropy_policy.compute.return_value = 0.015
     sample_seats.execute.return_value = "nn,bot_v5,nn,bot_v6"
     league_maintenance.execute.return_value = 1337.0
@@ -171,6 +173,7 @@ def test_advance_iteration_applies_policies_and_updates_context(
         iteration_runner=runner,
         lr_policy=lr_policy,
         imitation_policy=imitation_policy,
+        behavioral_clone_policy=behavioral_clone_policy,
         entropy_policy=entropy_policy,
         presenter=presenter,
         league_maintenance=league_maintenance,
@@ -188,6 +191,7 @@ def test_advance_iteration_applies_policies_and_updates_context(
     assert run_call.kwargs["prev_placement"] == pytest.approx(3.1)
     assert run_call.kwargs["iter_lr"] == pytest.approx(1.23e-4)
     assert run_call.kwargs["iter_imitation_coef"] == pytest.approx(0.77)
+    assert run_call.kwargs["iter_behavioral_clone_coef"] == pytest.approx(0.33)
     assert run_call.kwargs["iter_entropy_coef"] == pytest.approx(0.015)
     assert run_call.kwargs["seats_override"] == "nn,bot_v5,nn,bot_v6"
     assert run_call.kwargs["run_benchmark"] is True

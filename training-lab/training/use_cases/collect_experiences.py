@@ -37,6 +37,7 @@ class CollectExperiences:
         ts_path: str,
         seats_override: str | None = None,
         iter_imitation_coef: float | None = None,
+        iter_behavioral_clone_coef: float | None = None,
     ) -> ExperienceBundle:
         effective_seats = seats_override if seats_override is not None else config.seats
         self._presenter.on_selfplay_start(config, effective_seats=effective_seats)
@@ -71,8 +72,14 @@ class CollectExperiences:
             if human_raw is not None:
                 raw = self._ppo.merge_experiences(raw, human_raw)
 
+        effective_bc_coef = (
+            iter_behavioral_clone_coef
+            if iter_behavioral_clone_coef is not None
+            else config.behavioral_clone_coef
+        )
+
         if (
-            config.behavioral_clone_coef > 0.0
+            effective_bc_coef > 0.0
             and config.behavioral_clone_games_per_iteration > 0
             and config.behavioral_clone_teacher is not None
         ):

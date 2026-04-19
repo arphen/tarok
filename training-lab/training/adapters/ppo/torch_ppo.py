@@ -105,6 +105,9 @@ class PPOAdapter(PPOPort):
     def set_imitation_coef(self, coef: float) -> None:
         self._imitation_coef = float(coef)
 
+    def set_behavioral_clone_coef(self, coef: float) -> None:
+        self._behavioral_clone_coef = float(coef)
+
     def update(self, raw_experiences: dict[str, Any], nn_seats: list[int]) -> tuple[dict[str, float], dict]:
         assert self._network is not None
         assert self._optimizer is not None

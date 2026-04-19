@@ -286,6 +286,24 @@ class TestUpdatePolicy:
 
         ppo.set_entropy_coef.assert_called_once_with(0.01)
 
+    def test_behavioral_clone_coef_override(self) -> None:
+        ppo = _make_ppo()
+        config = TrainingConfig(model_arch="v4", save_dir="/tmp", iterations=1, bench_games=5)
+
+        uc = UpdatePolicy(ppo, MagicMock())
+        uc.execute(raw={}, nn_seats=[0], config=config, iter_behavioral_clone_coef=0.25)
+
+        ppo.set_behavioral_clone_coef.assert_called_once_with(0.25)
+
+    def test_behavioral_clone_coef_not_set_when_none(self) -> None:
+        ppo = _make_ppo()
+        config = TrainingConfig(model_arch="v4", save_dir="/tmp", iterations=1, bench_games=5)
+
+        uc = UpdatePolicy(ppo, MagicMock())
+        uc.execute(raw={}, nn_seats=[0], config=config, iter_behavioral_clone_coef=None)
+
+        ppo.set_behavioral_clone_coef.assert_not_called()
+
     def test_result_carries_new_weights_and_metrics(self) -> None:
         weights = {"layer.weight": [1, 2, 3]}
         ppo = _make_ppo(new_weights=weights)

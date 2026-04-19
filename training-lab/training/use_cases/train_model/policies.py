@@ -47,6 +47,17 @@ class DefaultEntropyCoefPolicy:
         )
 
 
+class DefaultBehavioralCloneCoefPolicy:
+    def compute(self, config: TrainingConfig, iteration: int, learner_elo: float = 0.0) -> float:
+        return scheduled_coef(
+            iteration=max(0, iteration - 1),
+            total_iterations=config.iterations,
+            coef_max=config.behavioral_clone_coef,
+            coef_min=config.behavioral_clone_coef_min,
+            schedule=config.behavioral_clone_schedule,
+        )
+
+
 class EloDecayEntropyPolicy:
     """Entropy coefficient that decays with Elo — full exploration at low skill, minimal at high.
 

@@ -15,7 +15,12 @@ from training.entities.league import LeagueConfig, LeagueOpponent
 from training.entities.model_identity import ModelIdentity
 from training.entities.training_config import TrainingConfig, scheduled_lr
 from training.use_cases.train_model import TrainModel
-from training.use_cases.train_model.policies import EloDecayEntropyPolicy, EloGaussianILPolicy, elo_based_lr
+from training.use_cases.train_model.policies import (
+    DefaultBehavioralCloneCoefPolicy,
+    EloDecayEntropyPolicy,
+    EloGaussianILPolicy,
+    elo_based_lr,
+)
 
 
 @pytest.fixture
@@ -639,6 +644,21 @@ def test_scheduled_lr_elo_is_passthrough() -> None:
     assert lr0 == pytest.approx(0.0003, rel=1e-12)
     assert lr50 == pytest.approx(0.0003, rel=1e-12)
     assert lr99 == pytest.approx(0.0003, rel=1e-12)
+
+
+def test_behavioral_clone_policy_linear_decay() -> None:
+    cfg = TrainingConfig(
+        iterations=5,
+        behavioral_clone_coef=0.5,
+        behavioral_clone_coef_min=0.0,
+        behavioral_clone_schedule="linear",
+    )
+    policy = DefaultBehavioralCloneCoefPolicy()
+    vals = [policy.compute(config=cfg, iteration=i) for i in range(1, 6)]
+
+    assert vals[0] == pytest.approx(0.5)
+    assert vals[-1] == pytest.approx(0.0)
+    assert vals == sorted(vals, reverse=True)
 
 
 # ---------------------------------------------------------------------------

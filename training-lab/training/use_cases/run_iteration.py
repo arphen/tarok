@@ -55,16 +55,23 @@ class RunIteration:
         prev_placement: float,
         iter_lr: float | None = None,
         iter_imitation_coef: float | None = None,
+        iter_behavioral_clone_coef: float | None = None,
         iter_entropy_coef: float | None = None,
         seats_override: str | None = None,
         run_benchmark: bool = True,
     ) -> tuple[IterationResult, dict]:
         bundle = self._collect_experiences.execute(
-            config, identity, ts_path, seats_override, iter_imitation_coef
+            config, identity, ts_path, seats_override, iter_imitation_coef, iter_behavioral_clone_coef
         )
 
         update = self._update_policy.execute(
-            bundle.raw, bundle.nn_seats, config, iter_lr, iter_imitation_coef, iter_entropy_coef
+            bundle.raw,
+            bundle.nn_seats,
+            config,
+            iter_lr,
+            iter_imitation_coef,
+            iter_behavioral_clone_coef,
+            iter_entropy_coef,
         )
 
         # Release the heavy Rust self-play payload before I/O phases.

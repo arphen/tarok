@@ -44,6 +44,7 @@ class PresenterPort(ABC):
         config: TrainingConfig,
         iter_lr: float | None = None,
         iter_imitation_coef: float | None = None,
+        iter_behavioral_clone_coef: float | None = None,
         iter_entropy_coef: float | None = None,
     ) -> None: ...
 

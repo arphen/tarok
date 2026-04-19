@@ -26,6 +26,7 @@ from training.use_cases.prepare_training import PrepareTraining
 from training.use_cases.promote_best_checkpoint import PromoteBestCheckpoint
 from training.use_cases.sample_league_seats import SampleLeagueSeats
 from training.use_cases.train_model.policies import (
+    DefaultBehavioralCloneCoefPolicy,
     DefaultEntropyCoefPolicy,
     DefaultImitationCoefPolicy,
     DefaultLearningRatePolicy,
@@ -43,6 +44,7 @@ class TrainModel:
         presenter: PresenterPort,
         lr_policy: LearningRatePolicyPort | None = None,
         imitation_policy: ImitationCoefPolicyPort | None = None,
+        behavioral_clone_policy: DefaultBehavioralCloneCoefPolicy | None = None,
         entropy_policy: DefaultEntropyCoefPolicy | EloDecayEntropyPolicy | None = None,
         league_persistence: LeagueStatePersistencePort | None = None,
     ):
@@ -51,6 +53,9 @@ class TrainModel:
 
         lr_policy = lr_policy if lr_policy is not None else DefaultLearningRatePolicy()
         imitation_policy = imitation_policy if imitation_policy is not None else DefaultImitationCoefPolicy()
+        behavioral_clone_policy = (
+            behavioral_clone_policy if behavioral_clone_policy is not None else DefaultBehavioralCloneCoefPolicy()
+        )
         entropy_policy = entropy_policy if entropy_policy is not None else DefaultEntropyCoefPolicy()
 
         league_maintenance = MaintainLeaguePool(
@@ -64,8 +69,12 @@ class TrainModel:
         self._presenter = presenter
         self._prepare = PrepareTraining(benchmark, model, presenter, iteration_runner, league_persistence)
         self._advance_iteration = AdvanceIteration(
-            iteration_runner, lr_policy, imitation_policy, entropy_policy,
+            iteration_runner,
+            lr_policy,
+            imitation_policy,
+            entropy_policy,
             presenter, league_maintenance, sample_seats,
+            behavioral_clone_policy=behavioral_clone_policy,
         )
         self._promote_best = PromoteBestCheckpoint(model)
 

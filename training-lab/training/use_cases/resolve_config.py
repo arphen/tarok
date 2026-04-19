@@ -79,6 +79,8 @@ class ResolveConfig:
             imitation_center_elo=float(merged.get("imitation_center_elo", 1500.0)),
             imitation_width_elo=float(merged.get("imitation_width_elo", 250.0)),
             behavioral_clone_coef=float(merged.get("behavioral_clone_coef", 0.0)),
+            behavioral_clone_schedule=str(merged.get("behavioral_clone_schedule", "constant")),
+            behavioral_clone_coef_min=float(merged.get("behavioral_clone_coef_min", 0.0)),
             behavioral_clone_teacher=merged.get("behavioral_clone_teacher"),
             behavioral_clone_games_per_iteration=max(
                 0, int(merged.get("behavioral_clone_games_per_iteration", 0))

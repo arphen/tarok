@@ -36,6 +36,8 @@ class TrainingConfig:
     imitation_width_elo: float = 250.0     # gaussian_elo: bell curve σ
     # Behavioral cloning (action-level) controls.
     behavioral_clone_coef: float = 0.0
+    behavioral_clone_schedule: str = "constant"  # constant | linear | cosine | exponential | geometric
+    behavioral_clone_coef_min: float = 0.0
     behavioral_clone_teacher: str | None = None
     behavioral_clone_games_per_iteration: int = 0
     # PPO hyperparams (all have sensible defaults)

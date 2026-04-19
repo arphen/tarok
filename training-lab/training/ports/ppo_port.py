@@ -26,6 +26,10 @@ class PPOPort(ABC):
         """Update the entropy coefficient for the next PPO update."""
 
     @abstractmethod
+    def set_behavioral_clone_coef(self, coef: float) -> None:
+        """Update the behavioral-cloning coefficient for the next PPO update."""
+
+    @abstractmethod
     def update(self, raw_experiences: dict[str, Any], nn_seats: list[int]) -> tuple[dict[str, float], dict]:
         """Run PPO update on learner (nn) seats only. Return (metrics_dict, new_weights)."""
 
