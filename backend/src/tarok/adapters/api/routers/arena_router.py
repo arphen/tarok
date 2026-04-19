@@ -109,7 +109,7 @@ async def start_arena(req: ArenaRequest):
         if label is None:
             return {
                 "status": "error",
-                "message": f"Agent '{aname}' type '{atype}' is not supported. Use stockskis / stockskis_v5 / stockskis_v6 / stockskis_m6 / stockskis_pozrl / rl.",
+                "message": f"Agent '{aname}' type '{atype}' is not supported. Use stockskis / stockskis_v5 / stockskis_v6 / stockskis_m6 / stockskis_pozrl / stockskis_lustrek / rl.",
             }
         if label == "nn":
             has_nn = True

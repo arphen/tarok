@@ -5,6 +5,7 @@ pub mod encoding;
 pub mod expert_games_v5;
 pub mod game_state;
 pub mod legal_moves;
+pub mod lustrek;
 // pub mod pimc;
 pub mod player;
 pub mod player_bot;

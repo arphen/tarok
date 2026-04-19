@@ -1,3 +1,5 @@
+use rand::prelude::*;
+use rand::rng;
 /// Expert game generator using v5-only bots for training data.
 ///
 /// Generates games where all four players use the v5 (strongest) heuristic
@@ -7,10 +9,7 @@
 /// Uses Rayon parallelism to process games across all CPU cores, since v5's
 /// belief tracking (`CardTracker`) makes each game significantly more
 /// expensive than simpler bot versions.
-
 use rayon::prelude::*;
-use rand::prelude::*;
-use rand::rng;
 
 use crate::card::*;
 use crate::encoding;
@@ -44,10 +43,7 @@ struct ExpertExp {
 ///
 /// Uses Rayon to parallelize across CPU cores. Each game is independent,
 /// so results are generated per-game and merged at the end.
-pub fn generate_expert_batch_v5(
-    num_games: usize,
-    include_oracle: bool,
-) -> ExpertBatch {
+pub fn generate_expert_batch_v5(num_games: usize, include_oracle: bool) -> ExpertBatch {
     // Play all games in parallel, collecting per-game results
     let per_game_results: Vec<GameResult> = (0..num_games)
         .into_par_iter()
@@ -139,8 +135,8 @@ fn play_single_game(include_oracle: bool) -> GameResult {
         let bid_mask_arr = state.legal_bid_mask(bidder);
         let bid_mask: Vec<u8> = bid_mask_arr.to_vec();
 
-        let bid = stockskis_v5::evaluate_bid_v5(state.hands[bidder as usize], highest)
-            .filter(|&c| {
+        let bid =
+            stockskis_v5::evaluate_bid_v5(state.hands[bidder as usize], highest).filter(|&c| {
                 if c == Contract::Three && !is_fh {
                     return false;
                 }
@@ -212,27 +208,12 @@ fn play_single_game(include_oracle: bool) -> GameResult {
                 state.phase = Phase::TrickPlay;
                 state.current_player = (state.dealer + 1) % NUM_PLAYERS as u8;
             } else if c.is_solo() {
-                handle_talon(
-                    &mut state,
-                    &mut exps,
-                    &mut decision_masks,
-                    include_oracle,
-                );
+                handle_talon(&mut state, &mut exps, &mut decision_masks, include_oracle);
                 state.phase = Phase::TrickPlay;
                 state.current_player = (state.dealer + 1) % NUM_PLAYERS as u8;
             } else {
-                handle_king_call(
-                    &mut state,
-                    &mut exps,
-                    &mut decision_masks,
-                    include_oracle,
-                );
-                handle_talon(
-                    &mut state,
-                    &mut exps,
-                    &mut decision_masks,
-                    include_oracle,
-                );
+                handle_king_call(&mut state, &mut exps, &mut decision_masks, include_oracle);
+                handle_talon(&mut state, &mut exps, &mut decision_masks, include_oracle);
                 state.phase = Phase::TrickPlay;
                 state.current_player = (state.dealer + 1) % NUM_PLAYERS as u8;
             }

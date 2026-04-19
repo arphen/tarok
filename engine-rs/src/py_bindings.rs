@@ -843,6 +843,7 @@ fn run_self_play(
 
     let mut bot_v1: Option<Arc<dyn BatchPlayer>> = None;
     let mut bot_v3: Option<Arc<dyn BatchPlayer>> = None;
+    let mut bot_lustrek: Option<Arc<dyn BatchPlayer>> = None;
     let mut bot_v5: Option<Arc<dyn BatchPlayer>> = None;
     let mut bot_v6: Option<Arc<dyn BatchPlayer>> = None;
     let mut bot_m6: Option<Arc<dyn BatchPlayer>> = None;
@@ -863,6 +864,12 @@ fn run_self_play(
                     bot_v3 = Some(Arc::new(StockSkisPlayer::v3()));
                 }
                 bot_v3.as_ref().unwrap().clone()
+            }
+            "bot_lustrek" => {
+                if bot_lustrek.is_none() {
+                    bot_lustrek = Some(Arc::new(StockSkisPlayer::lustrek()));
+                }
+                bot_lustrek.as_ref().unwrap().clone()
             }
             "bot_v5" => {
                 if bot_v5.is_none() {
@@ -902,7 +909,7 @@ fn run_self_play(
             }
             other => {
                 return Err(pyo3::exceptions::PyValueError::new_err(
-                    format!("Unknown seat type '{}'. Use 'nn', 'bot_v1', 'bot_v3', 'bot_v5', 'bot_v6', 'bot_m6', 'bot_pozrl', or a .pt path.", other)
+                    format!("Unknown seat type '{}'. Use 'nn', 'bot_v1', 'bot_v3', 'bot_lustrek', 'bot_v5', 'bot_v6', 'bot_m6', 'bot_pozrl', or a .pt path.", other)
                 ));
             }
         };
