@@ -4,7 +4,7 @@ on:
   push:
     branches: ["gpu", "main"]
   pull_request:
-    branches: ["gpu", "main"]
+    types: [opened, synchronize, reopened, ready_for_review]
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}

@@ -2,7 +2,6 @@
 ///
 /// This is a mutable game state designed for fast simulation — no Python
 /// objects, no heap allocations per move where possible.
-
 use crate::card::*;
 use crate::trick_eval;
 use rand::prelude::*;
@@ -62,10 +61,7 @@ impl Contract {
     pub fn is_solo(self) -> bool {
         matches!(
             self,
-            Contract::SoloThree
-                | Contract::SoloTwo
-                | Contract::SoloOne
-                | Contract::Solo
+            Contract::SoloThree | Contract::SoloTwo | Contract::SoloOne | Contract::Solo
         )
     }
 

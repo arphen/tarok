@@ -1,3 +1,5 @@
+use rand::prelude::*;
+use rand::rng;
 /// Lightweight arena runner for bot-vs-bot mass simulation.
 ///
 /// Unlike [`SelfPlayRunner`], this module does NOT collect training
@@ -7,32 +9,39 @@
 ///
 /// Uses Rayon parallelism: each game is fully independent, so all CPU
 /// cores are utilised without any synchronisation overhead.
-
 use rayon::prelude::*;
-use rand::prelude::*;
-use rand::rng;
 
 use crate::card::*;
 use crate::game_state::*;
 use crate::scoring;
-use crate::stockskis_v5;
-use crate::stockskis_v6;
+use crate::bots::lustrek;
+use crate::bots::stockskis_m6;
+use crate::bots::stockskis_pozrl;
+use crate::bots::stockskis_v1;
+use crate::bots::stockskis_v3;
+use crate::bots::stockskis_v5;
+use crate::bots::stockskis_v6;
 use crate::trick_eval;
 
 /// Per-bot version dispatch tag.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum BotVersion {
+    Lustrek,
+    V1,
+    V3,
     V5,
     V6,
+    M6,
+    Pozrl,
 }
 
 /// Lightweight result for a single arena game.
 pub struct ArenaGameResult {
     pub scores: [i32; 4],
-    pub contract: u8,   // Contract as u8 (0=Klop..9=BarvniValat)
-    pub declarer: i8,   // -1 if nobody (Klop)
-    pub partner: i8,    // -1 if none
-    pub bid_contracts: [i8; 4], // Per-seat chosen bid in this auction (-1=pass)
+    pub contract: u8,            // Contract as u8 (0=Klop..9=BarvniValat)
+    pub declarer: i8,            // -1 if nobody (Klop)
+    pub partner: i8,             // -1 if none
+    pub bid_contracts: [i8; 4],  // Per-seat chosen bid in this auction (-1=pass)
     pub taroks_in_hand: [u8; 4], // Tarok count in dealt 12-card hand
 }
 
@@ -52,36 +61,66 @@ pub fn run_arena_batch(n_games: u32, versions: [BotVersion; 4]) -> Vec<ArenaGame
 
 fn bot_bid(v: BotVersion, hand: CardSet, highest: Option<Contract>) -> Option<Contract> {
     match v {
-        BotVersion::V5 => stockskis_v5::evaluate_bid_v5(hand, highest),
-        BotVersion::V6 => stockskis_v6::evaluate_bid_v6(hand, highest),
+        BotVersion::Lustrek => lustrek::evaluate_bid_lustrek(hand, highest),
+        BotVersion::V1     => stockskis_v1::evaluate_bid_v1(hand, highest),
+        BotVersion::V3     => stockskis_v3::evaluate_bid_v3(hand, highest),
+        BotVersion::V5     => stockskis_v5::evaluate_bid_v5(hand, highest),
+        BotVersion::V6     => stockskis_v6::evaluate_bid_v6(hand, highest),
+        BotVersion::M6     => stockskis_m6::evaluate_bid_m6(hand, highest),
+        BotVersion::Pozrl  => stockskis_pozrl::evaluate_bid_pozrl(hand, highest),
     }
 }
 
 fn bot_king(v: BotVersion, hand: CardSet) -> Option<Card> {
     match v {
-        BotVersion::V5 => stockskis_v5::choose_king_v5(hand),
-        BotVersion::V6 => stockskis_v6::choose_king_v6(hand),
+        BotVersion::Lustrek => lustrek::choose_king_lustrek(hand),
+        BotVersion::V1     => stockskis_v1::choose_king_v1(hand),
+        BotVersion::V3     => stockskis_v3::choose_king_v3(hand),
+        BotVersion::V5     => stockskis_v5::choose_king_v5(hand),
+        BotVersion::V6     => stockskis_v6::choose_king_v6(hand),
+        BotVersion::M6     => stockskis_m6::choose_king_m6(hand),
+        BotVersion::Pozrl  => stockskis_pozrl::choose_king_pozrl(hand),
     }
 }
 
-fn bot_talon(v: BotVersion, groups: &[Vec<Card>], hand: CardSet, called_king: Option<Card>) -> usize {
+fn bot_talon(
+    v: BotVersion,
+    groups: &[Vec<Card>],
+    hand: CardSet,
+    called_king: Option<Card>,
+) -> usize {
     match v {
-        BotVersion::V5 => stockskis_v5::choose_talon_group_v5(groups, hand, called_king),
-        BotVersion::V6 => stockskis_v6::choose_talon_group_v6(groups, hand, called_king),
+        BotVersion::Lustrek => lustrek::choose_talon_group_lustrek(groups, hand, called_king),
+        BotVersion::V1     => stockskis_v1::choose_talon_group_v1(groups, hand, called_king),
+        BotVersion::V3     => stockskis_v3::choose_talon_group_v3(groups, hand, called_king),
+        BotVersion::V5     => stockskis_v5::choose_talon_group_v5(groups, hand, called_king),
+        BotVersion::V6     => stockskis_v6::choose_talon_group_v6(groups, hand, called_king),
+        BotVersion::M6     => stockskis_m6::choose_talon_group_m6(groups, hand, called_king),
+        BotVersion::Pozrl  => stockskis_pozrl::choose_talon_group_pozrl(groups, hand, called_king),
     }
 }
 
 fn bot_discards(v: BotVersion, hand: CardSet, n: usize, called_king: Option<Card>) -> Vec<Card> {
     match v {
-        BotVersion::V5 => stockskis_v5::choose_discards_v5(hand, n, called_king),
-        BotVersion::V6 => stockskis_v6::choose_discards_v6(hand, n, called_king),
+        BotVersion::Lustrek => lustrek::choose_discards_lustrek(hand, n, called_king),
+        BotVersion::V1     => stockskis_v1::choose_discards_v1(hand, n, called_king),
+        BotVersion::V3     => stockskis_v3::choose_discards_v3(hand, n, called_king),
+        BotVersion::V5     => stockskis_v5::choose_discards_v5(hand, n, called_king),
+        BotVersion::V6     => stockskis_v6::choose_discards_v6(hand, n, called_king),
+        BotVersion::M6     => stockskis_m6::choose_discards_m6(hand, n, called_king),
+        BotVersion::Pozrl  => stockskis_pozrl::choose_discards_pozrl(hand, n, called_king),
     }
 }
 
 fn bot_card(v: BotVersion, hand: CardSet, state: &GameState, player: u8) -> Card {
     match v {
-        BotVersion::V5 => stockskis_v5::choose_card_v5(hand, state, player),
-        BotVersion::V6 => stockskis_v6::choose_card_v6(hand, state, player),
+        BotVersion::Lustrek => lustrek::choose_card_lustrek(hand, state, player),
+        BotVersion::V1     => stockskis_v1::choose_card_v1(hand, state, player),
+        BotVersion::V3     => stockskis_v3::choose_card_v3(hand, state, player),
+        BotVersion::V5     => stockskis_v5::choose_card_v5(hand, state, player),
+        BotVersion::V6     => stockskis_v6::choose_card_v6(hand, state, player),
+        BotVersion::M6     => stockskis_m6::choose_card_m6(hand, state, player),
+        BotVersion::Pozrl  => stockskis_pozrl::choose_card_pozrl(hand, state, player),
     }
 }
 
@@ -119,27 +158,37 @@ fn play_one_game(game_idx: u32, versions: &[BotVersion; 4]) -> ArenaGameResult {
 
     for _ in 0..NUM_PLAYERS {
         let is_fh = bidder == forehand;
-        let bid = bot_bid(versions[bidder as usize], state.hands[bidder as usize], highest)
-            .filter(|&c| {
-                if c == Contract::Three && !is_fh {
-                    return false;
-                }
-                match highest {
-                    Some(h) if is_fh => c.strength() >= h.strength(),
-                    Some(h) => c.strength() > h.strength(),
-                    None => true,
-                }
-            });
+        let bid = bot_bid(
+            versions[bidder as usize],
+            state.hands[bidder as usize],
+            highest,
+        )
+        .filter(|&c| {
+            if c == Contract::Three && !is_fh {
+                return false;
+            }
+            match highest {
+                Some(h) if is_fh => c.strength() >= h.strength(),
+                Some(h) => c.strength() > h.strength(),
+                None => true,
+            }
+        });
 
         match bid {
             Some(contract) => {
-                state.bids.push(Bid { player: bidder, contract: Some(contract) });
+                state.bids.push(Bid {
+                    player: bidder,
+                    contract: Some(contract),
+                });
                 bid_contracts[bidder as usize] = contract as i8;
                 highest = Some(contract);
                 winning_player = Some(bidder);
             }
             None => {
-                state.bids.push(Bid { player: bidder, contract: None });
+                state.bids.push(Bid {
+                    player: bidder,
+                    contract: None,
+                });
             }
         }
 
@@ -148,7 +197,10 @@ fn play_one_game(game_idx: u32, versions: &[BotVersion; 4]) -> ArenaGameResult {
 
     // Resolve bidding — forehand wins ties
     if let Some(h) = highest {
-        let forehand_bid = state.bids.iter().find(|b| b.player == forehand && b.contract == Some(h));
+        let forehand_bid = state
+            .bids
+            .iter()
+            .find(|b| b.player == forehand && b.contract == Some(h));
         if forehand_bid.is_some() {
             winning_player = Some(forehand);
         }
@@ -292,7 +344,12 @@ fn handle_talon(state: &mut GameState, versions: &[BotVersion; 4]) {
     }
     state.talon_revealed = groups.clone();
 
-    let group_idx = bot_talon(versions[declarer as usize], &groups, hand, state.called_king);
+    let group_idx = bot_talon(
+        versions[declarer as usize],
+        &groups,
+        hand,
+        state.called_king,
+    );
     let picked = &groups[group_idx.min(groups.len().saturating_sub(1))];
     for &card in picked {
         state.hands[declarer as usize].insert(card);

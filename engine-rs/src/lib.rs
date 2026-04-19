@@ -5,17 +5,13 @@ pub mod encoding;
 pub mod expert_games_v5;
 pub mod game_state;
 pub mod legal_moves;
+pub mod bots;
 // pub mod pimc;
 pub mod player;
 pub mod player_bot;
 pub mod player_nn;
 pub mod scoring;
 pub mod self_play;
-pub mod stockskis_v1;
-pub mod stockskis_v3;
-pub mod stockskis_v5;
-pub mod stockskis_v6;
-pub mod stockskis_m6;
 pub mod trick_eval;
 pub mod warmup;
 

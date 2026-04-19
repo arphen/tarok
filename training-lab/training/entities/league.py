@@ -14,7 +14,16 @@ from typing import Literal
 @dataclass(frozen=True)
 class LeagueOpponent:
     name: str
-    type: Literal["nn_checkpoint", "bot_v1", "bot_v3", "bot_v5", "bot_v6", "bot_m6"]
+    type: Literal[
+        "nn_checkpoint",
+        "bot_v1",
+        "bot_v3",
+        "bot_lustrek",
+        "bot_v5",
+        "bot_v6",
+        "bot_m6",
+        "bot_pozrl",
+    ]
     path: str | None = None  # required when type == "nn_checkpoint"
     initial_elo: float = 1500.0
 
