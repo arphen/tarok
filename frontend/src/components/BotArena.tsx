@@ -167,7 +167,6 @@ export default function BotArena({ onBack, checkpoints, onReplayGame }: BotArena
 
   const startArena = async () => {
     setStartError(null);
-    // Reset UI state
     setTab('overview');
     setRunning(false);
     setProgress({ status: 'running', games_done: 0, total_games: totalGames, analytics: null });
@@ -188,10 +187,22 @@ export default function BotArena({ onBack, checkpoints, onReplayGame }: BotArena
           lapajne_mc_sims: lapajneMcSims,
         }),
       });
-      const data = await resp.json();
+      let data: { status?: string; message?: string; total_games?: number };
+      try {
+        data = await resp.json();
+      } catch {
+        setStartError(`Arena start failed (${resp.status}): could not read response.`);
+        setProgress(null);
+        return;
+      }
       if (data.status === 'started') {
         setRunning(true);
-        setProgress({ status: 'running', games_done: 0, total_games: totalGames, analytics: null });
+        setProgress({
+          status: 'running',
+          games_done: 0,
+          total_games: data.total_games ?? totalGames,
+          analytics: null,
+        });
         pollRef.current = setInterval(pollProgress, 2000);
         return;
       }
@@ -202,13 +213,16 @@ export default function BotArena({ onBack, checkpoints, onReplayGame }: BotArena
         setStartError('Arena is already running. Showing live progress.');
         return;
       }
-      setRunning(false);
+      const msg =
+        data.message ||
+        (data.status === 'error'
+          ? 'The server rejected this arena configuration.'
+          : `Could not start arena (${data.status ?? 'unknown'}).`);
+      setStartError(msg);
       setProgress(null);
-      setStartError(data?.message ?? `Arena start failed (${data?.status ?? 'unknown'}).`);
     } catch (e) {
-      setRunning(false);
+      setStartError(e instanceof Error ? e.message : 'Network error while starting arena.');
       setProgress(null);
-      setStartError(`Arena start failed: ${e instanceof Error ? e.message : 'network error'}`);
     }
   };
 
@@ -329,6 +343,7 @@ export default function BotArena({ onBack, checkpoints, onReplayGame }: BotArena
               </button>
             )}
           </div>
+          {startError && <div className="arena-error-banner" role="alert">{startError}</div>}
         </div>
       </div>
 

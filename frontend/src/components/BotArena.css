@@ -121,6 +121,17 @@
   margin-left: auto;
 }
 
+.arena-error {
+  margin: 12px 0 0;
+  padding: 10px 12px;
+  border-radius: 8px;
+  background: rgba(231, 76, 60, 0.15);
+  border: 1px solid rgba(231, 76, 60, 0.45);
+  color: #f5a097;
+  font-size: 0.9rem;
+  line-height: 1.4;
+}
+
 /* ---- Progress ---- */
 
 .arena-progress-bar-container {
