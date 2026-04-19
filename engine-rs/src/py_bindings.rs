@@ -433,13 +433,13 @@ impl PyGameState {
         let highest = self.state.bids.iter()
             .filter_map(|b| b.contract)
             .max_by_key(|c| c.strength());
-        crate::stockskis_v5::evaluate_bid_v5(hand, highest).map(|c| c as u8)
+        crate::bots::stockskis_v5::evaluate_bid_v5(hand, highest).map(|c| c as u8)
     }
 
     /// V5 king calling: returns the card index to call.
     fn v5_choose_king(&self, player: u8) -> Option<u8> {
         let hand = self.state.hands[player as usize];
-        crate::stockskis_v5::choose_king_v5(hand).map(|c| c.0)
+        crate::bots::stockskis_v5::choose_king_v5(hand).map(|c| c.0)
     }
 
     /// V5 talon group selection: returns the group index (0 or 1, or 0-5).
@@ -448,7 +448,7 @@ impl PyGameState {
         let groups_cards: Vec<Vec<Card>> = groups.iter()
             .map(|g| g.iter().map(|&idx| Card(idx)).collect())
             .collect();
-        crate::stockskis_v5::choose_talon_group_v5(
+        crate::bots::stockskis_v5::choose_talon_group_v5(
             &groups_cards, hand, self.state.called_king
         )
     }
@@ -456,14 +456,14 @@ impl PyGameState {
     /// V5 discard selection: returns card indices to discard.
     fn v5_choose_discards(&self, player: u8, must_discard: usize) -> Vec<u8> {
         let hand = self.state.hands[player as usize];
-        crate::stockskis_v5::choose_discards_v5(hand, must_discard, self.state.called_king)
+        crate::bots::stockskis_v5::choose_discards_v5(hand, must_discard, self.state.called_king)
             .iter().map(|c| c.0).collect()
     }
 
     /// V5 card play: returns the card index to play.
     fn v5_choose_card(&self, player: u8) -> u8 {
         let hand = self.state.hands[player as usize];
-        crate::stockskis_v5::choose_card_v5(hand, &self.state, player).0
+        crate::bots::stockskis_v5::choose_card_v5(hand, &self.state, player).0
     }
 
     // -- StockŠkis M6 decision functions --
@@ -473,12 +473,12 @@ impl PyGameState {
         let highest = self.state.bids.iter()
             .filter_map(|b| b.contract)
             .max_by_key(|c| c.strength());
-        crate::stockskis_m6::evaluate_bid_m6(hand, highest).map(|c| c as u8)
+        crate::bots::stockskis_m6::evaluate_bid_m6(hand, highest).map(|c| c as u8)
     }
 
     fn m6_choose_king(&self, player: u8) -> Option<u8> {
         let hand = self.state.hands[player as usize];
-        crate::stockskis_m6::choose_king_m6(hand).map(|c| c.0)
+        crate::bots::stockskis_m6::choose_king_m6(hand).map(|c| c.0)
     }
 
     fn m6_choose_talon_group(&self, player: u8, groups: Vec<Vec<u8>>) -> usize {
@@ -486,20 +486,20 @@ impl PyGameState {
         let groups_cards: Vec<Vec<Card>> = groups.iter()
             .map(|g| g.iter().map(|&idx| Card(idx)).collect())
             .collect();
-        crate::stockskis_m6::choose_talon_group_m6(
+        crate::bots::stockskis_m6::choose_talon_group_m6(
             &groups_cards, hand, self.state.called_king
         )
     }
 
     fn m6_choose_discards(&self, player: u8, must_discard: usize) -> Vec<u8> {
         let hand = self.state.hands[player as usize];
-        crate::stockskis_m6::choose_discards_m6(hand, must_discard, self.state.called_king)
+        crate::bots::stockskis_m6::choose_discards_m6(hand, must_discard, self.state.called_king)
             .iter().map(|c| c.0).collect()
     }
 
     fn m6_choose_card(&self, player: u8) -> u8 {
         let hand = self.state.hands[player as usize];
-        crate::stockskis_m6::choose_card_m6(hand, &self.state, player).0
+        crate::bots::stockskis_m6::choose_card_m6(hand, &self.state, player).0
     }
 
     // -- POŽRL (Domen Požrl, 2021 thesis) decision functions --
@@ -512,12 +512,12 @@ impl PyGameState {
             .iter()
             .filter_map(|b| b.contract)
             .max_by_key(|c| c.strength());
-        crate::stockskis_pozrl::evaluate_bid_pozrl(hand, highest).map(|c| c as u8)
+        crate::bots::stockskis_pozrl::evaluate_bid_pozrl(hand, highest).map(|c| c as u8)
     }
 
     fn pozrl_choose_king(&self, player: u8) -> Option<u8> {
         let hand = self.state.hands[player as usize];
-        crate::stockskis_pozrl::choose_king_pozrl(hand).map(|c| c.0)
+        crate::bots::stockskis_pozrl::choose_king_pozrl(hand).map(|c| c.0)
     }
 
     fn pozrl_choose_talon_group(&self, player: u8, groups: Vec<Vec<u8>>) -> usize {
@@ -526,7 +526,7 @@ impl PyGameState {
             .iter()
             .map(|g| g.iter().map(|&idx| Card(idx)).collect())
             .collect();
-        crate::stockskis_pozrl::choose_talon_group_pozrl(
+        crate::bots::stockskis_pozrl::choose_talon_group_pozrl(
             &groups_cards,
             hand,
             self.state.called_king,
@@ -535,7 +535,7 @@ impl PyGameState {
 
     fn pozrl_choose_discards(&self, player: u8, must_discard: usize) -> Vec<u8> {
         let hand = self.state.hands[player as usize];
-        crate::stockskis_pozrl::choose_discards_pozrl(hand, must_discard, self.state.called_king)
+        crate::bots::stockskis_pozrl::choose_discards_pozrl(hand, must_discard, self.state.called_king)
             .iter()
             .map(|c| c.0)
             .collect()
@@ -543,7 +543,7 @@ impl PyGameState {
 
     fn pozrl_choose_card(&self, player: u8) -> u8 {
         let hand = self.state.hands[player as usize];
-        crate::stockskis_pozrl::choose_card_pozrl(hand, &self.state, player).0
+        crate::bots::stockskis_pozrl::choose_card_pozrl(hand, &self.state, player).0
     }
 }
 
@@ -787,11 +787,12 @@ fn run_self_play(
     include_replay_data: bool,
     include_oracle_states: bool,
 ) -> PyResult<PyObject> {
+    use std::collections::HashMap;
     use std::sync::Arc;
-    use crate::self_play::{SelfPlayRunner, GameResult};
+    use crate::self_play::{GameResult, SelfPlayRunner};
     use crate::player::{BatchPlayer, CARD_ACTION_SIZE};
+    use crate::player_bot::{try_make_bot_by_seat_label, SUPPORTED_BOT_SEAT_LABELS};
     use crate::player_nn::NeuralNetPlayer;
-    use crate::player_bot::StockSkisPlayer;
 
     // Parse seat_config: "nn,nn,nn,nn" or "nn,bot_v5,bot_v5,bot_v5" etc.
     let seat_labels: Vec<&str> = seat_config.split(',').map(|s| s.trim()).collect();
@@ -820,79 +821,43 @@ fn run_self_play(
     };
 
     // Cache for path-based NN opponents (loaded once per unique path)
-    let mut path_players: std::collections::HashMap<String, Arc<dyn BatchPlayer>> = std::collections::HashMap::new();
-
-    let mut bot_v1: Option<Arc<dyn BatchPlayer>> = None;
-    let mut bot_v3: Option<Arc<dyn BatchPlayer>> = None;
-    let mut bot_lustrek: Option<Arc<dyn BatchPlayer>> = None;
-    let mut bot_v5: Option<Arc<dyn BatchPlayer>> = None;
-    let mut bot_v6: Option<Arc<dyn BatchPlayer>> = None;
-    let mut bot_m6: Option<Arc<dyn BatchPlayer>> = None;
-    let mut bot_pozrl: Option<Arc<dyn BatchPlayer>> = None;
+    let mut path_players: HashMap<String, Arc<dyn BatchPlayer>> = HashMap::new();
+    // Cache for heuristic seat labels so each bot type is constructed once.
+    let mut heuristic_players: HashMap<String, Arc<dyn BatchPlayer>> = HashMap::new();
 
     let mut players: Vec<Arc<dyn BatchPlayer>> = Vec::with_capacity(4);
     for &label in &seat_labels {
-        let player: Arc<dyn BatchPlayer> = match label {
-            "nn" => nn_player.as_ref().unwrap().clone(),
-            "bot_v1" => {
-                if bot_v1.is_none() {
-                    bot_v1 = Some(Arc::new(StockSkisPlayer::v1()));
-                }
-                bot_v1.as_ref().unwrap().clone()
-            }
-            "bot_v3" => {
-                if bot_v3.is_none() {
-                    bot_v3 = Some(Arc::new(StockSkisPlayer::v3()));
-                }
-                bot_v3.as_ref().unwrap().clone()
-            }
-            "bot_lustrek" => {
-                if bot_lustrek.is_none() {
-                    bot_lustrek = Some(Arc::new(StockSkisPlayer::lustrek()));
-                }
-                bot_lustrek.as_ref().unwrap().clone()
-            }
-            "bot_v5" => {
-                if bot_v5.is_none() {
-                    bot_v5 = Some(Arc::new(StockSkisPlayer::v5()));
-                }
-                bot_v5.as_ref().unwrap().clone()
-            }
-            "bot_v6" => {
-                if bot_v6.is_none() {
-                    bot_v6 = Some(Arc::new(StockSkisPlayer::v6()));
-                }
-                bot_v6.as_ref().unwrap().clone()
-            }
-            "bot_m6" => {
-                if bot_m6.is_none() {
-                    bot_m6 = Some(Arc::new(StockSkisPlayer::m6()));
-                }
-                bot_m6.as_ref().unwrap().clone()
-            }
-            "bot_pozrl" => {
-                if bot_pozrl.is_none() {
-                    bot_pozrl = Some(Arc::new(StockSkisPlayer::pozrl()));
-                }
-                bot_pozrl.as_ref().unwrap().clone()
-            }
-            path if path.ends_with(".pt") || path.contains('/') || path.contains('\\') => {
-                // Path-based frozen NN checkpoint — cached by path
-                if !path_players.contains_key(path) {
-                    let opp_player = Arc::new(NeuralNetPlayer::new(
-                        path,
-                        tch::Device::Cpu,
-                        0.0, // frozen opponents play greedily
-                    ));
-                    path_players.insert(path.to_string(), opp_player);
-                }
-                path_players[path].clone()
-            }
-            other => {
-                return Err(pyo3::exceptions::PyValueError::new_err(
-                    format!("Unknown seat type '{}'. Use 'nn', 'bot_v1', 'bot_v3', 'bot_lustrek', 'bot_v5', 'bot_v6', 'bot_m6', 'bot_pozrl', or a .pt path.", other)
+        let player: Arc<dyn BatchPlayer> = if label == "nn" {
+            nn_player.as_ref().unwrap().clone()
+        } else if label.ends_with(".pt") || label.contains('/') || label.contains('\\') {
+            // Path-based frozen NN checkpoint — cached by path
+            if !path_players.contains_key(label) {
+                let opp_player = Arc::new(NeuralNetPlayer::new(
+                    label,
+                    tch::Device::Cpu,
+                    0.0, // frozen opponents play greedily
                 ));
+                path_players.insert(label.to_string(), opp_player);
             }
+            path_players[label].clone()
+        } else if let Some(existing) = heuristic_players.get(label) {
+            existing.clone()
+        } else if let Some(bot) = try_make_bot_by_seat_label(label) {
+            let bot_arc: Arc<dyn BatchPlayer> = Arc::new(bot);
+            heuristic_players.insert(label.to_string(), bot_arc.clone());
+            bot_arc
+        } else {
+            let supported = SUPPORTED_BOT_SEAT_LABELS
+                .iter()
+                .map(|s| format!("'{}'", s))
+                .collect::<Vec<_>>()
+                .join(", ");
+            return Err(pyo3::exceptions::PyValueError::new_err(
+                format!(
+                    "Unknown seat type '{}'. Use 'nn', {}, or a .pt path.",
+                    label, supported
+                ),
+            ));
         };
         players.push(player);
     }
@@ -1159,11 +1124,16 @@ fn run_arena_games(
     let mut versions = [BotVersion::V5; 4];
     for (i, &label) in seat_labels.iter().enumerate() {
         versions[i] = match label {
-            "bot_v5" => BotVersion::V5,
-            "bot_v6" => BotVersion::V6,
+            "bot_lustrek" => BotVersion::Lustrek,
+            "bot_v1"     => BotVersion::V1,
+            "bot_v3"     => BotVersion::V3,
+            "bot_v5"     => BotVersion::V5,
+            "bot_v6"     => BotVersion::V6,
+            "bot_m6"     => BotVersion::M6,
+            "bot_pozrl"  => BotVersion::Pozrl,
             other => {
                 return Err(pyo3::exceptions::PyValueError::new_err(format!(
-                    "run_arena_games only supports bot_v5/bot_v6, got '{other}'"
+                    "run_arena_games only supports heuristic bots, got '{other}'"
                 )));
             }
         };

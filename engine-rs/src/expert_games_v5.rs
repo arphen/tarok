@@ -16,7 +16,7 @@ use crate::encoding;
 use crate::game_state::*;
 use crate::legal_moves;
 use crate::scoring;
-use crate::stockskis_v5;
+use crate::bots::stockskis_v5;
 use crate::trick_eval;
 
 /// Batch result from expert game generation.

@@ -10,7 +10,7 @@
 /// the existing v1 StockŠkis heuristic implementation.
 use crate::card::*;
 use crate::game_state::*;
-use crate::stockskis_v1;
+use crate::bots::stockskis_v1;
 
 #[inline]
 pub fn evaluate_bid_lustrek(hand: CardSet, highest_so_far: Option<Contract>) -> Option<Contract> {
