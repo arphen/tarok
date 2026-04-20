@@ -71,3 +71,12 @@ class PresenterPort(ABC):
 
     def on_league_snapshot_added(self, iteration: int, path: str) -> None:
         """Called when a checkpoint snapshot is added to the league pool. Optional."""
+
+    def on_initial_league_calibration_start(self, *args, **kwargs) -> None:
+        """Called when initial league Elo calibration begins. Optional."""
+
+    def on_initial_league_calibration_done(self, elapsed: float) -> None:
+        """Called when initial league Elo calibration finishes. Optional."""
+
+    def on_initial_league_calibration_mixed_result(self, *args, **kwargs) -> None:
+        """Called after each matchup result during initial calibration. Optional."""

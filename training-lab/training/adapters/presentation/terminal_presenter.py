@@ -178,13 +178,28 @@ class TerminalPresenter(PresenterPort):
         self,
         config: TrainingConfig,
         hyperparams: IterationHyperparams | None = None,
+        iter_lr: float | None = None,
+        iter_imitation_coef: float | None = None,
+        iter_behavioral_clone_coef: float | None = None,
+        iter_entropy_coef: float | None = None,
     ) -> None:
+        # Build hyperparams from legacy kwargs if not passed directly.
+        if hyperparams is None and any(
+            v is not None for v in (iter_lr, iter_imitation_coef, iter_behavioral_clone_coef, iter_entropy_coef)
+        ):
+            hyperparams = IterationHyperparams(
+                lr=iter_lr if iter_lr is not None else config.lr,
+                imitation_coef=iter_imitation_coef if iter_imitation_coef is not None else config.imitation_coef,
+                behavioral_clone_coef=iter_behavioral_clone_coef if iter_behavioral_clone_coef is not None else 0.0,
+                entropy_coef=iter_entropy_coef if iter_entropy_coef is not None else config.entropy_coef,
+                explore_rate=config.explore_rate,
+            )
         hp = hyperparams
         lr_tag = f"  lr={hp.lr:.1e}" if hp is not None and config.lr_schedule != "constant" else ""
         il_tag = f"  il={hp.imitation_coef:.4f}" if hp is not None else ""
         bc_tag = f"  bc={hp.behavioral_clone_coef:.4f}" if hp is not None and hp.behavioral_clone_coef > 0 else ""
         ent_tag = f"  ent={hp.entropy_coef:.5f}" if hp is not None and config.entropy_schedule != "constant" else ""
-        exp_tag = f"  ε={hp.explore_rate:.3f}" if hp is not None and config.explore_rate_schedule != "constant" else ""
+        exp_tag = f"  ε={hp.explore_rate:.3f}" if hp is not None and getattr(config, "explore_rate_schedule", "constant") != "constant" else ""
         print(f"  ② PPO update   {config.ppo_epochs}ep  batch={config.batch_size}{lr_tag}{il_tag}{bc_tag}{ent_tag}{exp_tag}")
         print("      stats: ", end="", flush=True)
 
