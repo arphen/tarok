@@ -56,9 +56,11 @@ class CollectExperiences:
             include_oracle_states=include_oracle_states,
             lapajne_mc_worlds=config.lapajne_mc_worlds,
             lapajne_mc_sims=config.lapajne_mc_sims,
+            centaur_handoff_trick=config.centaur_handoff_trick,
+            centaur_pimc_worlds=config.centaur_pimc_worlds,
         )
         seat_labels = [s.strip() for s in effective_seats.split(",")]
-        nn_seats = [i for i, s in enumerate(seat_labels) if s == "nn"]
+        nn_seats = [i for i, s in enumerate(seat_labels) if s in {"nn", "centaur"}]
         n_total = len(raw["players"])
         sp_time = time.time() - t0
 

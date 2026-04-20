@@ -19,6 +19,8 @@ class SelfPlayPort(ABC):
         include_oracle_states: bool = False,
         lapajne_mc_worlds: int | None = None,
         lapajne_mc_sims: int | None = None,
+        centaur_handoff_trick: int | None = None,
+        centaur_pimc_worlds: int | None = None,
     ) -> dict[str, Any]:
         """Run self-play games, return raw experience dict."""
 

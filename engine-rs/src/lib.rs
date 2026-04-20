@@ -9,6 +9,7 @@ pub mod bots;
 pub mod pimc;
 pub mod player;
 pub mod player_bot;
+pub mod player_centaur;
 pub mod player_nn;
 pub mod scoring;
 pub mod self_play;

@@ -194,8 +194,19 @@ class PPOAdapter(PPOPort):
         )
 
         for (dt, gm), idx in groups.items():
-            n = len(idx)
             action_size = _ACTION_SIZES[dt]
+
+            # Filter out PIMC-decided experiences (tagged with NaN log_prob by
+            # CentaurBot). GAE already ran over the full trajectory so rewards
+            # propagate correctly; we just skip policy+value loss for those steps.
+            raw_log_probs = old_log_probs[idx]
+            nn_mask = ~np.isnan(raw_log_probs.numpy() if hasattr(raw_log_probs, "numpy") else np.asarray(raw_log_probs))
+            if not nn_mask.any():
+                continue
+            if not nn_mask.all():
+                idx = idx[nn_mask]
+
+            n = len(idx)
             g_states = compute.to_device(states[idx])
             g_actions = compute.to_device(actions[idx])
             g_old_log_probs = compute.to_device(old_log_probs[idx])

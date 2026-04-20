@@ -8,7 +8,11 @@
 # Usage:
 #   make train-iterate CONFIG=self-play MODEL=path/to/model.pt
 
+seats: "centaur,bot_v6,bot_v6,bot_v6"
 bench_seats: "nn,bot_v1,bot_v3,bot_m6"
+
+centaur_handoff_trick: 8    # PIMC takes over from trick 8 onward (last 4 tricks)
+centaur_pimc_worlds: 100    # worlds sampled per PIMC card decision
 
 iterations: 100
 games: 5000

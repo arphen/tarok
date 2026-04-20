@@ -31,6 +31,8 @@ class TrainingConfig:
     concurrency: int = 128
     lapajne_mc_worlds: int | None = None
     lapajne_mc_sims: int | None = None
+    centaur_handoff_trick: int | None = None
+    centaur_pimc_worlds: int | None = None
     imitation_coef: float = 0.3
     imitation_schedule: str = "constant"  # constant | linear | cosine | gaussian_elo
     imitation_coef_min: float = 0.0
@@ -69,13 +71,13 @@ class TrainingConfig:
 
     @property
     def nn_seat_indices(self) -> list[int]:
-        """Indices of seats occupied by the NN player."""
-        return [i for i, s in enumerate(self.seats.split(",")) if s.strip() == "nn"]
+        """Indices of seats occupied by the NN player (nn or centaur)."""
+        return [i for i, s in enumerate(self.seats.split(",")) if s.strip() in {"nn", "centaur"}]
 
     @property
     def bot_seat_indices(self) -> list[int]:
         """Indices of seats occupied by any bot (for imitation learning)."""
-        return [i for i, s in enumerate(self.seats.split(",")) if s.strip() != "nn"]
+        return [i for i, s in enumerate(self.seats.split(",")) if s.strip() not in {"nn", "centaur"}]
 
     @property
     def effective_bench_seats(self) -> str:

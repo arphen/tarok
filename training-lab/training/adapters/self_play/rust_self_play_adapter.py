@@ -51,6 +51,8 @@ class RustSelfPlay(SelfPlayPort):
         include_oracle_states: bool = False,
         lapajne_mc_worlds: int | None = None,
         lapajne_mc_sims: int | None = None,
+        centaur_handoff_trick: int | None = None,
+        centaur_pimc_worlds: int | None = None,
     ) -> dict[str, Any]:
         raw = te.run_self_play(
             n_games=n_games,
@@ -62,6 +64,8 @@ class RustSelfPlay(SelfPlayPort):
             include_oracle_states=include_oracle_states,
             lapajne_mc_worlds=lapajne_mc_worlds,
             lapajne_mc_sims=lapajne_mc_sims,
+            centaur_handoff_trick=centaur_handoff_trick,
+            centaur_pimc_worlds=centaur_pimc_worlds,
         )
 
         # Compatibility shim for older engine builds that don't expose game_modes.
@@ -105,7 +109,8 @@ class RustSelfPlay(SelfPlayPort):
         ``(learner_outplaces, opponent_outplaces, draws)``.
         """
         players_np = np.asarray(raw["players"])
-        nn_seats = [i for i, s in enumerate(seat_labels) if s == "nn"]
+        learner_labels = {"nn", "centaur"}
+        nn_seats = [i for i, s in enumerate(seat_labels) if s in learner_labels]
         n_learner = int(sum(np.sum(players_np == s) for s in nn_seats))
 
         scores_arr = raw.get("scores")
@@ -125,10 +130,10 @@ class RustSelfPlay(SelfPlayPort):
                     clean_scores = scores_np[:used_games]
                     unit_scores = np.sum(clean_scores.reshape(n_sessions, session_size, 4), axis=1)
 
-            nn_seat_indices = [i for i, s in enumerate(seat_labels) if s == "nn"]
+            nn_seat_indices = [i for i, s in enumerate(seat_labels) if s in {"nn", "centaur"}]
             seat_outcomes: dict[int, tuple[int, int, int]] = {}
             for si in range(1, 4):
-                if seat_labels[si] == "nn":
+                if seat_labels[si] in {"nn", "centaur"}:
                     continue
                 opp_scores = unit_scores[:, si]
                 total_learner_outplaces = 0
@@ -143,7 +148,7 @@ class RustSelfPlay(SelfPlayPort):
         else:
             mean_scores = (0.0, 0.0, 0.0, 0.0)
             seat_outcomes = {}
-            non_nn_seats = [i for i, s in enumerate(seat_labels) if i > 0 and s != "nn"]
+            non_nn_seats = [i for i, s in enumerate(seat_labels) if i > 0 and s not in {"nn", "centaur"}]
             if non_nn_seats:
                 log.warning(
                     "run_self_play returned no scores; league Elo cannot be updated for seats %s. "

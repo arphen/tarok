@@ -776,7 +776,7 @@ fn compute_legal_plays(hand: Vec<u8>, trick_cards: Vec<(u8, u8)>, contract: Opti
 ///   initial_talon:  (n_games, 6) uint8, only when `include_replay_data=True`
 ///   traces:         list[dict], only when `include_replay_data=True`
 #[pyfunction]
-#[pyo3(signature = (n_games, concurrency=64, model_path=None, explore_rate=0.05, seat_config="nn,nn,nn,nn", include_replay_data=true, include_oracle_states=false, lapajne_mc_worlds=None, lapajne_mc_sims=None))]
+#[pyo3(signature = (n_games, concurrency=64, model_path=None, explore_rate=0.05, seat_config="nn,nn,nn,nn", include_replay_data=true, include_oracle_states=false, lapajne_mc_worlds=None, lapajne_mc_sims=None, centaur_handoff_trick=None, centaur_pimc_worlds=None))]
 fn run_self_play(
     py: Python<'_>,
     n_games: u32,
@@ -788,6 +788,8 @@ fn run_self_play(
     include_oracle_states: bool,
     lapajne_mc_worlds: Option<usize>,
     lapajne_mc_sims: Option<usize>,
+    centaur_handoff_trick: Option<usize>,
+    centaur_pimc_worlds: Option<u32>,
 ) -> PyResult<PyObject> {
     use std::collections::HashMap;
     use std::sync::Arc;
@@ -795,6 +797,7 @@ fn run_self_play(
     use crate::player::{BatchPlayer, CARD_ACTION_SIZE};
     use crate::player_bot::{try_make_bot_by_seat_label, SUPPORTED_BOT_SEAT_LABELS};
     use crate::player_nn::NeuralNetPlayer;
+    use crate::player_centaur::{CentaurBot, DEFAULT_HANDOFF_TRICK, DEFAULT_PIMC_WORLDS};
 
     if let Some(sims) = lapajne_mc_sims {
         crate::bots::lapajne::set_mc_sims(sims);
@@ -812,9 +815,10 @@ fn run_self_play(
     }
 
     let needs_nn = seat_labels.iter().any(|&s| s == "nn");
-    if needs_nn && model_path.is_none() {
+    let needs_centaur = seat_labels.iter().any(|&s| s == "centaur");
+    if (needs_nn || needs_centaur) && model_path.is_none() {
         return Err(pyo3::exceptions::PyValueError::new_err(
-            "model_path is required when seat_config contains 'nn'"
+            "model_path is required when seat_config contains 'nn' or 'centaur'"
         ));
     }
 
@@ -829,6 +833,18 @@ fn run_self_play(
         None
     };
 
+    let centaur_player: Option<Arc<dyn BatchPlayer>> = if needs_centaur {
+        Some(Arc::new(CentaurBot::new(
+            model_path.unwrap(),
+            tch::Device::Cpu,
+            explore_rate,
+            centaur_handoff_trick.unwrap_or(DEFAULT_HANDOFF_TRICK),
+            centaur_pimc_worlds.unwrap_or(DEFAULT_PIMC_WORLDS),
+        )))
+    } else {
+        None
+    };
+
     // Cache for path-based NN opponents (loaded once per unique path)
     let mut path_players: HashMap<String, Arc<dyn BatchPlayer>> = HashMap::new();
     // Cache for heuristic seat labels so each bot type is constructed once.
@@ -836,7 +852,9 @@ fn run_self_play(
 
     let mut players: Vec<Arc<dyn BatchPlayer>> = Vec::with_capacity(4);
     for &label in &seat_labels {
-        let player: Arc<dyn BatchPlayer> = if label == "nn" {
+        let player: Arc<dyn BatchPlayer> = if label == "centaur" {
+            centaur_player.as_ref().unwrap().clone()
+        } else if label == "nn" {
             nn_player.as_ref().unwrap().clone()
         } else if label.ends_with(".pt") || label.contains('/') || label.contains('\\') {
             // Path-based frozen NN checkpoint — cached by path
@@ -863,7 +881,7 @@ fn run_self_play(
                 .join(", ");
             return Err(pyo3::exceptions::PyValueError::new_err(
                 format!(
-                    "Unknown seat type '{}'. Use 'nn', {}, or a .pt path.",
+                    "Unknown seat type '{}'. Use 'nn', 'centaur', {}, or a .pt path.",
                     label, supported
                 ),
             ));
@@ -878,13 +896,13 @@ fn run_self_play(
         players[3].clone(),
     ];
 
-    // Training should only learn from learner seats (labels "nn").
+    // Training should only learn from learner seats (labels "nn" or "centaur").
     // We still run full games with all seats, but only emit learner experiences.
     let learner_seat_mask = [
-        seat_labels[0] == "nn",
-        seat_labels[1] == "nn",
-        seat_labels[2] == "nn",
-        seat_labels[3] == "nn",
+        seat_labels[0] == "nn" || seat_labels[0] == "centaur",
+        seat_labels[1] == "nn" || seat_labels[1] == "centaur",
+        seat_labels[2] == "nn" || seat_labels[2] == "centaur",
+        seat_labels[3] == "nn" || seat_labels[3] == "centaur",
     ];
 
     // Release GIL — the entire self-play loop runs in pure Rust
