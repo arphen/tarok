@@ -630,6 +630,55 @@ def test_train_model_elo_based_lr_decays_smoothly(
     assert lrs[2] == pytest.approx(cfg.effective_lr_min, rel=1e-9)
 
 
+@patch("training.use_cases.train_model.orchestrator.CalibrateInitialLeagueElo")
+def test_train_model_runs_initial_calibration_when_enabled_and_no_state(
+    MockInitialCalibrate: MagicMock,
+    mock_iteration_runner: MagicMock,
+    mock_benchmark: MagicMock,
+    mock_model_port: MagicMock,
+    mock_presenter: MagicMock,
+    base_config: TrainingConfig,
+    identity: ModelIdentity,
+    mock_league_persistence: MagicMock,
+) -> None:
+    cfg = replace(
+        base_config,
+        league=LeagueConfig(
+            enabled=True,
+            initial_calibration_enabled=True,
+            initial_calibration_games_per_pair=3000,
+            initial_calibration_anchor="V3",
+            initial_calibration_anchor_elo=1500.0,
+            opponents=(
+                LeagueOpponent(name="V3", type="bot_v3"),
+                LeagueOpponent(name="V5", type="bot_v5"),
+                LeagueOpponent(name="M6", type="bot_m6"),
+            ),
+        ),
+    )
+    mock_selfplay = MagicMock()
+    MockInitialCalibrate.return_value.execute.return_value = True
+
+    use_case = TrainModel(
+        iteration_runner=mock_iteration_runner,
+        benchmark=mock_benchmark,
+        model=mock_model_port,
+        presenter=mock_presenter,
+        selfplay=mock_selfplay,
+        league_persistence=mock_league_persistence,
+    )
+
+    use_case.execute(config=cfg, identity=identity, weights={}, device="cpu")
+
+    MockInitialCalibrate.return_value.execute.assert_called_once()
+    cal_kwargs = MockInitialCalibrate.return_value.execute.call_args.kwargs
+    assert cal_kwargs["selfplay"] is mock_selfplay
+    assert cal_kwargs["n_games_per_pair"] == 3000
+    assert cal_kwargs["anchor_name"] == "V3"
+    mock_presenter.on_initial_league_calibration_start.assert_called_once()
+    mock_presenter.on_initial_league_calibration_done.assert_called_once()
+
+
 def test_elo_based_lr_hits_expected_floor_and_ceiling_values() -> None:
     assert elo_based_lr(current_elo=800.0, base_lr=0.0003, min_lr=0.00001) == pytest.approx(0.0003)
     assert elo_based_lr(current_elo=2000.0, base_lr=0.0003, min_lr=0.00001) == pytest.approx(0.00001)

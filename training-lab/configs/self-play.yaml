@@ -51,17 +51,21 @@ league:
   snapshot_elo_delta: 50    # admit snapshot only after this much learner Elo gain
   max_active_snapshots: 3   # cap active nn checkpoints kept in league pool
   elo_outplace_unit_weight: 5
+  initial_calibration_enabled: true
+  initial_calibration_games_per_pair: 3000
+  initial_calibration_anchor: V3
+  initial_calibration_anchor_elo: 1500
 
   opponents:
     - name: StockSkis
       type: bot_v1
-      initial_elo: 800
     - name: V3
       type: bot_v3
-      initial_elo: 1300
     - name: V5
       type: bot_v5
-      initial_elo: 1600
     - name: M6
       type: bot_m6
-      initial_elo: 2000
+
+    - name: Lustrek
+      type: bot_lustrek
+

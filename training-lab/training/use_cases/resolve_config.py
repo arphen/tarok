@@ -31,6 +31,19 @@ def _parse_league(raw: dict[str, Any], default_outplace_unit_weight: float) -> L
         snapshot_interval=raw.get("snapshot_interval", 5),
         snapshot_elo_delta=float(raw.get("snapshot_elo_delta", 50.0)),
         max_active_snapshots=max(0, int(raw.get("max_active_snapshots", 3))),
+        elo_use_greedy_eval_only=bool(raw.get("elo_use_greedy_eval_only", True)),
+        elo_eval_games=max(1, int(raw.get("elo_eval_games", 2_000))),
+        elo_eval_interval=max(1, int(raw.get("elo_eval_interval", 1))),
+        initial_calibration_enabled=bool(raw.get("initial_calibration_enabled", False)),
+        initial_calibration_games_per_pair=max(
+            1, int(raw.get("initial_calibration_games_per_pair", 2_000))
+        ),
+        initial_calibration_anchor=raw.get("initial_calibration_anchor"),
+        initial_calibration_anchor_elo=float(raw.get("initial_calibration_anchor_elo", 1500.0)),
+        snapshot_calibration_enabled=bool(raw.get("snapshot_calibration_enabled", False)),
+        snapshot_calibration_games_per_opponent=max(
+            1, int(raw.get("snapshot_calibration_games_per_opponent", 1_000))
+        ),
         elo_outplace_unit_weight=float(raw.get("elo_outplace_unit_weight", default_outplace_unit_weight)),
     )
 
