@@ -162,9 +162,9 @@ def _worker_main(
                 task.ts_path,
                 task.save_dir,
                 prev_placement=task.prev_placement,
-                iter_lr=task.iter_lr,
-                iter_imitation_coef=task.iter_imitation_coef,
                 # Compatibility: tasks queued before a code reload may miss newer fields.
+                    iter_lr=getattr(task, "iter_lr", None),
+                    iter_imitation_coef=getattr(task, "iter_imitation_coef", None),
                 iter_behavioral_clone_coef=getattr(task, "iter_behavioral_clone_coef", None),
                 iter_entropy_coef=getattr(task, "iter_entropy_coef", None),
                 seats_override=task.seats_override,
