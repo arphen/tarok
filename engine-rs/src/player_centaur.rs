@@ -1,27 +1,62 @@
-//! Centaur (hybrid NN + PIMC) player for Tarok.
+//! Centaur (hybrid NN + endgame solver) player for Tarok.
 //!
 //! Uses the neural network for early/mid-game decisions (bidding, king
 //! calling, talon exchange, and tricks before the handoff point), then
-//! switches to PIMC for the endgame where the information set is nearly
-//! collapsed and search is practically exact.
+//! switches to a search-based endgame solver where the information set
+//! is nearly collapsed and search is practically exact.
 //!
-//! During training the PIMC-decided experiences are tagged with
+//! The endgame solver is configurable:
+//! - **PIMC** (default): Perfect-Information Monte Carlo — samples worlds
+//!   and DD-solves each independently.  Fast, but susceptible to
+//!   non-locality (strategy fusion is not enforced).
+//! - **AlphaMu**: The αμ algorithm — enforces strategy fusion via Pareto
+//!   fronts of per-world outcome vectors.  Stronger but slower.
+//!
+//! During training the solver-decided experiences are tagged with
 //! `log_prob = NaN` so the PPO trainer can skip them while still
-//! benefiting from the PIMC-optimal terminal rewards flowing back
+//! benefiting from the solver-optimal terminal rewards flowing back
 //! through the NN's earlier decisions.
 
+use crate::alpha_mu;
 use crate::game_state::Contract;
 use crate::pimc;
 use crate::player::*;
 use crate::player_nn::NeuralNetPlayer;
 use tch::Device;
 
-/// Default trick number at which PIMC takes over card play (0-indexed,
-/// so 8 means PIMC plays tricks 9–12, i.e. the last 4 tricks).
+/// Default trick number at which the endgame solver takes over card play
+/// (0-indexed, so 8 means the solver plays tricks 9–12, i.e. the last 4).
 pub const DEFAULT_HANDOFF_TRICK: usize = 8;
 
-/// Default number of PIMC worlds to sample per decision.
-pub const DEFAULT_PIMC_WORLDS: u32 = 100;
+/// Default number of worlds to sample per decision.
+pub const DEFAULT_NUM_WORLDS: u32 = 100;
+
+/// Default αμ search depth (number of Max moves to look ahead).
+pub const DEFAULT_ALPHA_MU_DEPTH: usize = 2;
+
+// -----------------------------------------------------------------------
+// Endgame policy
+// -----------------------------------------------------------------------
+
+/// Which search algorithm to use for endgame card play.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum EndgamePolicy {
+    /// PIMC: sample worlds, DD-solve each independently.
+    Pimc,
+    /// αμ: sample worlds, enforce strategy fusion via Pareto fronts.
+    AlphaMu { max_depth: usize },
+}
+
+impl EndgamePolicy {
+    pub fn from_name(name: &str, alpha_mu_depth: usize) -> Self {
+        match name {
+            "alpha_mu" | "alphamu" => EndgamePolicy::AlphaMu {
+                max_depth: alpha_mu_depth,
+            },
+            _ => EndgamePolicy::Pimc,
+        }
+    }
+}
 
 // -----------------------------------------------------------------------
 // CentaurBot
@@ -30,7 +65,8 @@ pub const DEFAULT_PIMC_WORLDS: u32 = 100;
 pub struct CentaurBot {
     nn: NeuralNetPlayer,
     handoff_trick: usize,
-    pimc_worlds: u32,
+    num_worlds: u32,
+    endgame_policy: EndgamePolicy,
 }
 
 impl CentaurBot {
@@ -39,12 +75,14 @@ impl CentaurBot {
         device: Device,
         explore_rate: f64,
         handoff_trick: usize,
-        pimc_worlds: u32,
+        num_worlds: u32,
+        endgame_policy: EndgamePolicy,
     ) -> Self {
         CentaurBot {
             nn: NeuralNetPlayer::new(model_path, device, explore_rate),
             handoff_trick,
-            pimc_worlds,
+            num_worlds,
+            endgame_policy,
         }
     }
 
@@ -72,10 +110,22 @@ impl BatchPlayer for CentaurBot {
         // for all positions and correct actions for non-PIMC decisions).
         let mut results = self.nn.batch_decide(contexts);
 
-        // Override late-game card plays with PIMC.
+        // Override late-game card plays with the endgame solver.
         for (i, ctx) in contexts.iter().enumerate() {
             if self.use_pimc(ctx) {
-                let card = pimc::pimc_choose_card(ctx.gs, ctx.player, self.pimc_worlds);
+                let card = match self.endgame_policy {
+                    EndgamePolicy::Pimc => {
+                        pimc::pimc_choose_card(ctx.gs, ctx.player, self.num_worlds)
+                    }
+                    EndgamePolicy::AlphaMu { max_depth } => {
+                        alpha_mu::alpha_mu_choose_card(
+                            ctx.gs,
+                            ctx.player,
+                            self.num_worlds,
+                            max_depth,
+                        )
+                    }
+                };
                 results[i] = DecisionResult {
                     action: card.0 as usize,
                     // NaN sentinel: PPO should skip this experience's policy

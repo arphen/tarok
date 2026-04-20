@@ -776,7 +776,7 @@ fn compute_legal_plays(hand: Vec<u8>, trick_cards: Vec<(u8, u8)>, contract: Opti
 ///   initial_talon:  (n_games, 6) uint8, only when `include_replay_data=True`
 ///   traces:         list[dict], only when `include_replay_data=True`
 #[pyfunction]
-#[pyo3(signature = (n_games, concurrency=64, model_path=None, explore_rate=0.05, seat_config="nn,nn,nn,nn", include_replay_data=true, include_oracle_states=false, lapajne_mc_worlds=None, lapajne_mc_sims=None, centaur_handoff_trick=None, centaur_pimc_worlds=None))]
+#[pyo3(signature = (n_games, concurrency=64, model_path=None, explore_rate=0.05, seat_config="nn,nn,nn,nn", include_replay_data=true, include_oracle_states=false, lapajne_mc_worlds=None, lapajne_mc_sims=None, centaur_handoff_trick=None, centaur_pimc_worlds=None, centaur_endgame_solver=None, centaur_alpha_mu_depth=None))]
 fn run_self_play(
     py: Python<'_>,
     n_games: u32,
@@ -790,6 +790,8 @@ fn run_self_play(
     lapajne_mc_sims: Option<usize>,
     centaur_handoff_trick: Option<usize>,
     centaur_pimc_worlds: Option<u32>,
+    centaur_endgame_solver: Option<&str>,
+    centaur_alpha_mu_depth: Option<usize>,
 ) -> PyResult<PyObject> {
     use std::collections::HashMap;
     use std::sync::Arc;
@@ -797,7 +799,7 @@ fn run_self_play(
     use crate::player::{BatchPlayer, CARD_ACTION_SIZE};
     use crate::player_bot::{try_make_bot_by_seat_label, SUPPORTED_BOT_SEAT_LABELS};
     use crate::player_nn::NeuralNetPlayer;
-    use crate::player_centaur::{CentaurBot, DEFAULT_HANDOFF_TRICK, DEFAULT_PIMC_WORLDS};
+    use crate::player_centaur::{CentaurBot, EndgamePolicy, DEFAULT_HANDOFF_TRICK, DEFAULT_NUM_WORLDS, DEFAULT_ALPHA_MU_DEPTH};
 
     if let Some(sims) = lapajne_mc_sims {
         crate::bots::lapajne::set_mc_sims(sims);
@@ -834,12 +836,17 @@ fn run_self_play(
     };
 
     let centaur_player: Option<Arc<dyn BatchPlayer>> = if needs_centaur {
+        let policy = EndgamePolicy::from_name(
+            centaur_endgame_solver.unwrap_or("pimc"),
+            centaur_alpha_mu_depth.unwrap_or(DEFAULT_ALPHA_MU_DEPTH),
+        );
         Some(Arc::new(CentaurBot::new(
             model_path.unwrap(),
             tch::Device::Cpu,
             explore_rate,
             centaur_handoff_trick.unwrap_or(DEFAULT_HANDOFF_TRICK),
-            centaur_pimc_worlds.unwrap_or(DEFAULT_PIMC_WORLDS),
+            centaur_pimc_worlds.unwrap_or(DEFAULT_NUM_WORLDS),
+            policy,
         )))
     } else {
         None
@@ -898,12 +905,9 @@ fn run_self_play(
 
     // Training should only learn from learner seats (labels "nn" or "centaur").
     // We still run full games with all seats, but only emit learner experiences.
-    let learner_seat_mask = [
-        seat_labels[0] == "nn" || seat_labels[0] == "centaur",
-        seat_labels[1] == "nn" || seat_labels[1] == "centaur",
-        seat_labels[2] == "nn" || seat_labels[2] == "centaur",
-        seat_labels[3] == "nn" || seat_labels[3] == "centaur",
-    ];
+    let learner_seat_mask: [bool; 4] = std::array::from_fn(|i| {
+        matches!(seat_labels[i], "nn" | "centaur")
+    });
 
     // Release GIL — the entire self-play loop runs in pure Rust
     let results: Vec<GameResult> = py.allow_threads(|| {

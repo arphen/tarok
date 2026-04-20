@@ -6,7 +6,7 @@ import time
 
 from training.entities.experience_bundle import ExperienceBundle
 from training.entities.model_identity import ModelIdentity
-from training.entities.training_config import TrainingConfig
+from training.entities.training_config import LEARNER_SEAT_LABELS, TrainingConfig
 from training.ports.ppo_port import PPOPort
 from training.ports.presenter_port import PresenterPort
 from training.ports.selfplay_port import SelfPlayPort
@@ -58,9 +58,11 @@ class CollectExperiences:
             lapajne_mc_sims=config.lapajne_mc_sims,
             centaur_handoff_trick=config.centaur_handoff_trick,
             centaur_pimc_worlds=config.centaur_pimc_worlds,
+            centaur_endgame_solver=config.centaur_endgame_solver,
+            centaur_alpha_mu_depth=config.centaur_alpha_mu_depth,
         )
         seat_labels = [s.strip() for s in effective_seats.split(",")]
-        nn_seats = [i for i, s in enumerate(seat_labels) if s in {"nn", "centaur"}]
+        nn_seats = [i for i, s in enumerate(seat_labels) if s in LEARNER_SEAT_LABELS]
         n_total = len(raw["players"])
         sp_time = time.time() - t0
 

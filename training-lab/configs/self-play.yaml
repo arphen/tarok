@@ -11,8 +11,10 @@
 seats: "centaur,bot_v6,bot_v6,bot_v6"
 bench_seats: "nn,bot_v1,bot_v3,bot_m6"
 
-centaur_handoff_trick: 8    # PIMC takes over from trick 8 onward (last 4 tricks)
-centaur_pimc_worlds: 100    # worlds sampled per PIMC card decision
+centaur_handoff_trick: 8    # endgame solver takes over from trick 8 onward (last 4 tricks)
+centaur_pimc_worlds: 100    # worlds sampled per endgame card decision
+# centaur_endgame_solver: pimc  # pimc (default) or alpha_mu
+# centaur_alpha_mu_depth: 2     # αμ iterative deepening depth (M parameter)
 
 iterations: 100
 games: 5000

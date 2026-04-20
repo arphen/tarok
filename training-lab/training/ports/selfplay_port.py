@@ -21,6 +21,8 @@ class SelfPlayPort(ABC):
         lapajne_mc_sims: int | None = None,
         centaur_handoff_trick: int | None = None,
         centaur_pimc_worlds: int | None = None,
+        centaur_endgame_solver: str | None = None,
+        centaur_alpha_mu_depth: int | None = None,
     ) -> dict[str, Any]:
         """Run self-play games, return raw experience dict."""
 

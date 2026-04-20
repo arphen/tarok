@@ -9,6 +9,9 @@ from typing import TYPE_CHECKING
 if TYPE_CHECKING:
     from training.entities.league import LeagueConfig
 
+# Seat labels that represent learner agents (NN-backed, generate PPO experiences).
+LEARNER_SEAT_LABELS: frozenset[str] = frozenset({"nn", "centaur"})
+
 
 @dataclass(frozen=True)
 class TrainingConfig:
@@ -33,6 +36,8 @@ class TrainingConfig:
     lapajne_mc_sims: int | None = None
     centaur_handoff_trick: int | None = None
     centaur_pimc_worlds: int | None = None
+    centaur_endgame_solver: str | None = None
+    centaur_alpha_mu_depth: int | None = None
     imitation_coef: float = 0.3
     imitation_schedule: str = "constant"  # constant | linear | cosine | gaussian_elo
     imitation_coef_min: float = 0.0
@@ -72,12 +77,12 @@ class TrainingConfig:
     @property
     def nn_seat_indices(self) -> list[int]:
         """Indices of seats occupied by the NN player (nn or centaur)."""
-        return [i for i, s in enumerate(self.seats.split(",")) if s.strip() in {"nn", "centaur"}]
+        return [i for i, s in enumerate(self.seats.split(",")) if s.strip() in LEARNER_SEAT_LABELS]
 
     @property
     def bot_seat_indices(self) -> list[int]:
         """Indices of seats occupied by any bot (for imitation learning)."""
-        return [i for i, s in enumerate(self.seats.split(",")) if s.strip() not in {"nn", "centaur"}]
+        return [i for i, s in enumerate(self.seats.split(",")) if s.strip() not in LEARNER_SEAT_LABELS]
 
     @property
     def effective_bench_seats(self) -> str:

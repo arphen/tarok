@@ -126,7 +126,7 @@ pub fn pimc_choose_card(gs: &GameState, viewer: u8, num_worlds: u32) -> Card {
 
 /// Detect known suit voids from completed tricks and the current trick.
 /// `voids[player][suit]` is true when `player` failed to follow `suit`.
-fn detect_voids(gs: &GameState) -> [[bool; 4]; NUM_PLAYERS] {
+pub fn detect_voids(gs: &GameState) -> [[bool; 4]; NUM_PLAYERS] {
     let mut voids = [[false; 4]; NUM_PLAYERS];
     record_voids_from_tricks(&gs.tricks, &mut voids);
     if let Some(ref trick) = gs.current_trick {
@@ -169,7 +169,7 @@ fn record_voids_from_trick(trick: &Trick, voids: &mut [[bool; 4]; NUM_PLAYERS]) 
 ///
 /// Returns `None` only when the card counts don't add up (should not happen
 /// in a well-formed game state).
-fn sample_world(
+pub fn sample_world(
     gs: &GameState,
     viewer: u8,
     voids: &[[bool; 4]; NUM_PLAYERS],

@@ -8,6 +8,7 @@ from typing import Any
 import numpy as np
 import tarok_engine as te
 
+from training.entities.training_config import LEARNER_SEAT_LABELS
 from training.ports import SelfPlayPort
 
 
@@ -53,6 +54,8 @@ class RustSelfPlay(SelfPlayPort):
         lapajne_mc_sims: int | None = None,
         centaur_handoff_trick: int | None = None,
         centaur_pimc_worlds: int | None = None,
+        centaur_endgame_solver: str | None = None,
+        centaur_alpha_mu_depth: int | None = None,
     ) -> dict[str, Any]:
         raw = te.run_self_play(
             n_games=n_games,
@@ -66,6 +69,8 @@ class RustSelfPlay(SelfPlayPort):
             lapajne_mc_sims=lapajne_mc_sims,
             centaur_handoff_trick=centaur_handoff_trick,
             centaur_pimc_worlds=centaur_pimc_worlds,
+            centaur_endgame_solver=centaur_endgame_solver,
+            centaur_alpha_mu_depth=centaur_alpha_mu_depth,
         )
 
         # Compatibility shim for older engine builds that don't expose game_modes.
@@ -109,8 +114,7 @@ class RustSelfPlay(SelfPlayPort):
         ``(learner_outplaces, opponent_outplaces, draws)``.
         """
         players_np = np.asarray(raw["players"])
-        learner_labels = {"nn", "centaur"}
-        nn_seats = [i for i, s in enumerate(seat_labels) if s in learner_labels]
+        nn_seats = [i for i, s in enumerate(seat_labels) if s in LEARNER_SEAT_LABELS]
         n_learner = int(sum(np.sum(players_np == s) for s in nn_seats))
 
         scores_arr = raw.get("scores")
@@ -130,10 +134,10 @@ class RustSelfPlay(SelfPlayPort):
                     clean_scores = scores_np[:used_games]
                     unit_scores = np.sum(clean_scores.reshape(n_sessions, session_size, 4), axis=1)
 
-            nn_seat_indices = [i for i, s in enumerate(seat_labels) if s in {"nn", "centaur"}]
+            nn_seat_indices = [i for i, s in enumerate(seat_labels) if s in LEARNER_SEAT_LABELS]
             seat_outcomes: dict[int, tuple[int, int, int]] = {}
             for si in range(1, 4):
-                if seat_labels[si] in {"nn", "centaur"}:
+                if seat_labels[si] in LEARNER_SEAT_LABELS:
                     continue
                 opp_scores = unit_scores[:, si]
                 total_learner_outplaces = 0
@@ -148,7 +152,7 @@ class RustSelfPlay(SelfPlayPort):
         else:
             mean_scores = (0.0, 0.0, 0.0, 0.0)
             seat_outcomes = {}
-            non_nn_seats = [i for i, s in enumerate(seat_labels) if i > 0 and s not in {"nn", "centaur"}]
+            non_nn_seats = [i for i, s in enumerate(seat_labels) if i > 0 and s not in LEARNER_SEAT_LABELS]
             if non_nn_seats:
                 log.warning(
                     "run_self_play returned no scores; league Elo cannot be updated for seats %s. "
