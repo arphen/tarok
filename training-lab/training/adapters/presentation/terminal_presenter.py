@@ -5,6 +5,7 @@ from __future__ import annotations
 from pathlib import Path
 
 from training.entities import TrainingConfig, ModelIdentity, TrainingRun
+from training.entities.iteration_hyperparams import IterationHyperparams
 from training.ports import PresenterPort
 
 # ── Visual constants ──────────────────────────────────────────────────────
@@ -110,14 +111,17 @@ class TerminalPresenter(PresenterPort):
         print(
             f"  PPO       : epochs={config.ppo_epochs}  batch={config.batch_size:,}  "
             f"gamma={config.gamma:.3f}  gae={config.gae_lambda:.3f}  "
-            f"clip={config.clip_epsilon:.3f}  policy={config.policy_coef:.3f}  value={config.value_coef:.3f}  "
-            f"epsilon={config.explore_rate:.3f}"
+            f"clip={config.clip_epsilon:.3f}  policy={config.policy_coef:.3f}  value={config.value_coef:.3f}"
         )
         print("  Schedules :")
         print(f"              lr       {_fmt_schedule(config.lr, config.effective_lr_min, config.lr_schedule)}")
         print(
             f"              entropy  "
             f"{_fmt_schedule(config.entropy_coef, config.entropy_coef_min, config.entropy_schedule)}"
+        )
+        print(
+            f"              explore  "
+            f"{_fmt_schedule(config.explore_rate, config.explore_rate_min, config.explore_rate_schedule)}"
         )
         print(f"              oracle-distill {_fmt_imitation_schedule(config)}")
         if config.behavioral_clone_coef > 0.0 and config.behavioral_clone_games_per_iteration > 0:
@@ -155,9 +159,10 @@ class TerminalPresenter(PresenterPort):
         print(f"  Iteration {iteration}/{total}  {bar}  {frac*100:3.0f}%   {eta_str}")
         print(f"{_THIN * _W}")
 
-    def on_selfplay_start(self, config: TrainingConfig, effective_seats: str | None = None) -> None:
+    def on_selfplay_start(self, config: TrainingConfig, effective_seats: str | None = None, hyperparams: IterationHyperparams | None = None) -> None:
         seats = effective_seats if effective_seats is not None else config.seats
-        print(f"  ① Self-play   {config.games:,} games  (ε={config.explore_rate})")
+        eps = hyperparams.explore_rate if hyperparams is not None else config.explore_rate
+        print(f"  ① Self-play   {config.games:,} games  (ε={eps:.3f})")
         print(f"      seats: {seats}")
         print("      stats: ", end="", flush=True)
 
@@ -170,16 +175,15 @@ class TerminalPresenter(PresenterPort):
     def on_ppo_start(
         self,
         config: TrainingConfig,
-        iter_lr: float | None = None,
-        iter_imitation_coef: float | None = None,
-        iter_behavioral_clone_coef: float | None = None,
-        iter_entropy_coef: float | None = None,
+        hyperparams: IterationHyperparams | None = None,
     ) -> None:
-        lr_tag = f"  lr={iter_lr:.1e}" if iter_lr is not None and config.lr_schedule != "constant" else ""
-        il_tag = f"  il={iter_imitation_coef:.4f}" if iter_imitation_coef is not None else ""
-        bc_tag = f"  bc={iter_behavioral_clone_coef:.4f}" if iter_behavioral_clone_coef is not None else ""
-        ent_tag = f"  ent={iter_entropy_coef:.5f}" if iter_entropy_coef is not None and config.entropy_schedule != "constant" else ""
-        print(f"  ② PPO update   {config.ppo_epochs}ep  batch={config.batch_size}{lr_tag}{il_tag}{bc_tag}{ent_tag}")
+        hp = hyperparams
+        lr_tag = f"  lr={hp.lr:.1e}" if hp is not None and config.lr_schedule != "constant" else ""
+        il_tag = f"  il={hp.imitation_coef:.4f}" if hp is not None else ""
+        bc_tag = f"  bc={hp.behavioral_clone_coef:.4f}" if hp is not None and hp.behavioral_clone_coef > 0 else ""
+        ent_tag = f"  ent={hp.entropy_coef:.5f}" if hp is not None and config.entropy_schedule != "constant" else ""
+        exp_tag = f"  ε={hp.explore_rate:.3f}" if hp is not None and config.explore_rate_schedule != "constant" else ""
+        print(f"  ② PPO update   {config.ppo_epochs}ep  batch={config.batch_size}{lr_tag}{il_tag}{bc_tag}{ent_tag}{exp_tag}")
         print("      stats: ", end="", flush=True)
 
     def on_ppo_done(self, metrics: dict[str, float], elapsed: float) -> None:
@@ -230,7 +234,7 @@ class TerminalPresenter(PresenterPort):
         rows.append(("★ LEARNER", pool.learner_elo, learner_delta, ""))
         for e in entries:
             delta = elo_deltas.get(e.opponent.name, 0.0) if elo_deltas else 0.0
-            extra = f"outplace {e.outplace_rate:.0%}  ({e.games_played:,} games)"
+            extra = f"outplace {e.outplace_rate:.0%}  ({e.games_played:,} sessions)"
             rows.append((e.opponent.name, e.elo, delta, extra))
         rows.sort(key=lambda x: x[1], reverse=True)
 
@@ -242,6 +246,116 @@ class TerminalPresenter(PresenterPort):
 
     def on_league_snapshot_added(self, iteration: int, path: str) -> None:
         print(f"  📸 snapshot saved → {path}")
+
+    def on_initial_league_calibration_start(
+        self,
+        n_opponents: int,
+        n_games_per_pair: int,
+        anchor_name: str | None,
+        anchor_elo: float,
+    ) -> None:
+        anchor_label = anchor_name if anchor_name is not None else "first opponent"
+        print("  ⓪ League calibration (greedy, one-time)")
+        print(
+            f"      opponents={n_opponents}  games/pair={n_games_per_pair:,}  "
+            f"anchor={anchor_label}@{anchor_elo:.0f}"
+        )
+
+    def on_initial_league_calibration_done(self, elapsed: float) -> None:
+        print(f"      done [{_format_time(elapsed)}]")
+
+    def on_initial_league_calibration_pair_result(
+        self,
+        pair_idx: int,
+        total_pairs: int,
+        left_name: str,
+        right_name: str,
+        left_wins: int,
+        right_wins: int,
+        draws: int,
+        left_score: float,
+    ) -> None:
+        print(
+            f"      [{pair_idx}/{total_pairs}] {left_name} vs {right_name}  "
+            f"{left_wins}-{right_wins}-{draws}  score={left_score:.3f}"
+        )
+
+    def on_initial_league_calibration_mixed_result(
+        self,
+        run_idx: int,
+        total_runs: int,
+        target_name: str,
+        seat_tokens: tuple[str, str, str],
+        placements: tuple[float, float, float, float],
+    ) -> None:
+        target_place, opp1, opp2, opp3 = placements
+        print(
+            f"      [{run_idx}/{total_runs}] {target_name} vs ({seat_tokens[0]}, {seat_tokens[1]}, {seat_tokens[2]})  "
+            f"{target_name}={target_place:.3f} vs ({opp1:.3f}, {opp2:.3f}, {opp3:.3f})"
+        )
+
+    def on_league_full_recalibration_start(
+        self,
+        snapshot_name: str,
+        n_entries: int,
+        n_games_per_entry: int,
+    ) -> None:
+        print(f"  ④ Full Elo recalibration  (triggered by {snapshot_name})")
+        print(f"      entries={n_entries}  games/entry={n_games_per_entry:,}  mode=greedy")
+
+    def on_league_full_recalibration_done(
+        self,
+        snapshot_name: str,
+        elapsed: float,
+        calibrated: bool,
+    ) -> None:
+        status = "done" if calibrated else "skipped"
+        print(f"      {status} [{_format_time(elapsed)}]")
+
+    def on_snapshot_calibration_start(
+        self,
+        snapshot_name: str,
+        n_opponents: int,
+        n_games_per_opponent: int,
+    ) -> None:
+        print(f"  ④ Snapshot calibration  {snapshot_name}")
+        print(
+            f"      opponents={n_opponents}  games/opponent={n_games_per_opponent:,}  mode=greedy"
+        )
+
+    def on_snapshot_calibration_done(
+        self,
+        snapshot_name: str,
+        elapsed: float,
+        calibrated: bool,
+    ) -> None:
+        status = "calibrated" if calibrated else "skipped"
+        print(f"      {status} [{_format_time(elapsed)}]")
+
+    def on_snapshot_calibration_match_setup(
+        self,
+        snapshot_name: str,
+        seat_config: str,
+        n_games: int,
+    ) -> None:
+        print(f"      match: {seat_config}")
+        print(f"      games: {n_games:,}")
+
+    def on_snapshot_calibration_pair_result(
+        self,
+        snapshot_name: str,
+        opponent_name: str,
+        snapshot_wins: int,
+        opponent_wins: int,
+        draws: int,
+        snapshot_score: float,
+        implied_snapshot_elo: float,
+        opponent_elo: float,
+    ) -> None:
+        print(
+            f"      {snapshot_name} vs {opponent_name}  "
+            f"avg_place={snapshot_score:.3f}  implied={implied_snapshot_elo:.1f} from {opponent_elo:.1f}"
+        )
 
     # ── Completion ────────────────────────────────────────────────────────
 
