@@ -236,8 +236,11 @@ def main() -> None:
             identity = dc_replace(identity, model_arch=config.model_arch)
 
     # ── Resolve save directory ──────────────────────────────────────
-    save_dir = args.save_dir if args.save_dir is not None else f"data/checkpoints/{identity.name}"
-    config = dc_replace(config, save_dir=save_dir)
+    raw_save_dir = args.save_dir if args.save_dir is not None else f"data/checkpoints/{identity.name}"
+    save_dir = Path(raw_save_dir).expanduser()
+    if not save_dir.is_absolute():
+        save_dir = (_root / save_dir).resolve()
+    config = dc_replace(config, save_dir=str(save_dir))
 
     device = _detect_device(config.device)
 

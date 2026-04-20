@@ -80,9 +80,9 @@ class TerminalPresenter(PresenterPort):
         if identity.is_new:
             print(_banner(f"NEW MODEL: {identity.name}"))
             print(f"  arch={identity.model_arch}  hidden={identity.hidden_size}  oracle={identity.oracle_critic}")
-            print(f"  checkpoints → {save_dir}/")
         else:
             print(f"  arch={identity.model_arch}  hidden={identity.hidden_size}  oracle={identity.oracle_critic}")
+        print(f"  checkpoints → {save_dir}/")
 
     def on_device_selected(self, device: str) -> None:
         print(f"  device = {device}")
@@ -119,9 +119,11 @@ class TerminalPresenter(PresenterPort):
             f"              entropy  "
             f"{_fmt_schedule(config.entropy_coef, config.entropy_coef_min, config.entropy_schedule)}"
         )
+        explore_rate_min = getattr(config, "explore_rate_min", config.explore_rate)
+        explore_rate_schedule = getattr(config, "explore_rate_schedule", "constant")
         print(
             f"              explore  "
-            f"{_fmt_schedule(config.explore_rate, config.explore_rate_min, config.explore_rate_schedule)}"
+            f"{_fmt_schedule(config.explore_rate, explore_rate_min, explore_rate_schedule)}"
         )
         print(f"              oracle-distill {_fmt_imitation_schedule(config)}")
         if config.behavioral_clone_coef > 0.0 and config.behavioral_clone_games_per_iteration > 0:
