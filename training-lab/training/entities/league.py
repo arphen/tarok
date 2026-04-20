@@ -47,6 +47,21 @@ class LeagueConfig:
     snapshot_interval: int = 5  # save snapshot every N iterations
     snapshot_elo_delta: float = 50.0
     max_active_snapshots: int = 3
+    # When true, Elo is updated only from greedy evaluation games.
+    # Stochastic training rollout outcomes are ignored for rating updates.
+    elo_use_greedy_eval_only: bool = True
+    # Number of greedy games per Elo evaluation batch.
+    elo_eval_games: int = 2_000
+    # Run greedy Elo evaluation every N iterations.
+    elo_eval_interval: int = 1
+    # Optional startup calibration among non-learner opponents.
+    initial_calibration_enabled: bool = False
+    initial_calibration_games_per_pair: int = 2_000
+    initial_calibration_anchor: str | None = None
+    initial_calibration_anchor_elo: float = 1500.0
+    # Optional snapshot-on-admission calibration.
+    snapshot_calibration_enabled: bool = False
+    snapshot_calibration_games_per_opponent: int = 1_000
     # Multiplies Elo K-factor when converting outplace outcomes to rating deltas.
     # Defaults to outplace_session_size so a session result carries more weight.
     elo_outplace_unit_weight: float = 1.0

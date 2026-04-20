@@ -165,7 +165,7 @@ async def start_arena(req: ArenaRequest):
 # ---- Run loop ----
 
 
-async def _run_arena(
+async def _run_arena(  # noqa: PLR0913
     *,
     total: int,
     session_size: int,

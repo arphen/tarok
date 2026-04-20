@@ -75,3 +75,27 @@ def test_resolve_config_reads_behavioral_cloning_fields() -> None:
     assert cfg.behavioral_clone_coef_min == 0.1
     assert cfg.behavioral_clone_teacher == "bot_v5"
     assert cfg.behavioral_clone_games_per_iteration == 321
+
+
+def test_resolve_config_reads_initial_league_calibration_fields() -> None:
+    payload = {
+        "league": {
+            "enabled": True,
+            "initial_calibration_enabled": True,
+            "initial_calibration_games_per_pair": 3000,
+            "initial_calibration_anchor": "V3",
+            "initial_calibration_anchor_elo": 1500.0,
+            "opponents": [
+                {"name": "V3", "type": "bot_v3", "initial_elo": 1300},
+                {"name": "V5", "type": "bot_v5", "initial_elo": 1600},
+            ],
+        },
+    }
+
+    cfg = ResolveConfig(_Loader(payload)).resolve(cli={}, config_path="dummy.yaml")
+
+    assert cfg.league is not None
+    assert cfg.league.initial_calibration_enabled is True
+    assert cfg.league.initial_calibration_games_per_pair == 3000
+    assert cfg.league.initial_calibration_anchor == "V3"
+    assert cfg.league.initial_calibration_anchor_elo == 1500.0

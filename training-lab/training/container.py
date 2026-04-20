@@ -199,6 +199,7 @@ class Container:
             benchmark=self.benchmark,
             model=self.model,
             presenter=self.presenter,
+            selfplay=self.selfplay,
             lr_policy=self.lr_policy,
             imitation_policy=self._imitation_policy or _default_imitation_policy(config),
             entropy_policy=_default_entropy_policy(config),

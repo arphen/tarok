@@ -18,6 +18,8 @@ from training.ports.league_persistence_port import LeagueStatePersistencePort
 from training.ports.learning_rate_policy_port import LearningRatePolicyPort
 from training.ports.model_port import ModelPort
 from training.ports.presenter_port import PresenterPort
+from training.ports.selfplay_port import SelfPlayPort
+from training.use_cases.calibrate_initial_league_elo import CalibrateInitialLeagueElo
 from training.use_cases.maintain_league_pool import MaintainLeaguePool
 from training.use_cases.sample_league_seats import SampleLeagueSeats
 from training.use_cases.train_model.policies import (
@@ -37,6 +39,7 @@ class TrainModel:
         benchmark: BenchmarkPort,
         model: ModelPort,
         presenter: PresenterPort,
+        selfplay: SelfPlayPort | None = None,
         lr_policy: LearningRatePolicyPort | None = None,
         imitation_policy: ImitationCoefPolicyPort | None = None,
         entropy_policy: DefaultEntropyCoefPolicy | EloDecayEntropyPolicy | None = None,
@@ -47,6 +50,7 @@ class TrainModel:
         self._benchmark = benchmark
         self._model = model
         self._presenter = presenter
+        self._selfplay = selfplay
         self._lr_policy = lr_policy if lr_policy is not None else DefaultLearningRatePolicy()
         self._imitation_policy = (
             imitation_policy if imitation_policy is not None else DefaultImitationCoefPolicy()
@@ -109,7 +113,37 @@ class TrainModel:
             persistence=self._league_persistence,
         )
         league_pool_dir = save_dir / "league_pool"
-        self._league_persistence.restore(pool, league_maintenance.state_path(league_pool_dir))
+        state_path = league_maintenance.state_path(league_pool_dir)
+        had_state = state_path.exists()
+        self._league_persistence.restore(pool, state_path)
+
+        if config.league.initial_calibration_enabled and not had_state:
+            if self._selfplay is None:
+                raise ValueError("Initial league calibration requires selfplay port")
+            self._presenter.on_initial_league_calibration_start(
+                n_opponents=len(pool.entries),
+                n_games_per_pair=config.league.initial_calibration_games_per_pair,
+                anchor_name=config.league.initial_calibration_anchor,
+                anchor_elo=config.league.initial_calibration_anchor_elo,
+            )
+            t_cal = time.time()
+            calibrated = CalibrateInitialLeagueElo().execute(
+                pool=pool,
+                selfplay=self._selfplay,
+                model_path=ts_path,
+                n_games_per_pair=config.league.initial_calibration_games_per_pair,
+                concurrency=config.concurrency,
+                session_size=config.outplace_session_size,
+                anchor_name=config.league.initial_calibration_anchor,
+                anchor_elo=config.league.initial_calibration_anchor_elo,
+                lapajne_mc_worlds=config.lapajne_mc_worlds,
+                lapajne_mc_sims=config.lapajne_mc_sims,
+                on_mixed_result=self._presenter.on_initial_league_calibration_mixed_result,
+            )
+            self._presenter.on_initial_league_calibration_done(time.time() - t_cal)
+            if calibrated:
+                self._league_persistence.save(pool, state_path)
+
         last_snapshot_elo: float | None = league_maintenance.initial_snapshot_elo(pool)
 
         sample_seats = SampleLeagueSeats()
