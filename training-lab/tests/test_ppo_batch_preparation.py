@@ -138,7 +138,9 @@ def test_prepare_batched_oracle_states_optional() -> None:
     out_none = prepare_batched(raw)
     assert out_none["oracle_states"] is None
 
-    oracle_states = np.random.default_rng(0).standard_normal((3, 612), dtype=np.float32)
+    from tarok_model.encoding import ORACLE_STATE_SIZE
+
+    oracle_states = np.random.default_rng(0).standard_normal((3, ORACLE_STATE_SIZE), dtype=np.float32)
     out = prepare_batched(_make_raw(3, oracle_states=oracle_states))
     assert isinstance(out["oracle_states"], torch.Tensor)
-    assert out["oracle_states"].shape == (3, 612)
+    assert out["oracle_states"].shape == (3, ORACLE_STATE_SIZE)

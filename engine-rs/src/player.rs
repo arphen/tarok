@@ -103,7 +103,7 @@ pub struct DecisionContext<'a> {
     /// Binary mask over the action space (1.0 = legal, 0.0 = illegal).
     /// Length equals `decision_type.action_size()`.
     pub legal_mask: Vec<f32>,
-    /// Pre-computed state encoding (450 floats).
+    /// Pre-computed state encoding (see `encoding::STATE_SIZE`).
     /// Heuristic bots can ignore this field.
     pub state_encoding: Vec<f32>,
 }

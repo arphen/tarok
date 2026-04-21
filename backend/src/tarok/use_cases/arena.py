@@ -96,9 +96,11 @@ def export_checkpoint_to_torchscript(checkpoint_path: str) -> str:
                 self.base.critic(h).squeeze(-1),
             )
 
+    from tarok_model.encoding import STATE_SIZE
+
     wrapper = _AllHeads(net)
     wrapper.eval()
-    traced = torch.jit.trace(wrapper, torch.randn(1, 450), check_trace=False)
+    traced = torch.jit.trace(wrapper, torch.randn(1, STATE_SIZE), check_trace=False)
 
     with tempfile.NamedTemporaryFile(suffix=".pt", prefix="tarok_arena_ts_", delete=False) as f:
         path = f.name

@@ -4,7 +4,8 @@ v2 Architecture upgrades:
   - Residual blocks with LayerNorm for deeper, more stable training
   - Multi-head self-attention over card embeddings for relational reasoning
   - Oracle guiding: actor latent space aligned with oracle critic via distillation
-  - Expanded state encoding with belief tracking (450 dims)
+  - Expanded state encoding with belief tracking and public-memory
+    features (471 dims)
 
 Supports five decision types with separate action heads:
   - Bidding (9 actions: pass + 8 contracts)

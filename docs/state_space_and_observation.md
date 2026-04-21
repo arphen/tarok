@@ -5,10 +5,13 @@ It is based on the active Rust self-play path and encoder implementation.
 
 ## Short Answer
 
-- The policy acts on a 450-dimensional state vector per decision.
-- Optional oracle critic training uses a 612-dimensional vector.
-- The agent does see previous trick information, but mostly as aggregated/public features (not a full ordered trick transcript tensor).
-- During self-play training, only learner seats ("nn") are emitted into the PPO batch.
+- The policy acts on a 471-dimensional state vector per decision.
+- Optional oracle critic training uses a 633-dimensional vector.
+- The agent sees previous trick information as public-card planes plus
+  explicit per-opponent memory features (tarok-void, suit-void, cards
+  remaining).  It does not receive an ordered per-trick transcript tensor.
+- During self-play training, only learner seats ("nn") are emitted into the
+  PPO batch.
 
 ## Source Of Truth In Code
 
@@ -35,8 +38,8 @@ So the real environment state space is combinatorially huge.
 
 The policy/value network receives a fixed-size encoded vector:
 
-- Imperfect info actor state size: 450
-- Oracle critic state size: 612 (= 450 + 162)
+- Imperfect info actor state size: 471
+- Oracle critic state size: 633 (= 471 + 162)
 
 ## Decision Points During Self-Play
 
@@ -49,7 +52,7 @@ At each decision point, self-play encodes state from the acting seat's perspecti
 
 Note: the network architecture has an announce head, but run_self_play currently emits these 4 decision types.
 
-## 450-Dim Observation Layout
+## 471-Dim Observation Layout
 
 All offsets are zero-based and match engine-rs/src/encoding.rs.
 
@@ -72,15 +75,21 @@ All offsets are zero-based and match engine-rs/src/encoding.rs.
 | 258..261 | 4 | Any team announced: trula, kings, pagat, valat |
 | 262..266 | 5 | Kontra levels (normalized) |
 | 267..269 | 3 | Role one-hot: declarer / partner / opposition |
-| 270..431 | 162 | Opponent belief block: 3 opponents x 54 cards |
+| 270..431 | 162 | Opponent belief block: 3 opponents x 54 cards (suit-void AND tarok-void applied) |
 | 432..443 | 12 | Opponent play stats: 3 opponents x 4 counts |
 | 444..449 | 6 | Trick context: trick position + lead type/suit |
+| 450..452 | 3 | Per-opponent tarok-void flag (v3) |
+| 453..464 | 12 | Per-opponent suit-void flags, 3 opponents x 4 suits (v3) |
+| 465..467 | 3 | Per-opponent cards-remaining fraction of 12 (v3) |
+| 468 | 1 | Global remaining trula taroks (pagat, mond, skis) / 3 (v3) |
+| 469 | 1 | Global remaining kings / 4 (v3) |
+| 470 | 1 | Global remaining taroks / 22 (v3) |
 
-Total: 450.
+Total: 471.
 
-## Oracle 612-Dim Layout
+## Oracle 633-Dim Layout
 
-Oracle state = 450 base + 162 extra dims:
+Oracle state = 471 base + 162 extra dims:
 
 - Extra 162 dims are exact opponent hands: 3 opponents x 54 cards.
 
@@ -110,9 +119,26 @@ The belief block (270..431) is built per acting player:
 
 - Known cards are removed (own hand, played cards, current trick cards, visible talon for declarer).
 - For unknown cards, each opponent initially gets uniform 1/3 probability.
-- If trick history implies an opponent is void in a suit (failed to follow suit), cards in that suit get zero probability for that opponent.
+- If trick history implies an opponent is void in a suit (failed to follow
+  suit, or trumped with a tarok), cards in that suit get zero probability
+  for that opponent.
+- If tarok was led and an opponent did not play a tarok, that opponent is
+  marked tarok-void: all remaining tarok cards get zero probability for
+  that opponent.
 
-Opponent order in the 3x54 block is relative to current player:
+The v3 public-memory block (450..470) makes these signals available
+explicitly as well:
+
+- 3 dims: per-opponent tarok-void flags.
+- 12 dims: per-opponent suit-void flags (3 opponents x 4 suits).
+- 3 dims: per-opponent cards-remaining fraction of 12.
+- 3 dims: global remaining trula (pagat, mond, skis), kings, and taroks.
+
+This lets the network rely on explicit features instead of re-deriving
+them from the played-cards plane.
+
+Opponent order in the 3x54 belief block and all per-opponent v3 features
+is relative to the current player:
 
 - Opponent +1 seat, then +2, then +3 (modulo 4).
 
@@ -154,7 +180,7 @@ Card-play action mapping is direct card index 0..53 in canonical deck order:
 
 Main tensors in the dictionary returned by run_self_play:
 
-- states: (N, 450) float32
+- states: (N, 471) float32
 - actions: (N,) uint16
 - log_probs: (N,) float32
 - values: (N,) float32
@@ -164,7 +190,7 @@ Main tensors in the dictionary returned by run_self_play:
 - players: (N,) uint8
 - game_ids: (N,) uint32
 - scores: (num_games, 4) int32
-- oracle_states: (N, 612) float32 (optional)
+- oracle_states: (N, 633) float32 (optional)
 
 ## How Rewards Are Assigned For PPO
 

@@ -48,7 +48,8 @@ def export_torchscript(checkpoint_path: str | None = None) -> str:
     wrapper = AllHeadsModel(net)
     wrapper.eval()
 
-    dummy = torch.randn(1, 450)
+    from tarok_model.encoding import STATE_SIZE
+    dummy = torch.randn(1, STATE_SIZE)
     traced = torch.jit.trace(wrapper, dummy, check_trace=False)
 
     path = tempfile.mktemp(suffix=".pt", prefix="tarok_traced_")

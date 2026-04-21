@@ -95,9 +95,11 @@ def _export_torchscript(model: TarokNetV4, path: str) -> None:
                 self.base.critic(f).squeeze(-1),
             )
 
+    from tarok_model.encoding import STATE_SIZE
+
     w = _Wrapper(model)
     w.eval()
-    example = torch.randn(1, 450)
+    example = torch.randn(1, STATE_SIZE)
     traced = None
     try:
         with torch.inference_mode():

@@ -22,8 +22,8 @@ A standard RL environment has a single homogeneous action space. In Tarok, a pla
 ## 2. Network Topology & Dimensions
 
 ### Inputs (State Encoding v2)
-- **Actor State (`STATE_SIZE=450`):** Represents imperfect information. Includes the player's current hand, historical plays, bid history, trick counts, announcements, **opponent belief probability vectors** (3×54 = 162 dims), **opponent card-play statistics** (3×4 = 12 dims), and **trick context features** (6 dims).
-- **Oracle State (`ORACLE_STATE_SIZE=612`):** During training, the perfect-information Critic receives the base 450 dimensions *plus* 162 additional dimensions (3 opponents $\times$ 54 possible cards) that reveal exactly where every unplayed card is located.
+- **Actor State (`STATE_SIZE=471`):** Represents imperfect information. Includes the player's current hand, historical plays, bid history, trick counts, announcements, **opponent belief probability vectors** (3×54 = 162 dims, with tarok-void applied alongside suit-void), **opponent card-play statistics** (3×4 = 12 dims), **trick context features** (6 dims), and **v3 public-memory features** (21 dims: per-opponent tarok/suit-void flags, per-opponent cards-remaining, and global remaining trula / kings / taroks).
+- **Oracle State (`ORACLE_STATE_SIZE=633`):** During training, the perfect-information Critic receives the base 471 dimensions *plus* 162 additional dimensions (3 opponents $\times$ 54 possible cards) that reveal exactly where every unplayed card is located.
 
 ### v2 Belief Tracking (Public Belief State)
 The v2 encoding adds **Bayesian belief vectors** for each opponent:
@@ -35,7 +35,7 @@ The v2 encoding adds **Bayesian belief vectors** for each opponent:
 All observations first pass through a shared sequence of layers, followed by **residual blocks** and **card-level multi-head self-attention**:
 
 **Input Projection:**
-1. `Linear(450, 256)` → `LayerNorm(256)` → `ReLU`
+1. `Linear(471, 256)` → `LayerNorm(256)` → `ReLU`
 2. `Linear(256, 256)` → `LayerNorm(256)` → `ReLU`
 
 **Residual Blocks (×2):**
@@ -51,7 +51,7 @@ Each block: `LayerNorm(256)` → `Linear(256, 256)` → `ReLU` → `Linear(256, 
 
 ### The Critic Backbone (Oracle Enabled)
 A secondary, entirely distinct backbone is instantiated for the Critic:
-1. `Linear(612, 256)` → `LayerNorm(256)` → `ReLU`
+1. `Linear(633, 256)` → `LayerNorm(256)` → `ReLU`
 2. `Linear(256, 256)` → `LayerNorm(256)` → `ReLU`
 3. `ResidualBlock(256)` (×1)
 

@@ -263,37 +263,49 @@ def _encode_state_into(
     unknown_card_indices = [i for i in range(54) if i not in known_cards]
     num_unknown = len(unknown_card_indices)
 
-    # Build per-opponent suit void constraints from trick history
-    # If an opponent failed to follow suit when they could have, they are void
+    # Build per-opponent suit-void and tarok-void constraints from trick
+    # history:
+    #   - Suit void: opponent played a non-suit (off-suit or tarok trump)
+    #     when a suit was led.
+    #   - Tarok void: opponent failed to play a tarok when tarok was led.
     opp_void_suits: dict[int, set[Suit]] = {i: set() for i in range(4) if i != player_idx}
+    opp_tarok_void: dict[int, bool] = {i: False for i in range(4) if i != player_idx}
     for trick in state.tricks:
         if not trick.cards:
             continue
         lead_player, lead_card = trick.cards[0]
         lead_suit = lead_card.suit  # None for taroks
-        if lead_suit is None:
-            continue  # tarok lead — no suit inference
-        for p, card in trick.cards[1:]:
-            if p == player_idx:
-                continue
-            if p in opp_void_suits and card.suit != lead_suit:
-                # Player didn't follow suit → must be void in that suit
-                opp_void_suits[p].add(lead_suit)
+        if lead_suit is not None:
+            for p, card in trick.cards[1:]:
+                if p == player_idx or p not in opp_void_suits:
+                    continue
+                if card.suit != lead_suit:
+                    # Didn't follow suit (off-suit or tarok) → void in that suit
+                    opp_void_suits[p].add(lead_suit)
+        elif lead_card.card_type == CardType.TAROK:
+            for p, card in trick.cards[1:]:
+                if p == player_idx or p not in opp_tarok_void:
+                    continue
+                if card.card_type != CardType.TAROK:
+                    opp_tarok_void[p] = True
 
-    # Compute uniform belief conditioned on void constraints
-    # For each unknown card and each opponent, compute whether the opponent
-    # could hold it (not void in that suit). Then distribute probability.
+    # Compute uniform belief conditioned on void constraints.  For each
+    # unknown card and each opponent, the card has probability 1/3 unless
+    # the opponent is proven void in that card's suit or tarok-void for
+    # taroks.
     for opp_offset in range(1, 4):
         opp_idx = (player_idx + opp_offset) % 4
         void_suits = opp_void_suits.get(opp_idx, set())
+        tarok_void = opp_tarok_void.get(opp_idx, False)
         for cidx in unknown_card_indices:
             card = DECK[cidx]
-            # If opponent is void in this card's suit, probability = 0
-            if card.suit is not None and card.suit in void_suits:
+            if card.card_type == CardType.TAROK:
+                impossible = tarok_void
+            else:
+                impossible = card.suit is not None and card.suit in void_suits
+            if impossible:
                 buf[o + cidx] = 0.0
             else:
-                # Uniform prior across possible holders (3 opponents + hidden talon/put_down)
-                # Rough approximation: 1/3 for each opponent if no constraints
                 buf[o + cidx] = 1.0 / 3.0
         o += 54
 
@@ -345,6 +357,73 @@ def _encode_state_into(
             buf[o + 2 + suit_idx] = 1.0  # suit lead (4 positions)
     o += 6  # trick_pos(1) + tarok_lead(1) + suit_lead(4)
 
+    # ===================================================================
+    # v3 PUBLIC-MEMORY FEATURES (21 dims)
+    # Explicit, easy-to-read summaries of public information so the
+    # network does not have to re-derive them from the played-cards plane.
+    # ===================================================================
+
+    # --- Per-opponent tarok-void flags (3 dims) ---
+    for opp_offset in range(1, 4):
+        opp_idx = (player_idx + opp_offset) % 4
+        if opp_tarok_void.get(opp_idx, False):
+            buf[o] = 1.0
+        o += 1
+
+    # --- Per-opponent suit-void flags (3 × 4 = 12 dims, hearts/diamonds/clubs/spades) ---
+    _SUIT_ORDER = list(Suit)
+    for opp_offset in range(1, 4):
+        opp_idx = (player_idx + opp_offset) % 4
+        void_suits = opp_void_suits.get(opp_idx, set())
+        for s_i, s in enumerate(_SUIT_ORDER):
+            if s in void_suits:
+                buf[o + s_i] = 1.0
+        o += 4
+
+    # --- Per-opponent cards-remaining fraction (3 dims) ---
+    # 12 - cards they have played (completed + current trick), clamped ≥ 0.
+    played_count_per_player: dict[int, int] = {i: 0 for i in range(4)}
+    for trick in state.tricks:
+        for p, _c in trick.cards:
+            played_count_per_player[p] = played_count_per_player.get(p, 0) + 1
+    if state.current_trick:
+        for p, _c in state.current_trick.cards:
+            played_count_per_player[p] = played_count_per_player.get(p, 0) + 1
+    for opp_offset in range(1, 4):
+        opp_idx = (player_idx + opp_offset) % 4
+        remaining = max(0, 12 - played_count_per_player.get(opp_idx, 0)) / 12.0
+        buf[o] = remaining
+        o += 1
+
+    # --- Global remaining trula (pagat/mond/skis) / 3, kings / 4, taroks / 22 ---
+    # Scan completed tricks + current trick for global totals.  Use card
+    # indices directly so we match the Rust encoder: pagat=0, mond=20, skis=21.
+    trula_played = 0
+    kings_played = 0
+    taroks_played = 0
+    for trick in state.tricks:
+        for _p, card in trick.cards:
+            if card.card_type == CardType.TAROK:
+                taroks_played += 1
+                cidx = CARD_TO_IDX[card]
+                if cidx in (0, 20, 21):
+                    trula_played += 1
+            if card.is_king:
+                kings_played += 1
+    if state.current_trick:
+        for _p, card in state.current_trick.cards:
+            if card.card_type == CardType.TAROK:
+                taroks_played += 1
+                cidx = CARD_TO_IDX[card]
+                if cidx in (0, 20, 21):
+                    trula_played += 1
+            if card.is_king:
+                kings_played += 1
+    buf[o] = max(0, 3 - trula_played) / 3.0
+    buf[o + 1] = max(0, 4 - kings_played) / 4.0
+    buf[o + 2] = max(0, 22 - taroks_played) / 22.0
+    o += 3
+
 
 def encode_state(state: GameState, player_idx: int, decision_type: DecisionType = DecisionType.CARD_PLAY) -> torch.Tensor:
     """Encode visible game state for a specific player as a flat tensor.
@@ -378,8 +457,15 @@ STATE_SIZE = (
     # --- v2 features ---
     3 * 54 +  # opponent belief probabilities (3 opponents × 54 cards)
     3 * 4 +   # opponent card-play counts (3 opponents × 4 features)
-    6         # trick context (position + lead suit)
-)  # = 270 + 162 + 12 + 6 = 450
+    6 +       # trick context (position + lead suit)
+    # --- v3 public-memory features ---
+    3 +       # per-opponent tarok-void flags
+    3 * 4 +   # per-opponent suit-void flags (3 × 4 suits)
+    3 +       # per-opponent cards-remaining fraction
+    1 +       # global remaining trula taroks / 3
+    1 +       # global remaining kings / 4
+    1         # global remaining taroks / 22
+)  # = 270 + 162 + 12 + 6 + 21 = 471
 # Old state size for backward compat migration
 _OLD_STATE_SIZE_V1 = 270
 # Canonical offsets inside the flat state tensor.
@@ -388,7 +474,7 @@ CONTRACT_SIZE = 10
 BELIEF_OFFSET = _OLD_STATE_SIZE_V1
 # Oracle critic sees all opponent hands (Perfect Training, Imperfect Execution)
 ORACLE_EXTRA_SIZE = 3 * 54  # 3 opponent hand vectors
-ORACLE_STATE_SIZE = STATE_SIZE + ORACLE_EXTRA_SIZE  # 450 + 162 = 612
+ORACLE_STATE_SIZE = STATE_SIZE + ORACLE_EXTRA_SIZE  # 471 + 162 = 633
 
 # Pre-allocated encoding buffers (one per process, safe for async single-threaded use)
 _state_buf = torch.zeros(STATE_SIZE, dtype=torch.float32)

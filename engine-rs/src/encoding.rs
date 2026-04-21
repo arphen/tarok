@@ -1,10 +1,14 @@
 /// State encoding — writes features directly into a numpy buffer.
 ///
-/// v2 encoding matches Python STATE_SIZE = 450 layout:
+/// v3 encoding extends the v2 450-dim layout with explicit public-memory
+/// features for stronger tarok-style inference:
 ///  - v1 features (270 dims): hand, played, trick, talon, position, contract, etc.
-///  - Belief probabilities: 3×54 opponent card likelihoods with void inference
+///  - Belief probabilities: 3×54 opponent card likelihoods with suit- AND
+///    tarok-void inference applied (162 dims)
 ///  - Opponent card-play stats: 3×4 features (taroks, suits, kings, total)
 ///  - Trick context: 6 features (position + lead suit)
+///  - v3 public-memory block (21 dims): per-opponent tarok-void + suit-void
+///    flags, per-opponent cards-remaining fraction, remaining trula/kings/taroks
 use crate::card::*;
 use crate::game_state::*;
 use crate::trick_eval::evaluate_trick;
@@ -23,10 +27,21 @@ const BELIEF_SIZE: usize = 3 * DECK_SIZE;
 const OPP_STATS_SIZE: usize = 3 * 4;
 /// v2 trick context: position(1) + tarok_lead(1) + suit_lead(4)
 const TRICK_CTX_SIZE: usize = 6;
-/// Full v2 state size
-pub const STATE_SIZE: usize = V1_STATE_SIZE + BELIEF_SIZE + OPP_STATS_SIZE + TRICK_CTX_SIZE; // 450
+/// v2 state size (for migration / backward compat detection)
+pub const V2_STATE_SIZE: usize = V1_STATE_SIZE + BELIEF_SIZE + OPP_STATS_SIZE + TRICK_CTX_SIZE; // 450
+/// v3 public-memory block:
+///   - per-opponent tarok-void flags (3)
+///   - per-opponent suit-void flags (3 × 4 = 12)
+///   - per-opponent cards-remaining fraction (3)
+///   - remaining trula taroks / 3 (1)
+///   - remaining kings / 4 (1)
+///   - remaining taroks / 22 (1)
+/// Total: 21 dims.
+const PUBLIC_MEM_SIZE: usize = 3 + 12 + 3 + 1 + 1 + 1; // 21
+/// Full v3 state size
+pub const STATE_SIZE: usize = V2_STATE_SIZE + PUBLIC_MEM_SIZE; // 471
 pub const ORACLE_EXTRA: usize = 3 * DECK_SIZE; // 162
-pub const ORACLE_STATE_SIZE: usize = STATE_SIZE + ORACLE_EXTRA; // 612
+pub const ORACLE_STATE_SIZE: usize = STATE_SIZE + ORACLE_EXTRA; // 633
 
 /// Decision type codes matching Python DecisionType enum.
 pub const DT_BID: u8 = 0;
@@ -226,27 +241,53 @@ pub fn encode_state(buf: &mut [f32], state: &GameState, player: u8, decision_typ
         }
     }
 
-    // Detect opponent void suits from trick history
-    let mut opp_void: [u8; NUM_PLAYERS] = [0; NUM_PLAYERS]; // bitmask per player: bit=suit_idx → void
+    // Detect opponent void suits and tarok-void from trick history.
+    //  - Suit void: opponent failed to follow a suit-led trick
+    //  - Tarok void: opponent failed to play a tarok when tarok was led (or
+    //    when they were forced to over-tarok and could not).  A tarok-void
+    //    opponent cannot hold any remaining tarok.
+    let mut opp_void: [u8; NUM_PLAYERS] = [0; NUM_PLAYERS]; // bit=suit_idx → void
+    let mut opp_tarok_void: [bool; NUM_PLAYERS] = [false; NUM_PLAYERS];
     for trick in &state.tricks {
         if trick.count == 0 {
             continue;
         }
         let lead_card = trick.cards[0].1;
-        let lead_suit = if lead_card.card_type() == CardType::Suit {
-            lead_card.suit()
-        } else {
-            None
-        };
-        if let Some(ls) = lead_suit {
-            for i in 1..trick.count as usize {
-                let (p, card) = trick.cards[i];
-                if p == player {
-                    continue;
+        match lead_card.card_type() {
+            CardType::Suit => {
+                let ls = match lead_card.suit() {
+                    Some(s) => s,
+                    None => continue,
+                };
+                for i in 1..trick.count as usize {
+                    let (p, card) = trick.cards[i];
+                    if p == player {
+                        continue;
+                    }
+                    match card.card_type() {
+                        CardType::Suit => {
+                            if card.suit() != Some(ls) {
+                                // Suit led, played off-suit (not a tarok) → void in that suit
+                                opp_void[p as usize] |= 1 << (ls as u8);
+                            }
+                        }
+                        CardType::Tarok => {
+                            // Suit led, trumped with tarok → void in that suit
+                            opp_void[p as usize] |= 1 << (ls as u8);
+                        }
+                    }
                 }
-                if card.suit() != Some(ls) {
-                    // Player didn't follow suit → void in that suit
-                    opp_void[p as usize] |= 1 << (ls as u8);
+            }
+            CardType::Tarok => {
+                // Tarok led.  Anyone who did not play a tarok is tarok-void.
+                for i in 1..trick.count as usize {
+                    let (p, card) = trick.cards[i];
+                    if p == player {
+                        continue;
+                    }
+                    if card.card_type() != CardType::Tarok {
+                        opp_tarok_void[p as usize] = true;
+                    }
                 }
             }
         }
@@ -256,21 +297,23 @@ pub fn encode_state(buf: &mut [f32], state: &GameState, player: u8, decision_typ
     for opp_offset in 1..NUM_PLAYERS {
         let opp_idx = ((player as usize + opp_offset) % NUM_PLAYERS) as u8;
         let void_mask = opp_void[opp_idx as usize];
+        let tarok_void = opp_tarok_void[opp_idx as usize];
         for cidx in 0..DECK_SIZE {
             let c = Card(cidx as u8);
             if known.contains(c) {
                 // Known card — not in any opponent's hand
                 // buf stays 0.0
-            } else {
-                // Check void constraint
-                let is_void = if let Some(s) = c.suit() {
-                    void_mask & (1 << (s as u8)) != 0
-                } else {
-                    false
-                };
-                if !is_void {
-                    buf[o + cidx] = 1.0 / 3.0; // uniform prior across 3 opponents
-                }
+                continue;
+            }
+            let impossible = match c.card_type() {
+                CardType::Tarok => tarok_void,
+                CardType::Suit => match c.suit() {
+                    Some(s) => void_mask & (1 << (s as u8)) != 0,
+                    None => false,
+                },
+            };
+            if !impossible {
+                buf[o + cidx] = 1.0 / 3.0; // uniform prior across 3 opponents
             }
         }
         o += DECK_SIZE;
@@ -337,6 +380,105 @@ pub fn encode_state(buf: &mut [f32], state: &GameState, player: u8, decision_typ
         }
     }
     o += TRICK_CTX_SIZE;
+
+    debug_assert_eq!(o, V2_STATE_SIZE);
+
+    // ===================================================================
+    // v3 PUBLIC-MEMORY FEATURES (21 dims)
+    // Explicit, easy-to-read summaries of public information so the
+    // network does not have to re-derive them from the played-cards plane.
+    // ===================================================================
+
+    // --- Per-opponent tarok-void flags (3 dims) ---
+    for opp_offset in 1..NUM_PLAYERS {
+        let opp_idx = ((player as usize + opp_offset) % NUM_PLAYERS) as u8;
+        if opp_tarok_void[opp_idx as usize] {
+            buf[o] = 1.0;
+        }
+        o += 1;
+    }
+
+    // --- Per-opponent suit-void flags (3 × 4 = 12 dims) ---
+    for opp_offset in 1..NUM_PLAYERS {
+        let opp_idx = ((player as usize + opp_offset) % NUM_PLAYERS) as u8;
+        let mask = opp_void[opp_idx as usize];
+        for s in 0u8..4u8 {
+            if mask & (1 << s) != 0 {
+                buf[o + s as usize] = 1.0;
+            }
+        }
+        o += 4;
+    }
+
+    // --- Per-opponent cards-remaining fraction (3 dims) ---
+    // Count how many cards each opponent has played (completed + current
+    // trick).  Remaining = max(0, 12 - played) / 12.  A new hand starts at
+    // 1.0 and falls to 0 as tricks are played.
+    let mut opp_played_count: [u32; NUM_PLAYERS] = [0; NUM_PLAYERS];
+    for trick in &state.tricks {
+        for i in 0..trick.count as usize {
+            let (p, _) = trick.cards[i];
+            opp_played_count[p as usize] += 1;
+        }
+    }
+    if let Some(ref trick) = state.current_trick {
+        for i in 0..trick.count as usize {
+            let (p, _) = trick.cards[i];
+            opp_played_count[p as usize] += 1;
+        }
+    }
+    for opp_offset in 1..NUM_PLAYERS {
+        let opp_idx = ((player as usize + opp_offset) % NUM_PLAYERS) as u8;
+        let played = opp_played_count[opp_idx as usize] as f32;
+        let remaining = (12.0 - played).max(0.0) / 12.0;
+        buf[o] = remaining;
+        o += 1;
+    }
+
+    // --- Global remaining trula taroks (pagat, mond, skis) / 3 ---
+    let played_set = state.played_cards;
+    let mut trula_played: u32 = 0;
+    let mut tarok_played: u32 = 0;
+    let mut kings_played: u32 = 0;
+    for cidx in 0..DECK_SIZE {
+        let c = Card(cidx as u8);
+        if !played_set.contains(c) {
+            continue;
+        }
+        if c.card_type() == CardType::Tarok {
+            tarok_played += 1;
+            if cidx == 0 || cidx == 20 || cidx == 21 {
+                // pagat (Card 0), mond (Card 20), skis (Card 21)
+                trula_played += 1;
+            }
+        }
+        if c.is_king() {
+            kings_played += 1;
+        }
+    }
+    // Also count cards in the active trick (not yet folded into played_cards).
+    if let Some(ref trick) = state.current_trick {
+        for i in 0..trick.count as usize {
+            let (_, c) = trick.cards[i];
+            if c.card_type() == CardType::Tarok {
+                tarok_played += 1;
+                let cidx = c.0 as usize;
+                if cidx == 0 || cidx == 20 || cidx == 21 {
+                    trula_played += 1;
+                }
+            }
+            if c.is_king() {
+                kings_played += 1;
+            }
+        }
+    }
+    let trula_rem = (3u32.saturating_sub(trula_played)) as f32 / 3.0;
+    let kings_rem = (4u32.saturating_sub(kings_played)) as f32 / 4.0;
+    let tarok_rem = (22u32.saturating_sub(tarok_played)) as f32 / 22.0;
+    buf[o] = trula_rem;
+    buf[o + 1] = kings_rem;
+    buf[o + 2] = tarok_rem;
+    o += 3;
 
     debug_assert_eq!(o, STATE_SIZE);
 }
