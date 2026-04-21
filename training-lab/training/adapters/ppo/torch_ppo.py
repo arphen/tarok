@@ -128,6 +128,7 @@ class PPOAdapter(PPOPort):
         prepped = prepare_batched(raw_experiences, gamma=self._gamma, gae_lambda=self._gae_lambda)
         metrics = self._ppo_update_batched(**prepped)
 
+        release_allocator_memory()
         new_weights = {k: v.cpu() for k, v in self._network.state_dict().items()}
         del prepped
         release_allocator_memory()
@@ -324,6 +325,18 @@ class PPOAdapter(PPOPort):
                     total_entropy += entropy.mean().item()
                     total_loss += loss.item()
                     num_updates += 1
+
+            # Drop group-scoped device tensors before moving to the next
+            # decision-type/game-mode group to limit allocator watermarks.
+            del g_states
+            del g_actions
+            del g_old_log_probs
+            del g_vad
+            del g_masks
+            del g_oracle_states
+            del g_oracle_valid
+            del g_bc_mask
+            release_allocator_memory()
 
         n = max(num_updates, 1)
         return {

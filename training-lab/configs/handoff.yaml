@@ -2,10 +2,13 @@
 # STAGE 2: The Handoff (Bridge to Self-Play)
 # Goal: Fade out BC, ramp up PPO, and begin Latent Distillation
 # ---------------------------------------------------------
-
+seats: "centaur,bot_v5,bot_v5,centaur"
 bench_seats: "nn,bot_v1,bot_v3,bot_m6"
+
+centaur_handoff_trick: 8    # endgame solver takes over from trick 8 onward (last 4 tricks)
+centaur_pimc_worlds: 100  
 iterations: 50
-games: 2500
+games: 5000
 outplace_session_size: 50
 bench_games: 3000
 benchmark_checkpoints: [0, 20, 40, 60, 80, 100]
@@ -47,7 +50,7 @@ imitation_schedule: constant
 imitation_coef_min: 0.10
 
 # --- Runner Hardware ---
-concurrency: 256
+concurrency: 128
 lapajne_mc_worlds: 24   # Optional: worlds per Lapajne card decision (1..512)
 lapajne_mc_sims: 20   # Optional: sims per Lapajne MCTS tree (1..4096)
 device: auto
