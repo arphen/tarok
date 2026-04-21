@@ -5,7 +5,7 @@ v2 Architecture upgrades:
   - Multi-head self-attention over card embeddings for relational reasoning
   - Oracle guiding: actor latent space aligned with oracle critic via distillation
   - Expanded state encoding with belief tracking and public-memory
-    features (626 dims)
+    features (578 dims, v6)
 
 Supports five decision types with separate action heads:
   - Bidding (9 actions: pass + 8 contracts)
@@ -201,8 +201,8 @@ class TarokNet(nn.Module):
 
         Returns (batch, 54, 6) tensor:
           channel 0: own hand
-          channel 1: played cards
-          channel 2: current trick cards
+          channel 1: active trick cards
+          channel 2: declarer forced-retention (public must-hold)
           channel 3-5: belief probabilities for opponents 1-3
         """
         if state.dim() == 1:
@@ -210,8 +210,8 @@ class TarokNet(nn.Module):
         B = state.shape[0]
 
         hand = state[:, 0:54]           # own hand
-        played = state[:, 54:108]       # played cards
-        trick = state[:, 108:162]       # current trick
+        played = state[:, 54:108]       # active trick cards (v6 channel 1)
+        trick = state[:, 108:162]       # declarer forced-retention (v6 channel 2)
         # Belief vectors start at the canonical belief offset.
         # Zero-extend once so legacy shorter state encodings still produce
         # fixed-width belief slices without shape-dependent Python branching.

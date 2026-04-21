@@ -2,10 +2,18 @@
 
 Supports multiple decision types: bidding, king calling, talon selection, and card play.
 
-v2 encoding adds:
-  - 3×54 belief probability vectors (opponent card likelihoods)
-  - 4 card-play-count features per opponent (cards played per suit category)
-  - Trick lead suit & trick position features
+v6 encoding (578 dims) — blank slate, no backward-compat:
+  - Header card planes 0..161 (54+54+54):
+      hand, active trick, declarer forced-retention
+    (The global "played cards" plane is subsumed by the per-opponent
+    played planes at 390..551.)
+  - Base scalars 162..221 (60 dims).
+  - Centaur trick context (11 dims): team points + trick leader/winner.
+  - Belief block 222..383 (3×54).
+  - Trick context 384..389 (6).
+  - Per-opp played planes 390..551 (3×54).  The declarer's plane
+    additionally includes publicly-retired unpicked talon cards.
+  - Void flags, live kings / trula, called-king suit.
 """
 
 from __future__ import annotations
@@ -145,16 +153,7 @@ def _encode_state_into(
         buf[o + CARD_TO_IDX[card]] = 1.0
     o += 54
 
-    # Played cards plane (54 binary): tricks + unpicked talon cards.
-    # Unpicked talon cards are publicly retired under Slovenian rules.
-    for trick in state.tricks:
-        for _, card in trick.cards:
-            buf[o + CARD_TO_IDX[card]] = 1.0
-    for cidx in unpicked_talon_idx:
-        buf[o + cidx] = 1.0
-    o += 54
-
-    # Cards in current trick (54 binary)
+    # Active trick plane (54 binary) — cards currently on the table.
     if state.current_trick:
         for _, card in state.current_trick.cards:
             buf[o + CARD_TO_IDX[card]] = 1.0
@@ -189,23 +188,19 @@ def _encode_state_into(
         buf[o + 2] = 1.0
     o += 3
 
-    # Partner known: public reveal OR this player already knows their
-    # own pairing (declarer always knows; the partner knows as soon as
-    # they hold the called king).
-    self_knows_pairing = False
-    if state.declarer is not None and player_idx == state.declarer:
-        self_knows_pairing = True
-    elif state.declarer is not None and state.get_team(player_idx) == Team.DECLARER_TEAM:
-        self_knows_pairing = True
-    if state.is_partner_revealed or self_knows_pairing:
-        buf[o] = 1.0
-    o += 1
-
-    # Tricks won by my team (normalized 0-1)
+    # Tricks won by my team (normalized 0-1) + running card-point totals
     my_team = state.get_team(player_idx)
-    my_tricks = sum(
-        1 for t in state.tricks if state.get_team(t.winner()) == my_team
-    )
+    my_tricks = 0
+    my_team_points = 0
+    opp_team_points = 0
+    for trick in state.tricks:
+        winner = trick.winner()
+        trick_pts = sum(c.points for _, c in trick.cards)
+        if state.get_team(winner) == my_team:
+            my_tricks += 1
+            my_team_points += trick_pts
+        else:
+            opp_team_points += trick_pts
     buf[o] = my_tricks / 12.0
     o += 1
 
@@ -234,19 +229,6 @@ def _encode_state_into(
             buf[o + i] = 1.0
     o += 4
 
-    # Hand strength features (normalized)
-    hand = state.hands[player_idx]
-    tarok_count = sum(1 for c in hand if c.card_type == CardType.TAROK)
-    high_taroks = sum(1 for c in hand if c.card_type == CardType.TAROK and c.value >= 15)
-    king_count = sum(1 for c in hand if c.is_king)
-    suits_in_hand = {c.suit for c in hand if c.suit is not None}
-    void_count = 4 - len(suits_in_hand)
-    buf[o] = tarok_count / 12.0
-    buf[o + 1] = high_taroks / 7.0
-    buf[o + 2] = king_count / 4.0
-    buf[o + 3] = void_count / 4.0
-    o += 4
-
     # Announcements made (4 binary: trula, kings, pagat, valat — by either team)
     ann_set: set[Announcement] = set()
     for anns in state.announcements.values():
@@ -266,7 +248,9 @@ def _encode_state_into(
         buf[o + i] = (level.value - 1) / 7.0  # 0→0, 1→0.14, 3→0.43, 7→1.0
     o += 5
 
-    # Role one-hot (3 features: is_declarer, is_partner, is_opposition)
+    # Role one-hot (3 features: is_declarer, is_partner, is_opposition).
+    # All zeros ⇒ role not yet determined (also serves as the v5
+    # "partner_known = 0" signal).
     if state.declarer is not None:
         if player_idx == state.declarer:
             buf[o] = 1.0      # is_declarer
@@ -279,6 +263,43 @@ def _encode_state_into(
             buf[o + 2] = 1.0  # is_opposition
     # During bidding (no declarer yet), all three stay 0 — role unknown
     o += 3
+
+    # --- v6 Centaur trick context (11 dims) ---
+    current_trick_points = 0
+    current_leader: int | None = None
+    current_winner: int | None = None
+    if state.current_trick and state.current_trick.cards:
+        cards = state.current_trick.cards
+        current_leader = cards[0][0]
+        # Compute currently-winning seat under standard trick rules
+        # (pagat / mond / skis specials do not change who beats whom
+        # for partial tricks; we use the same comparison as the full
+        # trick winner logic).
+        lead_card = cards[0][1]
+        lead_suit = lead_card.suit if lead_card.card_type == CardType.SUIT else None
+        best_p, best_c = cards[0]
+        for p, c in cards[1:]:
+            if c.beats(best_c, lead_suit):
+                best_p, best_c = p, c
+        current_winner = best_p
+        current_trick_points = sum(c.points for _, c in cards)
+
+    buf[o] = my_team_points / 70.0
+    buf[o + 1] = opp_team_points / 70.0
+    buf[o + 2] = current_trick_points / 20.0
+    o += 3
+
+    # Trick leader relative seat (4 one-hot, 0 = self).
+    if current_leader is not None:
+        rel = (current_leader - player_idx) % state.num_players
+        buf[o + rel] = 1.0
+    o += 4
+
+    # Trick currently-winning seat (4 one-hot, relative).
+    if current_winner is not None:
+        rel = (current_winner - player_idx) % state.num_players
+        buf[o + rel] = 1.0
+    o += 4
 
     # ===================================================================
     # v5 BELIEF BLOCK (162 dims, offsets 270..431)
@@ -360,8 +381,11 @@ def _encode_state_into(
     o += 6
 
     # ===================================================================
-    # v5 PER-OPPONENT PLAYED PLANES (3 × 54 = 162 dims)
+    # v6 PER-OPPONENT PLAYED PLANES (3 × 54 = 162 dims)
     # Binary plane per opponent: cards they have personally played.
+    # The declarer's plane additionally includes publicly-retired
+    # unpicked talon cards — this absorbs the old global played plane
+    # into an identity-preserving representation.
     # ===================================================================
     opp_played_planes: dict[int, set[int]] = {i: set() for i in range(4)}
     for trick in state.tricks:
@@ -370,6 +394,8 @@ def _encode_state_into(
     if state.current_trick:
         for p, card in state.current_trick.cards:
             opp_played_planes[p].add(CARD_TO_IDX[card])
+    if state.declarer is not None:
+        opp_played_planes[state.declarer].update(unpicked_talon_idx)
     for opp_offset in range(1, 4):
         opp_idx = (player_idx + opp_offset) % 4
         for cidx in opp_played_planes[opp_idx]:
@@ -445,46 +471,47 @@ def encode_state(state: GameState, player_idx: int, decision_type: DecisionType 
     return _state_buf.clone()
 
 
-# Compute STATE_SIZE from the feature layout (v5)
+# Compute STATE_SIZE from the feature layout (v6)
 STATE_SIZE = (
     54 +  # hand
-    54 +  # played (tricks + unpicked talon)
-    54 +  # current_trick
+    54 +  # active trick
     54 +  # declarer forced-retention (public)
     4 +   # player_position
     10 +  # contract (incl. berac + barvni_valat)
     3 +   # phase
-    1 +   # partner_known
     1 +   # tricks_won_by_team
     1 +   # tricks_played
     5 +   # decision_type
     9 +   # highest_bid
     4 +   # passed_players
-    4 +   # hand_strength
     4 +   # announcements_made
     5 +   # kontra_levels
     3 +   # role
-    # --- v5 belief + trick context ---
+    # --- v6 centaur trick context ---
+    3 +   # team points (mine, opp, current_trick)
+    4 +   # trick leader relative seat
+    4 +   # trick currently-winning seat
+    # --- belief + trick context ---
     3 * 54 +  # opponent belief probabilities
     6 +       # trick context
-    # --- v5 per-opponent played planes ---
-    3 * 54 +  # per-opponent played identity planes
-    # --- v5 public memory ---
+    # --- per-opponent played planes ---
+    3 * 54 +  # per-opponent played identity planes (declarer plane ∪ unpicked talon)
+    # --- public memory ---
     3 +       # per-opponent tarok-void flags
     3 * 4 +   # per-opponent suit-void flags
     4 +       # live kings (one-hot per suit)
     3 +       # live trula (pagat, mond, skis)
     4         # called-king suit one-hot
-)  # = 270 + 162 + 6 + 162 + 3 + 12 + 4 + 3 + 4 = 626
-# Old state size for backward compat migration
-_OLD_STATE_SIZE_V1 = 270
+)  # = 578
+# v1 base size: belief block always starts immediately after it.
+_OLD_STATE_SIZE_V1 = 222
 # Canonical offsets inside the flat state tensor.
-CONTRACT_OFFSET = 220
+CONTRACT_OFFSET = 166
 CONTRACT_SIZE = 10
 BELIEF_OFFSET = _OLD_STATE_SIZE_V1
 # Oracle critic sees all opponent hands (Perfect Training, Imperfect Execution)
 ORACLE_EXTRA_SIZE = 3 * 54  # 3 opponent hand vectors
-ORACLE_STATE_SIZE = STATE_SIZE + ORACLE_EXTRA_SIZE  # 626 + 162 = 788
+ORACLE_STATE_SIZE = STATE_SIZE + ORACLE_EXTRA_SIZE  # 578 + 162 = 740
 
 # Pre-allocated encoding buffers (one per process, safe for async single-threaded use)
 _state_buf = torch.zeros(STATE_SIZE, dtype=torch.float32)

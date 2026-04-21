@@ -1,36 +1,51 @@
 /// State encoding — writes features directly into a numpy buffer.
 ///
-/// v5 encoding (626 dims):
-///  - v1 features (270 dims): hand, played+unpicked_talon, current_trick,
-///    declarer forced-retention plane, position, contract, phase,
-///    partner_known, tricks, decision_type, bid history, passed players,
-///    hand strength, announcements, kontra, role.
-///  - Belief block 270..431 (162 dims): 3×54 opponent card likelihoods
+/// v6 encoding (578 dims):
+///  - Header card planes (162 dims):
+///      * 0..53   : own hand
+///      * 54..107 : active trick plane (cards in the current trick)
+///      * 108..161: declarer forced-retention plane (public; taroks and
+///                  kings in the picked talon group that declarer must
+///                  still hold)
+///  - v1 base features tail (60 dims): position, contract, phase,
+///    tricks_won_by_team, tricks_played, decision_type, highest_bid,
+///    passed_players, announcements, kontra, role.
+///  - Centaur trick context (11 dims):
+///      * team points: mine/70, opp/70, current_trick/20
+///      * trick leader relative seat one-hot (4)
+///      * trick currently-winning relative seat one-hot (4)
+///  - Belief block 222..383 (162 dims): 3×54 opponent card likelihoods
 ///    with suit-void, tarok-void, unpicked-talon-retirement, and
 ///    forced-retention (declarer must-hold) constraints applied.
-///  - Trick context 432..437 (6 dims): position + lead suit/type.
-///  - Per-opponent played planes 438..599 (162 dims): 3×54 cards played.
-///  - Per-opponent tarok-void flags 600..602 (3 dims).
-///  - Per-opponent suit-void flags 603..614 (12 dims).
-///  - Live kings one-hot 615..618 (4 dims).
-///  - Live trula one-hot 619..621 (3 dims): pagat / mond / skis.
-///  - Called-king suit one-hot 622..625 (4 dims).
+///  - Trick context 384..389 (6 dims): position + lead suit/type.
+///  - Per-opponent played planes 390..551 (162 dims): 3×54 cards played.
+///    Declarer's plane additionally includes publicly-retired unpicked
+///    talon cards so the network can count remaining suits easily.
+///  - Per-opponent tarok-void flags 552..554 (3 dims).
+///  - Per-opponent suit-void flags 555..566 (12 dims).
+///  - Live kings one-hot 567..570 (4 dims).
+///  - Live trula one-hot 571..573 (3 dims): pagat / mond / skis.
+///  - Called-king suit one-hot 574..577 (4 dims).
 ///
 /// Rule semantics:
 ///  - `talon_revealed` is public (Slovenian Tarok).  Unpicked talon cards
-///    appear in the `played_cards` plane and in the belief `known` set.
+///    are publicly retired — they appear in the belief `known` set and in
+///    the declarer's per-opp played plane (for counting purposes).
 ///  - The "declarer forced retention" plane contains cards that declarer
 ///    is publicly known to still hold: taroks and kings from the picked
 ///    talon group (these cards cannot legally be discarded).  The belief
 ///    block pins these cards to the declarer's column.
+///  - Role one-hot doubles as the partner-known signal (all-zeros ⇒ role
+///    not yet determined).
 use crate::card::*;
 use crate::game_state::*;
 use crate::trick_eval::evaluate_trick;
 
-/// v1 base features size (frozen: belief block always starts at 270).
-pub const V1_STATE_SIZE: usize = 270;
+/// v1 base features size (header planes + base scalars + centaur block).
+/// Belief block always starts immediately after this.
+pub const V1_STATE_SIZE: usize = 222;
 /// Contract one-hot feature offset in the flat state vector.
-pub const CONTRACT_OFFSET: usize = 220;
+pub const CONTRACT_OFFSET: usize = 166;
 /// Contract one-hot feature length.
 pub const CONTRACT_SIZE: usize = 10;
 /// Belief feature block offset in the flat state vector.
@@ -51,7 +66,7 @@ const LIVE_KINGS_SIZE: usize = 4;
 const LIVE_TRULA_SIZE: usize = 3;
 /// Called-king suit one-hot.
 const CALLED_KING_SIZE: usize = 4;
-/// v5 full state size.
+/// v6 full state size.
 pub const STATE_SIZE: usize = V1_STATE_SIZE
     + BELIEF_SIZE
     + TRICK_CTX_SIZE
@@ -60,9 +75,9 @@ pub const STATE_SIZE: usize = V1_STATE_SIZE
     + SUIT_VOID_SIZE
     + LIVE_KINGS_SIZE
     + LIVE_TRULA_SIZE
-    + CALLED_KING_SIZE; // 626
+    + CALLED_KING_SIZE; // 578
 pub const ORACLE_EXTRA: usize = 3 * DECK_SIZE; // 162
-pub const ORACLE_STATE_SIZE: usize = STATE_SIZE + ORACLE_EXTRA; // 788
+pub const ORACLE_STATE_SIZE: usize = STATE_SIZE + ORACLE_EXTRA; // 740
 
 /// Decision type codes matching Python DecisionType enum.
 pub const DT_BID: u8 = 0;
@@ -99,18 +114,9 @@ pub fn encode_state(buf: &mut [f32], state: &GameState, player: u8, decision_typ
     }
     o += DECK_SIZE;
 
-    // Played cards plane (54 binary): all tricks + unpicked talon cards.
-    // Unpicked talon cards are publicly retired under Slovenian rules and
-    // so they belong in the same "cards permanently out of play" plane.
-    for c in state.played_cards.iter() {
-        buf[o + c.0 as usize] = 1.0;
-    }
-    for c in unpicked_talon_set.iter() {
-        buf[o + c.0 as usize] = 1.0;
-    }
-    o += DECK_SIZE;
-
-    // Current trick cards (54 binary)
+    // Current trick cards (54 binary).  Placed here (rather than after a
+    // redundant global "played" plane) so the network sees the live table
+    // state adjacent to its own hand.
     if let Some(ref trick) = state.current_trick {
         for i in 0..trick.count as usize {
             buf[o + trick.cards[i].1 .0 as usize] = 1.0;
@@ -150,33 +156,26 @@ pub fn encode_state(buf: &mut [f32], state: &GameState, player: u8, decision_typ
     }
     o += 3;
 
-    // Partner known: true if the pairing is public (called king played)
-    // OR this player already knows the pairing privately (they are the
-    // declarer, or they are the partner themselves — whether publicly
-    // revealed or still the hidden partner).
-    let self_knows_pairing = match state.declarer {
-        Some(decl) => player == decl || state.get_team(player) == Team::DeclarerTeam,
-        None => false,
-    };
-    if state.is_partner_revealed() || self_knows_pairing {
-        buf[o] = 1.0;
-    }
-    o += 1;
-
     // Tricks won by my team (normalized 0-1)
     let my_team = state.get_team(player);
     let contract_opt = state.contract;
-    let my_tricks: f32 = state
-        .tricks
-        .iter()
-        .enumerate()
-        .filter(|(i, trick)| {
-            let is_last = *i == state.tricks.len() - 1;
-            let w = evaluate_trick(trick, is_last, contract_opt).winner;
-            state.get_team(w) == my_team
-        })
-        .count() as f32;
-    buf[o] = my_tricks / 12.0;
+    let mut my_tricks: u32 = 0;
+    let mut my_team_points: i32 = 0;
+    let mut opp_team_points: i32 = 0;
+    for (i, trick) in state.tricks.iter().enumerate() {
+        let is_last = i == state.tricks.len() - 1;
+        let tr = evaluate_trick(trick, is_last, contract_opt);
+        let trick_cards_points: i32 = (0..trick.count as usize)
+            .map(|j| trick.cards[j].1.points() as i32)
+            .sum();
+        if state.get_team(tr.winner) == my_team {
+            my_tricks += 1;
+            my_team_points += trick_cards_points;
+        } else {
+            opp_team_points += trick_cards_points;
+        }
+    }
+    buf[o] = my_tricks as f32 / 12.0;
     o += 1;
 
     // Tricks played (normalized 0-1)
@@ -230,13 +229,6 @@ pub fn encode_state(buf: &mut [f32], state: &GameState, player: u8, decision_typ
     }
     o += 4;
 
-    // Hand strength features (normalized)
-    buf[o] = hand.tarok_count() as f32 / 12.0;
-    buf[o + 1] = hand.high_tarok_count() as f32 / 7.0;
-    buf[o + 2] = hand.king_count() as f32 / 4.0;
-    buf[o + 3] = hand.void_count() as f32 / 4.0;
-    o += 4;
-
     // Announcements made (4 binary)
     let all_ann = state.all_announcements();
     for i in 0..4u8 {
@@ -253,7 +245,9 @@ pub fn encode_state(buf: &mut [f32], state: &GameState, player: u8, decision_typ
     }
     o += 5;
 
-    // Role one-hot (3 features: is_declarer, is_partner, is_opposition)
+    // Role one-hot (3 features: is_declarer, is_partner, is_opposition).
+    // All zeros ⇒ role not yet determined (also serves as the old
+    // "partner_known = 0" signal).
     if let Some(decl) = state.declarer {
         if player == decl {
             buf[o] = 1.0; // is_declarer
@@ -265,8 +259,62 @@ pub fn encode_state(buf: &mut [f32], state: &GameState, player: u8, decision_typ
             buf[o + 2] = 1.0; // is_opposition
         }
     }
-    // During bidding (no declarer yet), all three stay 0 — role unknown
     o += 3;
+
+    // --- v6 Centaur trick context (11 dims) ---
+    // High-signal features for the early/mid-game (the centaur hands off
+    // to PIMC before trick 9, so these help exactly the regime the NN is
+    // asked to play in).
+
+    // Team points running totals + current-trick value.
+    let mut current_trick_points: i32 = 0;
+    let mut current_leader: Option<u8> = None;
+    let mut current_winner: Option<u8> = None;
+    if let Some(ref trick) = state.current_trick {
+        if trick.count > 0 {
+            current_leader = Some(trick.cards[0].0);
+            // "Currently winning" = best card under standard trick rules
+            // over the populated slots.
+            let lead_suit = {
+                let lc = trick.cards[0].1;
+                if lc.card_type() == CardType::Suit {
+                    lc.suit()
+                } else {
+                    None
+                }
+            };
+            let (mut best_p, mut best_c) = trick.cards[0];
+            for j in 1..trick.count as usize {
+                let (p, c) = trick.cards[j];
+                if c.beats(best_c, lead_suit) {
+                    best_p = p;
+                    best_c = c;
+                }
+            }
+            current_winner = Some(best_p);
+            for j in 0..trick.count as usize {
+                current_trick_points += trick.cards[j].1.points() as i32;
+            }
+        }
+    }
+    buf[o] = my_team_points as f32 / 70.0;
+    buf[o + 1] = opp_team_points as f32 / 70.0;
+    buf[o + 2] = current_trick_points as f32 / 20.0;
+    o += 3;
+
+    // Trick leader relative seat (4 one-hot, 0 = self, 1..3 = opponents).
+    if let Some(lead) = current_leader {
+        let rel = ((lead as usize + NUM_PLAYERS - player as usize) % NUM_PLAYERS) as usize;
+        buf[o + rel] = 1.0;
+    }
+    o += 4;
+
+    // Trick currently-winning seat (4 one-hot, relative).
+    if let Some(win) = current_winner {
+        let rel = ((win as usize + NUM_PLAYERS - player as usize) % NUM_PLAYERS) as usize;
+        buf[o + rel] = 1.0;
+    }
+    o += 4;
 
     debug_assert_eq!(o, V1_STATE_SIZE);
 
@@ -380,10 +428,11 @@ pub fn encode_state(buf: &mut [f32], state: &GameState, player: u8, decision_typ
     o += TRICK_CTX_SIZE;
 
     // ===================================================================
-    // v5 PER-OPPONENT PLAYED PLANES (3 × 54 = 162 dims)
-    // Preserves "who played what" identity that the global played plane
-    // loses.  Enables the network to track per-opponent tarok depletion
-    // and spot the partner after the called king falls.
+    // v6 PER-OPPONENT PLAYED PLANES (3 × 54 = 162 dims)
+    // Preserves "who played what" identity that a global played plane
+    // would lose.  The declarer's plane additionally includes publicly-
+    // retired unpicked talon cards — this lets the network count
+    // remaining suits/taroks without a dedicated global played plane.
     // ===================================================================
     let mut opp_played_planes: [CardSet; NUM_PLAYERS] = [CardSet::EMPTY; NUM_PLAYERS];
     for trick in &state.tricks {
@@ -396,6 +445,16 @@ pub fn encode_state(buf: &mut [f32], state: &GameState, player: u8, decision_typ
         for i in 0..trick.count as usize {
             let (p, c) = trick.cards[i];
             opp_played_planes[p as usize].insert(c);
+        }
+    }
+    // Attribute unpicked-talon cards to declarer's plane.  They are
+    // publicly retired so encoding them as "declarer played" gives the
+    // counting mechanism the right set without adding a redundant
+    // global plane.  If no declarer yet (bidding), fall back to all
+    // planes (unlikely but cheap).
+    if let Some(decl) = state.declarer {
+        for c in unpicked_talon_set.iter() {
+            opp_played_planes[decl as usize].insert(c);
         }
     }
     for opp_offset in 1..NUM_PLAYERS {

@@ -2,14 +2,14 @@ from __future__ import annotations
 
 import torch
 
-from tarok_model.encoding import GameMode, STATE_SIZE
+from tarok_model.encoding import CONTRACT_OFFSET, GameMode, STATE_SIZE
 from tarok_model.network import TarokNetV4
 
 
 def _state_with_contract_idx(contract_idx: int) -> torch.Tensor:
     s = torch.zeros(STATE_SIZE, dtype=torch.float32)
-    # Contract slice in encoding is [220:230]
-    s[220 + contract_idx] = 1.0
+    # Contract slice in encoding is [CONTRACT_OFFSET:CONTRACT_OFFSET+10]
+    s[CONTRACT_OFFSET + contract_idx] = 1.0
     return s
 
 
