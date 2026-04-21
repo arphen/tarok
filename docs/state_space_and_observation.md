@@ -5,11 +5,12 @@ It is based on the active Rust self-play path and encoder implementation.
 
 ## Short Answer
 
-- The policy acts on a 471-dimensional state vector per decision.
-- Optional oracle critic training uses a 633-dimensional vector.
+- The policy acts on a 626-dimensional state vector per decision.
+- Optional oracle critic training uses a 788-dimensional vector.
 - The agent sees previous trick information as public-card planes plus
-  explicit per-opponent memory features (tarok-void, suit-void, cards
-  remaining).  It does not receive an ordered per-trick transcript tensor.
+  explicit per-opponent memory features (tarok-void, suit-void, per-opp
+  played cards, live kings, live trula).  It does not receive an ordered
+  per-trick transcript tensor.
 - During self-play training, only learner seats ("nn") are emitted into the
   PPO batch.
 
@@ -38,8 +39,8 @@ So the real environment state space is combinatorially huge.
 
 The policy/value network receives a fixed-size encoded vector:
 
-- Imperfect info actor state size: 471
-- Oracle critic state size: 633 (= 471 + 162)
+- Imperfect info actor state size: 626
+- Oracle critic state size: 788 (= 626 + 162)
 
 ## Decision Points During Self-Play
 
@@ -52,20 +53,28 @@ At each decision point, self-play encodes state from the acting seat's perspecti
 
 Note: the network architecture has an announce head, but run_self_play currently emits these 4 decision types.
 
-## 471-Dim Observation Layout
+## 626-Dim Observation Layout
 
 All offsets are zero-based and match engine-rs/src/encoding.rs.
+
+Slovenian Tarok rule: the entire talon is revealed to all players before
+the declarer picks one group.  The declarer's discard (put_down) remains
+private.  Non-picked groups are publicly retired — they can never appear
+in tricks — so those cards enter the played-cards plane (54..107).  Of
+the picked group, taroks and kings cannot legally be discarded, so they
+are publicly known to still be in the declarer's hand and are surfaced
+via the forced-retention plane (162..215).
 
 | Slice | Size | Meaning |
 |---|---:|---|
 | 0..53 | 54 | Own hand (binary card indicators) |
-| 54..107 | 54 | Cards already played (all previous completed tricks) |
+| 54..107 | 54 | Publicly played: completed tricks + unpicked talon cards |
 | 108..161 | 54 | Cards currently in active trick |
-| 162..215 | 54 | Revealed talon cards, only if player is declarer and talon was revealed |
+| 162..215 | 54 | Declarer forced-retention plane: taroks & kings from picked talon group (public) |
 | 216..219 | 4 | Seat position relative to dealer (one-hot) |
 | 220..229 | 10 | Contract one-hot |
 | 230..232 | 3 | Phase one-hot: bidding / trick_play / other |
-| 233 | 1 | Partner known flag |
+| 233 | 1 | Partner known flag (true if publicly revealed OR own-team knowledge) |
 | 234 | 1 | Tricks won by my team (normalized by 12) |
 | 235 | 1 | Tricks played (normalized by 12) |
 | 236..240 | 5 | Decision type one-hot |
@@ -75,21 +84,20 @@ All offsets are zero-based and match engine-rs/src/encoding.rs.
 | 258..261 | 4 | Any team announced: trula, kings, pagat, valat |
 | 262..266 | 5 | Kontra levels (normalized) |
 | 267..269 | 3 | Role one-hot: declarer / partner / opposition |
-| 270..431 | 162 | Opponent belief block: 3 opponents x 54 cards (suit-void AND tarok-void applied) |
-| 432..443 | 12 | Opponent play stats: 3 opponents x 4 counts |
-| 444..449 | 6 | Trick context: trick position + lead type/suit |
-| 450..452 | 3 | Per-opponent tarok-void flag (v3) |
-| 453..464 | 12 | Per-opponent suit-void flags, 3 opponents x 4 suits (v3) |
-| 465..467 | 3 | Per-opponent cards-remaining fraction of 12 (v3) |
-| 468 | 1 | Global remaining trula taroks (pagat, mond, skis) / 3 (v3) |
-| 469 | 1 | Global remaining kings / 4 (v3) |
-| 470 | 1 | Global remaining taroks / 22 (v3) |
+| 270..431 | 162 | Opponent belief block: 3 opponents x 54 cards (with forced-retention + void constraints) |
+| 432..437 | 6 | Trick context: trick position + lead type/suit |
+| 438..599 | 162 | Per-opponent played identity planes: 3 opponents x 54 cards |
+| 600..602 | 3 | Per-opponent tarok-void flag |
+| 603..614 | 12 | Per-opponent suit-void flags (3 opponents x 4 suits) |
+| 615..618 | 4 | Live kings one-hot (per suit) — 1 if that king has not been played |
+| 619..621 | 3 | Live trula one-hot (pagat, mond, skis) — 1 if not yet played |
+| 622..625 | 4 | Called-king suit one-hot (public once king is called) |
 
-Total: 471.
+Total: 626.
 
-## Oracle 633-Dim Layout
+## Oracle 788-Dim Layout
 
-Oracle state = 471 base + 162 extra dims:
+Oracle state = 626 base + 162 extra dims:
 
 - Extra 162 dims are exact opponent hands: 3 opponents x 54 cards.
 
@@ -117,28 +125,39 @@ So history is present mostly as public-card sets and derived summaries/inference
 
 The belief block (270..431) is built per acting player:
 
-- Known cards are removed (own hand, played cards, current trick cards, visible talon for declarer).
-- For unknown cards, each opponent initially gets uniform 1/3 probability.
-- If trick history implies an opponent is void in a suit (failed to follow
-  suit, or trumped with a tarok), cards in that suit get zero probability
+- Known cards are removed: own hand, completed-trick cards, current-trick
+  cards, and unpicked-talon cards (which are public and publicly
+  retired).
+- Forced retention: every tarok and king in the picked talon group is
+  public knowledge that it sits in the declarer's hand.  In the belief
+  block this pins probability 1.0 onto the declarer's column (and 0 on
+  the other two opponent columns) for each such card.
+- For the remaining unknown cards, each opponent initially gets uniform
+  1/3 probability.
+- If trick history implies an opponent is void in a suit (failed to
+  follow suit, or trumped with a tarok), cards in that suit get zero
+  probability for that opponent.
+- If tarok was led and an opponent did not play a tarok, that opponent
+  is marked tarok-void: all remaining tarok cards get zero probability
   for that opponent.
-- If tarok was led and an opponent did not play a tarok, that opponent is
-  marked tarok-void: all remaining tarok cards get zero probability for
-  that opponent.
 
-The v3 public-memory block (450..470) makes these signals available
-explicitly as well:
+Partner-known flag (233) is true when the partner is publicly revealed
+(called king has fallen) OR when the acting player already knows their
+own pairing — the declarer always knows, and the hidden partner knows
+as soon as the bidding is over because they hold the called king.
+
+The public-memory tail (600..625) surfaces high-signal features
+explicitly so the network doesn't have to re-derive them:
 
 - 3 dims: per-opponent tarok-void flags.
 - 12 dims: per-opponent suit-void flags (3 opponents x 4 suits).
-- 3 dims: per-opponent cards-remaining fraction of 12.
-- 3 dims: global remaining trula (pagat, mond, skis), kings, and taroks.
+- 4 dims: live kings — which of the four kings have not yet been played.
+- 3 dims: live trula — whether pagat / mond / skis are still in play.
+- 4 dims: called-king suit one-hot (public once the king has been called).
 
-This lets the network rely on explicit features instead of re-deriving
-them from the played-cards plane.
-
-Opponent order in the 3x54 belief block and all per-opponent v3 features
-is relative to the current player:
+Opponent order in the 3x54 belief block, the 3x54 per-opponent played
+planes, and all per-opponent v5 features is relative to the current
+player:
 
 - Opponent +1 seat, then +2, then +3 (modulo 4).
 
@@ -180,7 +199,7 @@ Card-play action mapping is direct card index 0..53 in canonical deck order:
 
 Main tensors in the dictionary returned by run_self_play:
 
-- states: (N, 471) float32
+- states: (N, 626) float32
 - actions: (N,) uint16
 - log_probs: (N,) float32
 - values: (N,) float32
@@ -190,7 +209,7 @@ Main tensors in the dictionary returned by run_self_play:
 - players: (N,) uint8
 - game_ids: (N,) uint32
 - scores: (num_games, 4) int32
-- oracle_states: (N, 633) float32 (optional)
+- oracle_states: (N, 788) float32 (optional)
 
 ## How Rewards Are Assigned For PPO
 

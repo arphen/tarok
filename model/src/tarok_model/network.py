@@ -5,7 +5,7 @@ v2 Architecture upgrades:
   - Multi-head self-attention over card embeddings for relational reasoning
   - Oracle guiding: actor latent space aligned with oracle critic via distillation
   - Expanded state encoding with belief tracking and public-memory
-    features (471 dims)
+    features (626 dims)
 
 Supports five decision types with separate action heads:
   - Bidding (9 actions: pass + 8 contracts)
