@@ -12,7 +12,7 @@ from tarok.adapters.players.human_player import HumanPlayer
 from tarok.adapters.players.neural_player import NeuralPlayer
 from tarok.adapters.experience_logger import HumanPlayExperienceLogger
 from tarok.adapters.score_breakdown_parser import JsonScoreBreakdownParser
-from tarok.adapters.api.ws_observer import WebSocketObserver
+from tarok.adapters.api.ws_observer import WebSocketObserver, _card_to_dict
 from tarok.adapters.api.schemas import NewGameRequest
 from tarok.entities import Card, Suit, SuitRank, Contract
 from tarok.entities.game_types import suit_card
@@ -22,6 +22,73 @@ from tarok.use_cases.rust_state import _RUST_U8_TO_PY_CONTRACT
 router = APIRouter(tags=["game"])
 
 _active_games: dict[str, dict] = {}
+
+
+class ShadowHumanPlayer:
+    """Wraps HumanPlayer with a shadow agent that sends hints before each decision."""
+
+    def __init__(self, human: HumanPlayer, shadow_agent, ws: WebSocket) -> None:
+        self._human = human
+        self._shadow = shadow_agent
+        self._ws = ws
+
+    @property
+    def name(self) -> str:
+        return self._human.name
+
+    def submit_action(self, action, *, action_type: str | None = None) -> None:
+        self._human.submit_action(action, action_type=action_type)
+
+    async def _send_hint(self, decision_type: str, hint: dict) -> None:
+        try:
+            await self._ws.send_json(
+                {"event": "shadow_hint", "decision_type": decision_type, "hint": hint}
+            )
+        except Exception:
+            pass
+
+    async def choose_bid(self, state, player_idx: int, legal_bids):
+        try:
+            shadow_bid = await self._shadow.choose_bid(state, 0, legal_bids)
+            await self._send_hint(
+                "bid",
+                {"contract": shadow_bid.value if shadow_bid is not None else None},
+            )
+        except Exception:
+            pass
+        return await self._human.choose_bid(state, player_idx, legal_bids)
+
+    async def choose_king(self, state, player_idx: int, callable_kings):
+        try:
+            shadow_king = await self._shadow.choose_king(state, 0, callable_kings)
+            await self._send_hint("king", _card_to_dict(shadow_king))
+        except Exception:
+            pass
+        return await self._human.choose_king(state, player_idx, callable_kings)
+
+    async def choose_talon_group(self, state, player_idx: int, talon_groups):
+        try:
+            shadow_group = await self._shadow.choose_talon_group(state, 0, talon_groups)
+            await self._send_hint("talon", {"group_index": int(shadow_group)})
+        except Exception:
+            pass
+        return await self._human.choose_talon_group(state, player_idx, talon_groups)
+
+    async def choose_discard(self, state, player_idx: int, must_discard: int):
+        try:
+            shadow_cards = await self._shadow.choose_discard(state, 0, must_discard)
+            await self._send_hint("discard", {"cards": [_card_to_dict(c) for c in shadow_cards]})
+        except Exception:
+            pass
+        return await self._human.choose_discard(state, player_idx, must_discard)
+
+    async def choose_card(self, state, player_idx: int, legal_plays):
+        try:
+            shadow_card = await self._shadow.choose_card(state, 0, legal_plays)
+            await self._send_hint("card", _card_to_dict(shadow_card))
+        except Exception:
+            pass
+        return await self._human.choose_card(state, player_idx, legal_plays)
 
 
 def _card_from_dict(c: dict) -> Card:
@@ -81,12 +148,17 @@ async def new_game(req: NewGameRequest | None = None):
     for i, choice in enumerate(opponents):
         agents.append(_load_opponent(choice, i))
 
+    shadow_agent = None
+    if req and req.shadow_bot:
+        shadow_agent = _load_opponent(req.shadow_bot, -1)
+
     _active_games[game_id] = {
         "human": human,
         "agents": agents,
         "game_loop": None,
         "state": None,
         "num_rounds": req.num_rounds if req else 1,
+        "shadow_agent": shadow_agent,
     }
     return {"game_id": game_id}
 
@@ -101,8 +173,14 @@ async def game_websocket(ws: WebSocket, game_id: str):
 
     game_info = _active_games[game_id]
     human: HumanPlayer = game_info["human"]
-    agents = game_info["agents"]
+    agents = list(game_info["agents"])
     num_rounds = game_info.get("num_rounds", 1)
+    shadow_agent = game_info.get("shadow_agent")
+
+    # Wrap human player with shadow if a shadow agent was requested
+    if shadow_agent is not None:
+        agents[0] = ShadowHumanPlayer(human, shadow_agent, ws)
+
     player_names = [a.name for a in agents]
 
     observer = WebSocketObserver(ws, player_idx=0, player_names=player_names)

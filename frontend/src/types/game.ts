@@ -38,6 +38,19 @@ export interface RoundResult {
   partner: number | null;
 }
 
+export interface ShadowHint {
+  decision_type: 'bid' | 'card' | 'king' | 'talon' | 'discard';
+  hint: {
+    contract?: number | null;
+    card_type?: string;
+    value?: number;
+    suit?: string | null;
+    label?: string;
+    group_index?: number;
+    cards?: CardData[];
+  };
+}
+
 export interface GameState {
   phase: string;
   hand: CardData[];

@@ -10,6 +10,7 @@ interface CardProps {
   highlighted?: boolean;
   faceDown?: boolean;
   small?: boolean;
+    shadowHint?: boolean;
 }
 
 const SUIT_SYMBOLS: Record<string, string> = {
@@ -45,7 +46,7 @@ function isTrula(card: CardData): boolean {
   return card.card_type === 'tarok' && [1, 21, 22].includes(card.value);
 }
 
-const Card = React.memo(function Card({ card, onClick, disabled, highlighted, faceDown, small }: CardProps) {
+const Card = React.memo(function Card({ card, onClick, disabled, highlighted, faceDown, small, shadowHint }: CardProps) {
   if (faceDown) {
     return (
       <div className={`card card-back ${small ? 'card-small' : ''}`}>
@@ -75,10 +76,12 @@ const Card = React.memo(function Card({ card, onClick, disabled, highlighted, fa
     disabled ? 'card-disabled' : '',
     onClick && !disabled ? 'card-clickable' : '',
     small ? 'card-small' : '',
+      shadowHint ? 'card-shadow-hint' : '',
   ].filter(Boolean).join(' ');
 
   return (
     <div className={classes} onClick={!disabled && onClick ? onClick : undefined} data-testid={`card-${card.card_type}-${card.value}-${card.suit ?? 'none'}`}>
+        {shadowHint && <div className="card-shadow-badge" title="AI would play this">🤖</div>}
       {imageUrl ? (
         <img src={imageUrl} alt={card.label} className="card-image" />
       ) : isTarok ? (

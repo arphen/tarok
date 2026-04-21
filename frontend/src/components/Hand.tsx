@@ -13,7 +13,13 @@ interface HandProps {
   cardCount?: number;
   teamRole?: 'declarer' | 'defender' | null;
   isSolo?: boolean;
+    shadowCard?: CardData | null;
 }
+
+  function isShadowCard(card: CardData, shadowCard?: CardData | null): boolean {
+    if (!shadowCard) return false;
+    return card.card_type === shadowCard.card_type && card.value === shadowCard.value && card.suit === shadowCard.suit;
+  }
 
 function cardKey(c: CardData): string {
   return `${c.card_type}-${c.value}-${c.suit ?? 'none'}`;
@@ -26,7 +32,7 @@ function isLegal(card: CardData, legalPlays?: CardData[]): boolean {
   );
 }
 
-const Hand = React.memo(function Hand({ cards, legalPlays, onCardClick, faceDown, position = 'bottom', label, cardCount, teamRole, isSolo }: HandProps) {
+const Hand = React.memo(function Hand({ cards, legalPlays, onCardClick, faceDown, position = 'bottom', label, cardCount, teamRole, isSolo, shadowCard }: HandProps) {
   const count = cardCount ?? cards.length;
   const teamClass = teamRole === 'declarer' ? (isSolo ? 'team-solo' : 'team-declarer') : teamRole === 'defender' ? 'team-defender' : '';
 
@@ -46,6 +52,7 @@ const Hand = React.memo(function Hand({ cards, legalPlays, onCardClick, faceDown
               onClick={onCardClick && isLegal(card, legalPlays) ? () => onCardClick(card) : undefined}
               disabled={legalPlays !== undefined && !isLegal(card, legalPlays)}
               highlighted={legalPlays !== undefined && isLegal(card, legalPlays)}
+                shadowHint={isShadowCard(card, shadowCard)}
             />
           ))
         )}

@@ -1,5 +1,6 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
 import type { GameState, GameEvent, CardData, CompletedTrick } from '../types/game';
+import type { ShadowHint } from '../types/game';
 import { CONTRACT_NAMES, SUIT_SYMBOLS } from '../types/game';
 
 export interface LogEntry {
@@ -118,6 +119,7 @@ export function useGame() {
   const [trickWinCards, setTrickWinCards] = useState<GameState['current_trick']>([]);
   const [completedTricks, setCompletedTricks] = useState<CompletedTrick[]>([]);
   const wsRef = useRef<WebSocket | null>(null);
+    const [shadowHint, setShadowHint] = useState<ShadowHint | null>(null);
   const trickTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const addEvent = useCallback((msg: string) => {
@@ -145,33 +147,40 @@ export function useGame() {
 
     ws.onmessage = (e) => {
       const data: GameEvent = JSON.parse(e.data);
-      addEvent(`Event: ${data.event}`);
-      const names = data.state.player_names.length > 0 ? data.state.player_names : ['You', 'AI-1', 'AI-2', 'AI-3'];
-      const entry = formatEvent(data.event, data.data, names);
-      if (entry) addLogEntry(entry);
+        // Shadow hint is a standalone event, not a state event
+        if (data.event === 'shadow_hint') {
+          setShadowHint(data as unknown as ShadowHint);
+          return;
+        }
 
-      // Always apply state immediately to avoid stale-state rollback
-      setGameState(data.state);
+        addEvent(`Event: ${data.event}`);
+        const names = data.state.player_names.length > 0 ? data.state.player_names : ['You', 'AI-1', 'AI-2', 'AI-3'];
+        const entry = formatEvent(data.event, data.data, names);
+        if (entry) addLogEntry(entry);
 
-      if (data.event === 'game_start' || data.event === 'match_update') {
-        setCompletedTricks([]);
-      }
+        // Always apply state immediately to avoid stale-state rollback
+        setGameState(data.state);
 
-      if (data.event === 'trick_won') {
-        // Show sweep animation with the trick cards from the event
-        const winner = data.data.winner as number;
-        const cards = data.data.cards as GameState['current_trick'];
-        setTrickWinCards(cards);
-        setTrickWinner(winner);
-        // Accumulate for trick history
-        setCompletedTricks(prev => [...prev, { lead_player: cards[0]?.[0] ?? 0, cards, winner }]);
-        // Clear after animation completes
-        if (trickTimerRef.current) clearTimeout(trickTimerRef.current);
-        trickTimerRef.current = setTimeout(() => {
-          setTrickWinner(null);
-          setTrickWinCards([]);
-        }, 900);
-      }
+        if (data.event === 'game_start' || data.event === 'match_update') {
+          setCompletedTricks([]);
+          setShadowHint(null);
+        }
+
+        if (data.event === 'trick_won') {
+          // Show sweep animation with the trick cards from the event
+          const winner = data.data.winner as number;
+          const cards = data.data.cards as GameState['current_trick'];
+          setTrickWinCards(cards);
+          setTrickWinner(winner);
+          // Accumulate for trick history
+          setCompletedTricks(prev => [...prev, { lead_player: cards[0]?.[0] ?? 0, cards, winner }]);
+          // Clear after animation completes
+          if (trickTimerRef.current) clearTimeout(trickTimerRef.current);
+          trickTimerRef.current = setTimeout(() => {
+            setTrickWinner(null);
+            setTrickWinCards([]);
+          }, 900);
+        }
     };
 
     ws.onclose = () => {
@@ -186,7 +195,7 @@ export function useGame() {
     wsRef.current = ws;
   }, [addEvent, addLogEntry]);
 
-  const startNewGame = useCallback(async (opponents?: string[], numRounds?: number) => {
+  const startNewGame = useCallback(async (opponents?: string[], numRounds?: number, shadowBot?: string) => {
     try {
       if (wsRef.current) {
         wsRef.current.close();
@@ -195,6 +204,7 @@ export function useGame() {
       const body: Record<string, unknown> = {};
       if (opponents) body.opponents = opponents;
       if (numRounds && numRounds > 1) body.num_rounds = numRounds;
+        if (shadowBot && shadowBot !== 'none') body.shadow_bot = shadowBot;
       const hasBody = Object.keys(body).length > 0;
       const res = await fetch('/api/game/new', {
         method: 'POST',
@@ -216,22 +226,27 @@ export function useGame() {
   }, []);
 
   const playCard = useCallback((card: { card_type: string; value: number; suit: string | null }) => {
+    setShadowHint(null);
     sendAction({ action: 'play_card', card });
   }, [sendAction]);
 
   const bid = useCallback((contract: number | null) => {
+    setShadowHint(null);
     sendAction({ action: 'bid', contract });
   }, [sendAction]);
 
   const callKing = useCallback((suit: string) => {
+    setShadowHint(null);
     sendAction({ action: 'call_king', suit });
   }, [sendAction]);
 
   const chooseTalon = useCallback((groupIndex: number) => {
+    setShadowHint(null);
     sendAction({ action: 'choose_talon', group_index: groupIndex });
   }, [sendAction]);
 
   const discard = useCallback((cards: { card_type: string; value: number; suit: string | null }[]) => {
+    setShadowHint(null);
     sendAction({ action: 'discard', cards });
   }, [sendAction]);
 
@@ -259,6 +274,7 @@ export function useGame() {
     trickWinCards,
     completedTricks,
     startNewGame,
+      shadowHint,
     playCard,
     bid,
     callKing,

@@ -65,6 +65,7 @@ class NewGameRequest(BaseModel):
 
     opponents: list[str] = ["latest", "latest", "latest"]  # 3 entries: filename or "latest"
     num_rounds: int = 1
+    shadow_bot: str | None = None  # Optional: show AI suggestions while human plays
 
 
 class TrainingMetricsSchema(BaseModel):
