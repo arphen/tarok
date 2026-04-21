@@ -168,6 +168,19 @@ class TrainModel:
             if calibrated:
                 self._league_persistence.save(pool, state_path)
 
+        # Ensure there is always a baseline ghost before the first learning
+        # iteration. On fresh league runs this captures the calibrated model;
+        # future snapshots are then admitted only if stronger than this base.
+        if pool.config.max_active_snapshots > 0:
+            has_checkpoint = any(e.opponent.type == "nn_checkpoint" for e in pool.entries)
+            if not has_checkpoint and Path(ts_path).exists():
+                league_pool_dir.mkdir(parents=True, exist_ok=True)
+                snap_path = str(league_pool_dir / "iter_000.pt")
+                shutil.copy2(ts_path, snap_path)
+                pool.add_snapshot("ghost@0", snap_path, initial_elo=pool.learner_elo)
+                self._league_persistence.save(pool, state_path)
+                self._presenter.on_league_snapshot_added(0, snap_path)
+
         last_snapshot_elo: float | None = league_maintenance.initial_snapshot_elo(pool)
 
         sample_seats = SampleLeagueSeats()

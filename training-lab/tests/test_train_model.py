@@ -749,6 +749,53 @@ def test_train_model_resets_on_profile_mismatch_when_approved(
     assert not (league_pool / "iter_001.pt").exists()
 
 
+@patch("training.use_cases.train_model.orchestrator.UpdateLeagueElo")
+@patch("training.use_cases.train_model.orchestrator.SampleLeagueSeats")
+@patch("training.use_cases.train_model.orchestrator.shutil.copy2")
+def test_train_model_inserts_bootstrap_ghost_snapshot(
+    mock_copy2: MagicMock,
+    MockSampleSeats: MagicMock,
+    MockUpdateElo: MagicMock,
+    mock_iteration_runner: MagicMock,
+    mock_benchmark: MagicMock,
+    mock_model_port: MagicMock,
+    mock_presenter: MagicMock,
+    base_config: TrainingConfig,
+    identity: ModelIdentity,
+    mock_league_persistence: MagicMock,
+) -> None:
+    cfg = replace(
+        base_config,
+        iterations=1,
+        league=LeagueConfig(
+            enabled=True,
+            snapshot_interval=999,
+            opponents=(LeagueOpponent(name="Anchor", type="bot_v1"),),
+        ),
+    )
+    save_dir = Path(cfg.save_dir)
+    save_dir.mkdir(parents=True, exist_ok=True)
+    (save_dir / "_current.pt").write_bytes(b"model")
+
+    mock_sampler = MockSampleSeats.return_value
+    mock_sampler.execute.return_value = "nn,bot_v1,nn,nn"
+    MockUpdateElo.return_value.execute.side_effect = lambda *_a, **_k: None
+
+    use_case = TrainModel(
+        iteration_runner=mock_iteration_runner,
+        benchmark=mock_benchmark,
+        model=mock_model_port,
+        presenter=mock_presenter,
+        league_persistence=mock_league_persistence,
+    )
+
+    use_case.execute(config=cfg, identity=identity, weights={}, device="cpu")
+
+    assert mock_copy2.call_count == 1
+    snap_path = str(Path(cfg.save_dir) / "league_pool" / "iter_000.pt")
+    mock_presenter.on_league_snapshot_added.assert_any_call(0, snap_path)
+
+
 def test_elo_based_lr_hits_expected_floor_and_ceiling_values() -> None:
     assert elo_based_lr(current_elo=800.0, base_lr=0.0003, min_lr=0.00001) == pytest.approx(0.0003)
     assert elo_based_lr(current_elo=2000.0, base_lr=0.0003, min_lr=0.00001) == pytest.approx(0.00001)
