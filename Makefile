@@ -211,7 +211,8 @@ train:
 # maturin must be in the backend venv — install dev deps first (see pyproject.toml).
 build-engine:
 	cd backend && uv sync --default-index https://pypi.org/simple --extra dev --quiet && \
-		LIBTORCH_USE_PYTORCH=1 uv run --default-index https://pypi.org/simple maturin develop --release --manifest-path ../engine-rs/Cargo.toml
+		LIBTORCH_USE_PYTORCH=1 RUSTFLAGS="-C link-arg=-undefined -C link-arg=dynamic_lookup" \
+		uv run --default-index https://pypi.org/simple maturin develop --release --manifest-path ../engine-rs/Cargo.toml
 
 # Auto-install Rust + build engine if the .so is missing
 ensure-engine:

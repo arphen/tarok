@@ -20,6 +20,7 @@ use crate::bots::stockskis_v1;
 use crate::bots::stockskis_v3;
 use crate::bots::stockskis_v5;
 use crate::bots::stockskis_v6;
+use rayon::prelude::*;
 use crate::player::*;
 
 // -----------------------------------------------------------------------
@@ -293,7 +294,7 @@ pub struct StockSkisPlayer {
 impl BatchPlayer for StockSkisPlayer {
     fn batch_decide(&self, contexts: &[DecisionContext<'_>]) -> Vec<DecisionResult> {
         contexts
-            .iter()
+            .par_iter()
             .map(|ctx| {
                 let action = match ctx.decision_type {
                     DecisionType::Bid => self.decide_bid(ctx),

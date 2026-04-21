@@ -1,0 +1,13 @@
+# Workspace-level Cargo config.
+#
+# build-engine invokes maturin from the backend directory with
+# --manifest-path ../engine-rs/Cargo.toml. Cargo resolves config from the
+# current working directory hierarchy, so these macOS linker flags must exist
+# at workspace scope (not only in engine-rs/.cargo) to ensure PyO3 extension
+# builds link correctly.
+
+[target.'cfg(target_os = "macos")']
+rustflags = [
+    "-C", "link-arg=-undefined",
+    "-C", "link-arg=dynamic_lookup",
+]

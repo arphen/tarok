@@ -545,6 +545,80 @@ impl PyGameState {
         let hand = self.state.hands[player as usize];
         crate::bots::stockskis_pozrl::choose_card_pozrl(hand, &self.state, player).0
     }
+
+    // -- Luštrek (ICGA 2003) decision functions --
+
+    fn lustrek_choose_bid(&self, player: u8) -> Option<u8> {
+        let hand = self.state.hands[player as usize];
+        let highest = self.state.bids.iter()
+            .filter_map(|b| b.contract)
+            .max_by_key(|c| c.strength());
+        crate::bots::lustrek::evaluate_bid_lustrek(hand, highest).map(|c| c as u8)
+    }
+
+    fn lustrek_choose_king(&self, player: u8) -> Option<u8> {
+        let hand = self.state.hands[player as usize];
+        crate::bots::lustrek::choose_king_lustrek(hand).map(|c| c.0)
+    }
+
+    fn lustrek_choose_talon_group(&self, player: u8, groups: Vec<Vec<u8>>) -> usize {
+        let hand = self.state.hands[player as usize];
+        let groups_cards: Vec<Vec<Card>> = groups
+            .iter()
+            .map(|g| g.iter().map(|&idx| Card(idx)).collect())
+            .collect();
+        crate::bots::lustrek::choose_talon_group_lustrek(&groups_cards, hand, self.state.called_king)
+    }
+
+    fn lustrek_choose_discards(&self, player: u8, must_discard: usize) -> Vec<u8> {
+        let hand = self.state.hands[player as usize];
+        crate::bots::lustrek::choose_discards_lustrek(hand, must_discard, self.state.called_king)
+            .iter()
+            .map(|c| c.0)
+            .collect()
+    }
+
+    fn lustrek_choose_card(&self, player: u8) -> u8 {
+        let hand = self.state.hands[player as usize];
+        crate::bots::lustrek::choose_card_lustrek(hand, &self.state, player).0
+    }
+
+    // -- M8 (Luštrek-style + alpha-mu endgame) decision functions --
+
+    fn m8_choose_bid(&self, player: u8) -> Option<u8> {
+        let hand = self.state.hands[player as usize];
+        let highest = self.state.bids.iter()
+            .filter_map(|b| b.contract)
+            .max_by_key(|c| c.strength());
+        crate::bots::m8::evaluate_bid_m8(hand, highest).map(|c| c as u8)
+    }
+
+    fn m8_choose_king(&self, player: u8) -> Option<u8> {
+        let hand = self.state.hands[player as usize];
+        crate::bots::m8::choose_king_m8(hand).map(|c| c.0)
+    }
+
+    fn m8_choose_talon_group(&self, player: u8, groups: Vec<Vec<u8>>) -> usize {
+        let hand = self.state.hands[player as usize];
+        let groups_cards: Vec<Vec<Card>> = groups
+            .iter()
+            .map(|g| g.iter().map(|&idx| Card(idx)).collect())
+            .collect();
+        crate::bots::m8::choose_talon_group_m8(&groups_cards, hand, self.state.called_king)
+    }
+
+    fn m8_choose_discards(&self, player: u8, must_discard: usize) -> Vec<u8> {
+        let hand = self.state.hands[player as usize];
+        crate::bots::m8::choose_discards_m8(hand, must_discard, self.state.called_king)
+            .iter()
+            .map(|c| c.0)
+            .collect()
+    }
+
+    fn m8_choose_card(&self, player: u8) -> u8 {
+        let hand = self.state.hands[player as usize];
+        crate::bots::m8::choose_card_m8(hand, &self.state, player).0
+    }
 }
 
 /// Play a single random game (for benchmarking throughput).
