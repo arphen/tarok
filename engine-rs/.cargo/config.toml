@@ -1,0 +1,15 @@
+# Cargo config scoped to this crate.
+#
+# pyo3 with the `extension-module` feature deliberately omits linking against
+# libpython at build time (it's intended to be loaded by Python as a cdylib).
+# That breaks `cargo test` binaries on macOS because they need Python symbols
+# at link time.  The canonical workaround is `-undefined dynamic_lookup` so
+# those symbols are resolved lazily — when the test runs from inside a Python
+# venv (LIBTORCH_USE_PYTORCH=1 with torch installed), the symbols come from
+# the active interpreter / torch's bundled python.
+
+[target.'cfg(target_os = "macos")']
+rustflags = [
+    "-C", "link-arg=-undefined",
+    "-C", "link-arg=dynamic_lookup",
+]

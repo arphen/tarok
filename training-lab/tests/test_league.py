@@ -94,6 +94,15 @@ def test_league_pool_add_snapshot() -> None:
     assert pool.entries[0].opponent.path == "checkpoints/snap1.pt"
 
 
+def test_league_pool_add_snapshot_with_explicit_initial_elo() -> None:
+    pool = LeaguePool(config=LeagueConfig())
+    pool.learner_elo = 1600.0
+    pool.add_snapshot("snap1", "checkpoints/snap1.pt", initial_elo=1725.0)
+
+    assert len(pool.entries) == 1
+    assert pool.entries[0].elo == 1725.0
+
+
 def test_league_pool_save_and_restore_preserves_snapshot_elos(tmp_path: Path) -> None:
     snapshot_path = tmp_path / "league_pool" / "iter_005.pt"
     snapshot_path.parent.mkdir(parents=True, exist_ok=True)
@@ -325,6 +334,8 @@ def test_update_league_elo_learner_wins_all() -> None:
     assert pool.entries[0].games_played == 10
     assert pool.entries[0].learner_outplaces == 10
     assert pool.entries[0].outplace_rate == 1.0
+    assert pool.entries[0].recent_outplace_rate == pytest.approx(1.0)
+    assert pool.entries[0].recent_outplace_samples == 10
 
 
 def test_update_league_elo_learner_loses_to_multiple_seats() -> None:
@@ -347,9 +358,33 @@ def test_update_league_elo_learner_loses_to_multiple_seats() -> None:
     assert pool.entries[1].games_played == 10
     assert pool.entries[0].outplace_rate == 0.0
     assert pool.entries[1].outplace_rate == 0.0
+    assert pool.entries[0].recent_outplace_rate == pytest.approx(0.0)
+    assert pool.entries[1].recent_outplace_rate == pytest.approx(0.0)
     assert pool.entries[0].elo == 1500.0
     assert pool.entries[1].elo == 1500.0
     assert pool.learner_elo < 1500.0
+
+
+def test_update_league_elo_clears_recent_outplace_for_non_played_entries() -> None:
+    v5 = LeagueOpponent("V5", "bot_v5")
+    m6 = LeagueOpponent("M6", "bot_m6")
+    pool = LeaguePool(config=LeagueConfig())
+    pool.entries = [
+        LeaguePoolEntry(opponent=v5, elo=1500.0, recent_outplace_rate=0.7, recent_outplace_samples=10),
+        LeaguePoolEntry(opponent=m6, elo=1500.0, recent_outplace_rate=0.4, recent_outplace_samples=10),
+    ]
+    pool.learner_elo = 1500.0
+
+    UpdateLeagueElo().execute(
+        pool,
+        seat_config_used="nn,bot_v5,nn,nn",
+        seat_outcomes={1: (2, 0, 0)},
+    )
+
+    assert pool.entries[0].recent_outplace_rate == pytest.approx(1.0)
+    assert pool.entries[0].recent_outplace_samples == 2
+    assert pool.entries[1].recent_outplace_rate is None
+    assert pool.entries[1].recent_outplace_samples == 0
 
 
 def test_update_league_elo_ignores_nn_vs_nn_seats() -> None:

@@ -25,6 +25,8 @@ class JsonLeagueStatePersistence(LeagueStatePersistencePort):
                     "elo": entry.elo,
                     "games_played": entry.games_played,
                     "learner_outplaces": entry.learner_outplaces,
+                    "recent_outplace_rate": entry.recent_outplace_rate,
+                    "recent_outplace_samples": entry.recent_outplace_samples,
                 }
                 for entry in pool.entries
             ],
@@ -49,6 +51,12 @@ class JsonLeagueStatePersistence(LeagueStatePersistencePort):
                 elo=float(item.get("elo", 1500.0)),
                 games_played=int(item.get("games_played", 0)),
                 learner_outplaces=int(item.get("learner_outplaces", 0)),
+                recent_outplace_rate=(
+                    float(item["recent_outplace_rate"])
+                    if item.get("recent_outplace_rate") is not None
+                    else None
+                ),
+                recent_outplace_samples=int(item.get("recent_outplace_samples", 0)),
             )
             for item in raw.get("entries", [])
         ]
@@ -70,6 +78,8 @@ class JsonLeagueStatePersistence(LeagueStatePersistencePort):
                     elo=restored.elo,
                     games_played=restored.games_played,
                     learner_outplaces=restored.learner_outplaces,
+                    recent_outplace_rate=restored.recent_outplace_rate,
+                    recent_outplace_samples=restored.recent_outplace_samples,
                 )
             )
 

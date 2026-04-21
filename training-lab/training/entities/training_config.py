@@ -15,6 +15,7 @@ LEARNER_SEAT_LABELS: frozenset[str] = frozenset({"nn", "centaur"})
 
 @dataclass(frozen=True)
 class TrainingConfig:
+    profile_name: str = "custom"
     seats: str = "nn,bot_v5,bot_v5,bot_v5"
     bench_seats: str | None = None
     iterations: int = 10

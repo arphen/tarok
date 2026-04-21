@@ -12,6 +12,9 @@ use rand::rngs::SmallRng;
 use rand::SeedableRng;
 use rayon::prelude::*;
 
+const VOID_CHANNELS: usize = 5;
+const TAROK_VOID_IDX: usize = 4;
+
 /// Default number of worlds to sample.
 pub const DEFAULT_NUM_WORLDS: u32 = 100;
 
@@ -126,8 +129,9 @@ pub fn pimc_choose_card(gs: &GameState, viewer: u8, num_worlds: u32) -> Card {
 
 /// Detect known suit voids from completed tricks and the current trick.
 /// `voids[player][suit]` is true when `player` failed to follow `suit`.
-pub fn detect_voids(gs: &GameState) -> [[bool; 4]; NUM_PLAYERS] {
-    let mut voids = [[false; 4]; NUM_PLAYERS];
+/// Channel mapping: 0..=3 = suits, 4 = tarok void.
+pub fn detect_voids(gs: &GameState) -> [[bool; VOID_CHANNELS]; NUM_PLAYERS] {
+    let mut voids = [[false; VOID_CHANNELS]; NUM_PLAYERS];
     record_voids_from_tricks(&gs.tricks, &mut voids);
     if let Some(ref trick) = gs.current_trick {
         record_voids_from_trick(trick, &mut voids);
@@ -135,19 +139,26 @@ pub fn detect_voids(gs: &GameState) -> [[bool; 4]; NUM_PLAYERS] {
     voids
 }
 
-fn record_voids_from_tricks(tricks: &[Trick], voids: &mut [[bool; 4]; NUM_PLAYERS]) {
+fn record_voids_from_tricks(tricks: &[Trick], voids: &mut [[bool; VOID_CHANNELS]; NUM_PLAYERS]) {
     for trick in tricks {
         record_voids_from_trick(trick, voids);
     }
 }
 
-fn record_voids_from_trick(trick: &Trick, voids: &mut [[bool; 4]; NUM_PLAYERS]) {
+fn record_voids_from_trick(trick: &Trick, voids: &mut [[bool; VOID_CHANNELS]; NUM_PLAYERS]) {
     if trick.count == 0 {
         return;
     }
     let lead_card = trick.cards[0].1;
     if lead_card.card_type() == CardType::Tarok {
-        return; // tarok lead — no suit-void inference
+        // Tarok lead: anyone not playing tarok is void in tarok.
+        for i in 1..trick.count as usize {
+            let (player, card) = trick.cards[i];
+            if card.card_type() != CardType::Tarok {
+                voids[player as usize][TAROK_VOID_IDX] = true;
+            }
+        }
+        return;
     }
     let lead_suit = match lead_card.suit() {
         Some(s) => s,
@@ -172,7 +183,7 @@ fn record_voids_from_trick(trick: &Trick, voids: &mut [[bool; 4]; NUM_PLAYERS]) 
 pub fn sample_world(
     gs: &GameState,
     viewer: u8,
-    voids: &[[bool; 4]; NUM_PLAYERS],
+    voids: &[[bool; VOID_CHANNELS]; NUM_PLAYERS],
     rng: &mut impl Rng,
 ) -> Option<[CardSet; NUM_PLAYERS]> {
     // Cards known to the viewer
@@ -234,7 +245,7 @@ fn try_deal(
     unknown: &[Card],
     viewer: u8,
     expected: &[u32; NUM_PLAYERS],
-    voids: &[[bool; 4]; NUM_PLAYERS],
+    voids: &[[bool; VOID_CHANNELS]; NUM_PLAYERS],
 ) -> Option<[CardSet; NUM_PLAYERS]> {
     let mut hands = [CardSet::EMPTY; NUM_PLAYERS];
     let mut idx = 0;
@@ -248,6 +259,8 @@ fn try_deal(
                 if voids[p][suit as usize] {
                     return None;
                 }
+            } else if voids[p][TAROK_VOID_IDX] {
+                return None;
             }
             hands[p].insert(card);
         }

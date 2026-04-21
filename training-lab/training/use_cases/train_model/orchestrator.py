@@ -111,11 +111,35 @@ class TrainModel:
             updater=UpdateLeagueElo(),
             presenter=self._presenter,
             persistence=self._league_persistence,
+            selfplay=self._selfplay,
         )
         league_pool_dir = save_dir / "league_pool"
+        league_pool_dir.mkdir(parents=True, exist_ok=True)
         state_path = league_maintenance.state_path(league_pool_dir)
+        profile_path = league_pool_dir / "profile.txt"
+
+        previous_profile = (
+            profile_path.read_text(encoding="utf-8").strip()
+            if profile_path.exists()
+            else ""
+        )
+        if state_path.exists() and previous_profile and previous_profile != config.profile_name:
+            approved = self._presenter.confirm_league_state_reset(
+                previous_profile=previous_profile,
+                current_profile=config.profile_name,
+                league_pool_dir=str(league_pool_dir),
+            )
+            if not approved:
+                raise RuntimeError(
+                    "League state reset declined. Aborting to avoid overriding league state "
+                    f"from '{previous_profile}' with '{config.profile_name}'."
+                )
+            shutil.rmtree(league_pool_dir, ignore_errors=True)
+            league_pool_dir.mkdir(parents=True, exist_ok=True)
+
         had_state = state_path.exists()
         self._league_persistence.restore(pool, state_path)
+        profile_path.write_text(config.profile_name, encoding="utf-8")
 
         if config.league.initial_calibration_enabled and not had_state:
             if self._selfplay is None:
@@ -195,6 +219,10 @@ class TrainModel:
                     ts_path=ts_path,
                     league_pool_dir=league_pool_dir,
                     last_snapshot_elo=last_snapshot_elo,
+                    concurrency=config.concurrency,
+                    session_size=config.outplace_session_size,
+                    lapajne_mc_worlds=config.lapajne_mc_worlds,
+                    lapajne_mc_sims=config.lapajne_mc_sims,
                 )
         finally:
             self._iteration_runner.teardown()

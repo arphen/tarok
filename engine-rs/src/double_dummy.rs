@@ -29,6 +29,11 @@ pub struct DDState {
 }
 
 impl DDState {
+    #[inline]
+    fn norm_player(player: u8) -> u8 {
+        (player as usize % NUM_PLAYERS) as u8
+    }
+
     /// Build a DDState from the current game position.
     pub fn new(
         hands: [CardSet; NUM_PLAYERS],
@@ -39,11 +44,11 @@ impl DDState {
         contract: Option<Contract>,
     ) -> Self {
         let (trick, trick_count, lead_player) = if let Some(ct) = current_trick {
-            (ct.cards, ct.count, ct.lead_player)
+            (ct.cards, ct.count, Self::norm_player(ct.lead_player))
         } else {
-            ([(0, Card(0)); 4], 0, current_player)
+            ([(0, Card(0)); 4], 0, Self::norm_player(current_player))
         };
-        DDState {
+        let mut state = DDState {
             hands,
             lead_player,
             trick,
@@ -53,7 +58,14 @@ impl DDState {
             decl_points: 0,
             roles,
             contract,
+        };
+        // Some callers can hand us a fully populated current trick
+        // (count==4) that wasn't flushed yet. Resolve it immediately so
+        // trick indexing always stays within 0..=3.
+        if state.trick_count >= 4 {
+            state.resolve_completed_trick();
         }
+        state
     }
 
     /// Build directly from a GameState.
@@ -89,15 +101,39 @@ impl DDState {
     }
 
     fn get_team(&self, player: u8) -> Team {
-        match self.roles[player as usize] {
+        match self.roles[Self::norm_player(player) as usize] {
             PlayerRole::Declarer | PlayerRole::Partner => Team::DeclarerTeam,
             PlayerRole::Opponent => Team::OpponentTeam,
         }
     }
 
+    /// Resolve `self.trick` when it contains 4 cards.
+    fn resolve_completed_trick(&mut self) {
+        if self.trick_count < 4 {
+            return;
+        }
+
+        let mut t = Trick::new(self.lead_player);
+        for i in 0..4 {
+            t.play(self.trick[i].0, self.trick[i].1);
+        }
+        let result = trick_eval::evaluate_trick(&t, self.is_game_last_trick(), self.contract);
+
+        let points: i32 = (0..4).map(|i| self.trick[i].1.points() as i32).sum();
+        if self.get_team(result.winner) == Team::DeclarerTeam {
+            self.decl_points += points;
+        }
+
+        self.tricks_completed += 1;
+        self.lead_player = Self::norm_player(result.winner);
+        self.trick_count = 0;
+        self.trick = [(0, Card(0)); 4];
+    }
+
     /// Compute legal moves for `player` from the current DD position.
     pub fn legal_moves(&self, player: u8) -> CardSet {
-        let hand = self.hands[player as usize];
+        let p = Self::norm_player(player);
+        let hand = self.hands[p as usize];
         if hand.is_empty() {
             return CardSet::EMPTY;
         }
@@ -140,29 +176,16 @@ impl DDState {
     /// If the trick completes, it is resolved (winner + points).
     fn play_card(&self, player: u8, card: Card) -> DDState {
         let mut next = self.clone();
-        next.hands[player as usize].remove(card);
-        next.trick[next.trick_count as usize] = (player, card);
+        if next.trick_count >= 4 {
+            next.resolve_completed_trick();
+        }
+        let p = Self::norm_player(player);
+        next.hands[p as usize].remove(card);
+        next.trick[next.trick_count as usize] = (p, card);
         next.trick_count += 1;
 
         if next.trick_count == 4 {
-            // Build a Trick and resolve it
-            let mut t = Trick::new(next.lead_player);
-            for i in 0..4 {
-                t.play(next.trick[i].0, next.trick[i].1);
-            }
-            let result =
-                trick_eval::evaluate_trick(&t, next.is_game_last_trick(), next.contract);
-
-            // Accumulate raw card points for the winning team
-            let points: i32 = (0..4).map(|i| next.trick[i].1.points() as i32).sum();
-            if next.get_team(result.winner) == Team::DeclarerTeam {
-                next.decl_points += points;
-            }
-
-            next.tricks_completed += 1;
-            next.lead_player = result.winner;
-            next.trick_count = 0;
-            next.trick = [(0, Card(0)); 4];
+            next.resolve_completed_trick();
         }
 
         next

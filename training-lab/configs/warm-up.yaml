@@ -3,6 +3,14 @@
 # Goal: copy V5 behavior with action-level cloning while keeping PPO value learning healthy
 # ---------------------------------------------------------
 
+seats: "centaur,bot_v5,bot_v5,centaur"
+bench_seats: "nn,bot_v1,bot_v3,bot_m6"
+
+centaur_handoff_trick: 8    # endgame solver takes over from trick 8 onward (last 4 tricks)
+centaur_pimc_worlds: 100    # worlds sampled per endgame card decision
+#centaur_endgame_solver: alpha_mu  # pimc (default) or alpha_mu
+#centaur_alpha_mu_depth: 2     # αμ iterative deepening depth (M parameter)
+
 bench_seats: "nn,bot_v1,bot_v3,bot_m6"
 
 iterations: 50             # Capped at 50; you'll likely stop it early via Ctrl+C

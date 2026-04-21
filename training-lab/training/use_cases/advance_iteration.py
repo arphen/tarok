@@ -100,4 +100,8 @@ class AdvanceIteration:
             ts_path=ctx.ts_path,
             league_pool_dir=ctx.league_pool_dir,
             last_snapshot_elo=ctx.last_snapshot_elo,
+            concurrency=config.concurrency,
+            session_size=config.outplace_session_size,
+            lapajne_mc_worlds=config.lapajne_mc_worlds,
+            lapajne_mc_sims=config.lapajne_mc_sims,
         )

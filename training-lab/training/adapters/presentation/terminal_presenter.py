@@ -13,6 +13,10 @@ _W = 72  # total line width
 _THIN = "─"
 _BOLD = "━"
 _BOX_H = "═"
+_ANSI_RESET = "\033[0m"
+_ANSI_GREEN = "\033[32m"
+_ANSI_RED = "\033[31m"
+_ANSI_CYAN = "\033[36m"
 
 
 def _format_time(seconds: float) -> str:
@@ -70,6 +74,10 @@ def _delta_arrow(delta: float, lower_is_better: bool = True) -> str:
     if lower_is_better:
         return " ▲+" if delta < 0 else " ▼−"
     return " ▲+" if delta > 0 else " ▼−"
+
+
+def _color(text: str, code: str) -> str:
+    return f"{code}{text}{_ANSI_RESET}"
 
 
 class TerminalPresenter(PresenterPort):
@@ -247,22 +255,52 @@ class TerminalPresenter(PresenterPort):
 
         learner_delta = elo_deltas.get("__learner__", 0.0) if elo_deltas else 0.0
 
-        rows: list[tuple[str, float, float, str]] = []
+        rows: list[tuple[str, float, float | None, str]] = []
         rows.append(("★ LEARNER", pool.learner_elo, learner_delta, ""))
         for e in entries:
-            delta = elo_deltas.get(e.opponent.name, 0.0) if elo_deltas else 0.0
+            recent = e.recent_outplace_rate
             extra = f"outplace {e.outplace_rate:.0%}  ({e.games_played:,} sessions)"
-            rows.append((e.opponent.name, e.elo, delta, extra))
+            rows.append((e.opponent.name, e.elo, recent, extra))
         rows.sort(key=lambda x: x[1], reverse=True)
 
         print(f"  {'┈' * (_W - 4)}")
-        print(f"  {'#':>3}  {'Name':<22} {'Elo':>7}  {'Δ':>6}  Details")
-        for idx, (name, elo, delta, extra) in enumerate(rows, 1):
-            d_str = f"{delta:+.1f}" if delta else ""
-            print(f"  {idx:>3}  {name:<22} {elo:>7.1f}  {d_str:>6}  {extra}")
+        print(f"  {'#':>3}  {'Name':<22} {'Elo':>7}  {'Δ':>8}  long term")
+        for idx, (name, elo, delta_or_recent, extra) in enumerate(rows, 1):
+            if name == "★ LEARNER":
+                d_str = f"{(delta_or_recent or 0.0):+.1f}"
+                if (delta_or_recent or 0.0) > 0:
+                    d_str = _color(d_str, _ANSI_GREEN)
+                elif (delta_or_recent or 0.0) < 0:
+                    d_str = _color(d_str, _ANSI_RED)
+                name_str = _color(name, _ANSI_CYAN)
+            else:
+                if delta_or_recent is None:
+                    d_str = ""
+                else:
+                    pct = delta_or_recent * 100.0
+                    d_str = f"{pct:>6.1f}%"
+                    if pct >= 50.0:
+                        d_str = _color(d_str, _ANSI_GREEN)
+                    else:
+                        d_str = _color(d_str, _ANSI_RED)
+                name_str = name
+            print(f"  {idx:>3}  {name_str:<22} {elo:>7.1f}  {d_str:>8}  {extra}")
 
     def on_league_snapshot_added(self, iteration: int, path: str) -> None:
         print(f"  📸 snapshot saved → {path}")
+
+    def confirm_league_state_reset(
+        self,
+        previous_profile: str,
+        current_profile: str,
+        league_pool_dir: str,
+    ) -> bool:
+        print("  ⚠ league profile mismatch detected")
+        print(f"      previous: {previous_profile}")
+        print(f"      current : {current_profile}")
+        print(f"      state   : {league_pool_dir}")
+        answer = input("  Reset league state for this config switch? [y/N]: ").strip().lower()
+        return answer in {"y", "yes"}
 
     def on_initial_league_calibration_start(
         self,

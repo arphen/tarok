@@ -4,8 +4,8 @@
 # ---------------------------------------------------------
 
 bench_seats: "nn,bot_v1,bot_v3,bot_m6"
-iterations: 100
-games: 10000
+iterations: 50
+games: 2500
 outplace_session_size: 50
 bench_games: 3000
 benchmark_checkpoints: [0, 20, 40, 60, 80, 100]

@@ -57,6 +57,10 @@ class UpdateLeagueElo:
         seat_config_used: str,
         seat_outcomes: dict[int, tuple[int, int, int]],
     ) -> None:
+        for entry in pool.entries:
+            entry.recent_outplace_rate = None
+            entry.recent_outplace_samples = 0
+
         labels = [s.strip() for s in seat_config_used.split(",")]
         if len(labels) != 4:
             return
@@ -88,6 +92,8 @@ class UpdateLeagueElo:
             if n_games == 0:
                 continue
 
+            recent_outplace_rate = learner_outplaces / n_games
+
             # Aggregate outcome as a fraction: 1.0 = opponent won all,
             # 0.0 = learner won all, draws count as 0.5 each.
             opp_outcome = (opp_outplaces + 0.5 * draws) / n_games
@@ -97,6 +103,8 @@ class UpdateLeagueElo:
             for entry in entries_for_token:
                 entry.games_played += n_games
                 entry.learner_outplaces += learner_outplaces
+                entry.recent_outplace_rate = recent_outplace_rate
+                entry.recent_outplace_samples = n_games
 
                 opp_elo = entry.elo
                 e_learner = _elo_expected(pool.learner_elo, opp_elo)

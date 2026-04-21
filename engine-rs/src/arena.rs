@@ -16,6 +16,7 @@ use crate::game_state::*;
 use crate::scoring;
 use crate::bots::lapajne;
 use crate::bots::lustrek;
+use crate::bots::m8;
 use crate::bots::stockskis_m6;
 use crate::bots::stockskis_pozrl;
 use crate::bots::stockskis_v1;
@@ -34,6 +35,7 @@ pub enum BotVersion {
     V5,
     V6,
     M6,
+    M8,
     Pozrl,
 }
 
@@ -70,6 +72,7 @@ fn bot_bid(v: BotVersion, hand: CardSet, highest: Option<Contract>) -> Option<Co
         BotVersion::V5     => stockskis_v5::evaluate_bid_v5(hand, highest),
         BotVersion::V6     => stockskis_v6::evaluate_bid_v6(hand, highest),
         BotVersion::M6     => stockskis_m6::evaluate_bid_m6(hand, highest),
+        BotVersion::M8     => m8::evaluate_bid_m8(hand, highest),
         BotVersion::Pozrl  => stockskis_pozrl::evaluate_bid_pozrl(hand, highest),
     }
 }
@@ -83,6 +86,7 @@ fn bot_king(v: BotVersion, hand: CardSet) -> Option<Card> {
         BotVersion::V5     => stockskis_v5::choose_king_v5(hand),
         BotVersion::V6     => stockskis_v6::choose_king_v6(hand),
         BotVersion::M6     => stockskis_m6::choose_king_m6(hand),
+        BotVersion::M8     => m8::choose_king_m8(hand),
         BotVersion::Pozrl  => stockskis_pozrl::choose_king_pozrl(hand),
     }
 }
@@ -101,6 +105,7 @@ fn bot_talon(
         BotVersion::V5     => stockskis_v5::choose_talon_group_v5(groups, hand, called_king),
         BotVersion::V6     => stockskis_v6::choose_talon_group_v6(groups, hand, called_king),
         BotVersion::M6     => stockskis_m6::choose_talon_group_m6(groups, hand, called_king),
+        BotVersion::M8     => m8::choose_talon_group_m8(groups, hand, called_king),
         BotVersion::Pozrl  => stockskis_pozrl::choose_talon_group_pozrl(groups, hand, called_king),
     }
 }
@@ -114,6 +119,7 @@ fn bot_discards(v: BotVersion, hand: CardSet, n: usize, called_king: Option<Card
         BotVersion::V5     => stockskis_v5::choose_discards_v5(hand, n, called_king),
         BotVersion::V6     => stockskis_v6::choose_discards_v6(hand, n, called_king),
         BotVersion::M6     => stockskis_m6::choose_discards_m6(hand, n, called_king),
+        BotVersion::M8     => m8::choose_discards_m8(hand, n, called_king),
         BotVersion::Pozrl  => stockskis_pozrl::choose_discards_pozrl(hand, n, called_king),
     }
 }
@@ -127,6 +133,7 @@ fn bot_card(v: BotVersion, hand: CardSet, state: &GameState, player: u8) -> Card
         BotVersion::V5     => stockskis_v5::choose_card_v5(hand, state, player),
         BotVersion::V6     => stockskis_v6::choose_card_v6(hand, state, player),
         BotVersion::M6     => stockskis_m6::choose_card_m6(hand, state, player),
+        BotVersion::M8     => m8::choose_card_m8(hand, state, player),
         BotVersion::Pozrl  => stockskis_pozrl::choose_card_pozrl(hand, state, player),
     }
 }

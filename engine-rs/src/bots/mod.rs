@@ -1,5 +1,6 @@
 pub mod lapajne;
 pub mod lustrek;
+pub mod m8;
 pub mod stockskis_m6;
 pub mod stockskis_pozrl;
 pub mod stockskis_v1;

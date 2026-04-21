@@ -77,6 +77,8 @@ class LeaguePoolEntry:
     elo: float = 1500.0
     games_played: int = 0
     learner_outplaces: int = 0  # games where learner scored above this opponent
+    recent_outplace_rate: float | None = None
+    recent_outplace_samples: int = 0
 
     @property
     def outplace_rate(self) -> float:
@@ -96,10 +98,11 @@ class LeaguePool:
         for opp in self.config.opponents:
             self.entries.append(LeaguePoolEntry(opponent=opp, elo=opp.initial_elo))
 
-    def add_snapshot(self, name: str, path: str) -> None:
+    def add_snapshot(self, name: str, path: str, initial_elo: float | None = None) -> None:
         """Register an auto-generated checkpoint snapshot as a new pool entry."""
         opp = LeagueOpponent(name=name, type="nn_checkpoint", path=path)
-        self.entries.append(LeaguePoolEntry(opponent=opp, elo=self.learner_elo))
+        elo = self.learner_elo if initial_elo is None else float(initial_elo)
+        self.entries.append(LeaguePoolEntry(opponent=opp, elo=elo))
 
     def sampling_weights(self) -> list[float]:
         """Return a weight per entry for weighted random sampling."""

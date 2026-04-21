@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from pathlib import Path
 from typing import Any
 
 from training.entities.league import LeagueConfig, LeagueOpponent
@@ -69,6 +70,7 @@ class ResolveConfig:
             metric = "loss"
 
         return TrainingConfig(
+            profile_name=(Path(config_path).stem if config_path else "custom"),
             seats=merged.get("seats", "nn,nn,nn,nn"),
             bench_seats=merged.get("bench_seats"),
             iterations=merged.get("iterations", 10),

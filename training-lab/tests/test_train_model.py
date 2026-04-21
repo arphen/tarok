@@ -679,6 +679,76 @@ def test_train_model_runs_initial_calibration_when_enabled_and_no_state(
     mock_presenter.on_initial_league_calibration_done.assert_called_once()
 
 
+def test_train_model_aborts_on_profile_mismatch_when_reset_not_approved(
+    mock_iteration_runner: MagicMock,
+    mock_benchmark: MagicMock,
+    mock_model_port: MagicMock,
+    mock_presenter: MagicMock,
+    base_config: TrainingConfig,
+    identity: ModelIdentity,
+    mock_league_persistence: MagicMock,
+) -> None:
+    cfg = replace(base_config, profile_name="self-play")
+    save_dir = Path(cfg.save_dir)
+    league_pool = save_dir / "league_pool"
+    league_pool.mkdir(parents=True, exist_ok=True)
+    (league_pool / "state.json").write_text("{}", encoding="utf-8")
+    (league_pool / "profile.txt").write_text("warm-up", encoding="utf-8")
+    mock_presenter.confirm_league_state_reset.return_value = False
+
+    use_case = TrainModel(
+        iteration_runner=mock_iteration_runner,
+        benchmark=mock_benchmark,
+        model=mock_model_port,
+        presenter=mock_presenter,
+        league_persistence=mock_league_persistence,
+    )
+
+    with pytest.raises(RuntimeError, match="League state reset declined"):
+        use_case.execute(config=cfg, identity=identity, weights={}, device="cpu")
+
+    mock_presenter.confirm_league_state_reset.assert_called_once()
+    mock_league_persistence.restore.assert_not_called()
+    mock_iteration_runner.teardown.assert_not_called()
+
+
+def test_train_model_resets_on_profile_mismatch_when_approved(
+    mock_iteration_runner: MagicMock,
+    mock_benchmark: MagicMock,
+    mock_model_port: MagicMock,
+    mock_presenter: MagicMock,
+    base_config: TrainingConfig,
+    identity: ModelIdentity,
+) -> None:
+    cfg = replace(
+        base_config,
+        profile_name="self-play",
+        iterations=1,
+        league=LeagueConfig(enabled=True, opponents=(LeagueOpponent(name="Anchor", type="bot_v1"),)),
+    )
+    save_dir = Path(cfg.save_dir)
+    league_pool = save_dir / "league_pool"
+    league_pool.mkdir(parents=True, exist_ok=True)
+    (league_pool / "state.json").write_text("{}", encoding="utf-8")
+    (league_pool / "profile.txt").write_text("warm-up", encoding="utf-8")
+    (league_pool / "iter_001.pt").write_bytes(b"x")
+    mock_presenter.confirm_league_state_reset.return_value = True
+
+    use_case = TrainModel(
+        iteration_runner=mock_iteration_runner,
+        benchmark=mock_benchmark,
+        model=mock_model_port,
+        presenter=mock_presenter,
+        league_persistence=JsonLeagueStatePersistence(),
+    )
+
+    use_case.execute(config=cfg, identity=identity, weights={}, device="cpu")
+
+    mock_presenter.confirm_league_state_reset.assert_called_once()
+    assert (league_pool / "profile.txt").read_text(encoding="utf-8").strip() == "self-play"
+    assert not (league_pool / "iter_001.pt").exists()
+
+
 def test_elo_based_lr_hits_expected_floor_and_ceiling_values() -> None:
     assert elo_based_lr(current_elo=800.0, base_lr=0.0003, min_lr=0.00001) == pytest.approx(0.0003)
     assert elo_based_lr(current_elo=2000.0, base_lr=0.0003, min_lr=0.00001) == pytest.approx(0.00001)

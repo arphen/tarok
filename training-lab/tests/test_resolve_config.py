@@ -99,3 +99,13 @@ def test_resolve_config_reads_initial_league_calibration_fields() -> None:
     assert cfg.league.initial_calibration_games_per_pair == 3000
     assert cfg.league.initial_calibration_anchor == "V3"
     assert cfg.league.initial_calibration_anchor_elo == 1500.0
+
+
+def test_resolve_config_sets_profile_name_from_config_path_stem() -> None:
+    cfg = ResolveConfig(_Loader({})).resolve(cli={}, config_path="configs/self-play.yaml")
+    assert cfg.profile_name == "self-play"
+
+
+def test_resolve_config_uses_custom_profile_name_without_config_path() -> None:
+    cfg = ResolveConfig(_Loader({})).resolve(cli={}, config_path=None)
+    assert cfg.profile_name == "custom"

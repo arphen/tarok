@@ -80,3 +80,15 @@ class PresenterPort(ABC):
 
     def on_initial_league_calibration_mixed_result(self, *args, **kwargs) -> None:
         """Called after each matchup result during initial calibration. Optional."""
+
+    def confirm_league_state_reset(
+        self,
+        previous_profile: str,
+        current_profile: str,
+        league_pool_dir: str,
+    ) -> bool:
+        """Ask whether a config-profile mismatch should reset league state.
+
+        Default is safe: refuse reset unless a presenter explicitly confirms.
+        """
+        return False

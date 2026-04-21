@@ -241,6 +241,26 @@ pub fn alpha_mu_choose_card(
     let mut prev_best_score = f64::NEG_INFINITY;
 
     for depth in 1..=max_depth {
+        // Evaluate all candidate cards in parallel; each card's DD solves are
+        // also parallel (see search_move), so both levels of work are fanned out
+        // across the rayon thread pool simultaneously.
+        let card_results: Vec<(Card, ParetoFront, f64)> = legal_vec
+            .par_iter()
+            .filter_map(|&card| {
+                let world_valid: Vec<bool> = worlds
+                    .iter()
+                    .map(|wh| wh[viewer as usize].contains(card))
+                    .collect();
+                if !world_valid.iter().any(|&v| v) {
+                    return None;
+                }
+                let front =
+                    search_move(gs, &worlds, &world_valid, card, viewer, depth, maximizing);
+                let score = front.best_score(maximizing);
+                Some((card, front, score))
+            })
+            .collect();
+
         let mut best_front = ParetoFront::empty();
         let mut best_move_score = if maximizing {
             f64::NEG_INFINITY
@@ -249,41 +269,16 @@ pub fn alpha_mu_choose_card(
         };
         let mut best_move_card = legal_vec[0];
 
-        for &card in &legal_vec {
-            // Determine which worlds this move is valid in
-            let mut world_valid: Vec<bool> = vec![false; n_worlds];
-            for (wi, world_hands) in worlds.iter().enumerate() {
-                let hand = world_hands[viewer as usize];
-                if hand.contains(card) {
-                    world_valid[wi] = true;
-                }
-            }
-            // All worlds share the viewer's actual hand, so card is always valid
-            if !world_valid.iter().any(|&v| v) {
-                continue;
-            }
-
-            // Search this move
-            let front = search_move(gs, &worlds, &world_valid, card, viewer, depth, maximizing);
-
-            let move_score = front.best_score(maximizing);
-
-            // Max: union fronts; pick best average
+        for (card, front, move_score) in card_results {
             best_front.union(&front);
-
-            let dominated = if maximizing {
+            let is_better = if maximizing {
                 move_score > best_move_score
             } else {
                 move_score < best_move_score
             };
-            if dominated {
+            if is_better {
                 best_move_score = move_score;
                 best_move_card = card;
-            }
-
-            // Root cut: if we matched the previous iteration's best, stop early
-            if depth > 1 && (move_score - prev_best_score).abs() < 1e-9 {
-                break;
             }
         }
 
@@ -306,40 +301,28 @@ fn search_move(
 ) -> ParetoFront {
     let n = worlds.len();
 
-    if m == 0 {
-        // Leaf: evaluate each valid world with DD solver.
-        let mut outcome = OutcomeVec::new(n);
-        for (wi, world_hands) in worlds.iter().enumerate() {
-            if !world_valid[wi] {
-                outcome.valid[wi] = false;
-                continue;
-            }
-            // Build a DD state from this world with the move applied
-            let dd = build_dd_after_move(gs, world_hands, card, viewer);
-            outcome.values[wi] = double_dummy::solve(&dd);
-        }
-        return ParetoFront::single(outcome);
-    }
-
-    // Apply the move to the game state and evaluate remaining opponents
-    // For each world, DD-solve after the move with reduced depth.
-    // This is a simplified version: at leaf depth (m=0 after decrement)
-    // each world is DD-solved independently.
-    //
+    // For each valid world, DD-solve after the move in parallel.
     // The full αμ would recurse through opponent moves too, building
     // Pareto fronts at Min nodes via product_min. For practical Tarok
-    // endgames (≤4 tricks remaining) with our existing fast DD solver,
-    // the key benefit comes from strategy fusion at the root.
+    // endgames (≤4 tricks remaining) with our fast DD solver the key
+    // benefit comes from strategy fusion at the root (m controls future
+    // expansion; currently all depths collapse to DD leaves).
+    let _ = m; // depth controls outer iterative deepening, not recursion yet
+    let results: Vec<(bool, i32)> = (0..n)
+        .into_par_iter()
+        .map(|wi| {
+            if !world_valid[wi] {
+                return (false, 0);
+            }
+            let dd = build_dd_after_move(gs, &worlds[wi], card, viewer);
+            (true, double_dummy::solve(&dd))
+        })
+        .collect();
 
-    // Evaluate: for each world, DD-solve with the viewer's move committed.
     let mut outcome = OutcomeVec::new(n);
-    for (wi, world_hands) in worlds.iter().enumerate() {
-        if !world_valid[wi] {
-            outcome.valid[wi] = false;
-            continue;
-        }
-        let dd = build_dd_after_move(gs, world_hands, card, viewer);
-        outcome.values[wi] = double_dummy::solve(&dd);
+    for (wi, (v, val)) in results.into_iter().enumerate() {
+        outcome.valid[wi] = v;
+        outcome.values[wi] = val;
     }
 
     ParetoFront::single(outcome)

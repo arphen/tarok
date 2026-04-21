@@ -1162,6 +1162,7 @@ fn run_arena_games(
             "bot_v5"     => BotVersion::V5,
             "bot_v6"     => BotVersion::V6,
             "bot_m6"     => BotVersion::M6,
+            "bot_m8"     => BotVersion::M8,
             "bot_pozrl"  => BotVersion::Pozrl,
             other => {
                 return Err(pyo3::exceptions::PyValueError::new_err(format!(
