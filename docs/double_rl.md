@@ -1,6 +1,6 @@
 # Duplicate Reinforcement Learning (DRL) for Tarok
 
-> Status: **Phase 1 (Python side) — landed.** Rust seeded-pods binding + Phase 2 orchestration still pending.
+> Status: **Phase 1 complete + Phase 2 use case landed.** Orchestrator wiring (branch on `config.duplicate.enabled`) still pending.
 > Guiding principle: **strictly additive on top of the existing PPO + Fictitious Self-Play + Arena stack.** Nothing about current training, arena leaderboard, or ELO league changes unless the Duplicate feature flag is explicitly enabled.
 
 ## Implementation status (as of last commit)
@@ -9,18 +9,19 @@ Completed:
 
 - Entities: `DuplicatePod`, `DuplicateRunResult`, `DuplicateConfig` (with `actor_only` requires `enabled` validation).
 - Ports: `DuplicatePairingPort`, `DuplicateRewardPort`. `SelfPlayPort` extended with an optional `run_seeded_pods` method (default raises `NotImplementedError`).
-- Adapters: `RotationPairingAdapter` (supports `rotation_8game` / `rotation_4game` / `single_seat_2game`), `ShadowScoreRewardAdapter` (default `(R_learner − R_shadow) / 100` with terminal masking).
-- PPO batch prep: §4.1 conservative `precomputed_rewards` override wired into `ppo_batch_preparation.py` with shape validation; legacy path is unchanged when the key is absent.
+- Adapters: `RotationPairingAdapter` (supports `rotation_8game` / `rotation_4game` / `single_seat_2game`), `ShadowScoreRewardAdapter` (default `(R_learner − R_shadow) / 100` with terminal masking), `SeededSelfPlayAdapter` (duplicate-aware self-play on top of the Rust engine).
+- Rust engine: `SelfPlayRunner::run_with_deck_seeds(...)` accepts per-game deck seeds; `run()` delegates to it with `None` for backward-compat. PyO3 `run_self_play` exposes an optional `deck_seeds: list[int]` parameter. Integration test `engine-rs/tests/seeded_deal_determinism.rs` verifies same-seed → same-deal across independent runs.
+- Use case: `CollectDuplicateExperiences` builds pods, runs seeded self-play (active + shadow), computes the shadow-diff reward, and returns an `ExperienceBundle` whose `raw["precomputed_rewards"]` is consumed by the PPO batch path.
+- PPO batch prep: §4.1 conservative `precomputed_rewards` override wired into `ppo_batch_preparation.py` with shape validation; legacy path is unchanged when the key is absent or `None`.
 - Config plumbing: `duplicate:` YAML block parsed into `DuplicateConfig` via `_parse_duplicate()` and attached to `TrainingConfig`.
-- Tests: 40 new unit tests; full training-lab suite (**209 passed**); `make lint-architecture` green.
+- Tests: `test_duplicate_config`, `test_duplicate_pairing`, `test_duplicate_reward`, `test_seeded_self_play_adapter`, `test_collect_duplicate_experiences`, `test_duplicate_disabled_is_noop` — full training-lab suite **222 passed**; `make lint-architecture` green.
 
 Still pending:
 
-- Rust: `deck_seed` path in `SelfPlayRunner` and `run_seeded_pods` PyO3 binding (§5).
-- `SeededSelfPlayAdapter` (trivial Python wrapper on top of the above).
-- `CollectDuplicateExperiences` use case + `TrainModelOrchestrator` branching (§3.5).
-- `test_duplicate_disabled_is_noop` regression gate (§10).
-- Phase 3 actor-only network pruning (§2.7), Phase 4 arena duplicate CLI + UI.
+- Orchestrator branch: `RunIteration` / `TrainModelOrchestrator` choosing `CollectDuplicateExperiences` vs. `CollectExperiences` based on `config.duplicate.enabled` (§3.5).
+- Shadow-path resolution: where the orchestrator sources the shadow checkpoint (previous iteration vs. league pool entry) per `duplicate.shadow_source`.
+- Phase 3: actor-only `TarokNet` variant + `_broadcast_terminal_advantage` helper (§2.7, §4.2).
+- Phase 4: Arena duplicate CLI + UI panel.
 
 ---
 
