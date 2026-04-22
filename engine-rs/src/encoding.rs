@@ -55,24 +55,26 @@ use crate::card::*;
 use crate::game_state::*;
 use crate::trick_eval::evaluate_trick;
 
-// --- v8 layout constants (all card planes are 54-aligned) ---
+// --- v9 layout constants (all card planes are 54-aligned) ---
 pub const HAND_OFFSET: usize = 0;
 /// Belief feature block offset (3 × 54 starting here).
 pub const BELIEF_OFFSET: usize = 54;
 const BELIEF_SIZE: usize = 3 * DECK_SIZE;
 /// Own played-cards plane (v8).
 pub const SELF_PLAYED_OFFSET: usize = BELIEF_OFFSET + BELIEF_SIZE; // 216
+/// Own discarded-cards plane (v9, private to the declarer).
+pub const SELF_DISCARDED_OFFSET: usize = SELF_PLAYED_OFFSET + DECK_SIZE; // 270
 /// Per-opponent played planes start here (3 × 54).
-pub const OPP_PLAYED_OFFSET: usize = SELF_PLAYED_OFFSET + DECK_SIZE; // 270
+pub const OPP_PLAYED_OFFSET: usize = SELF_DISCARDED_OFFSET + DECK_SIZE; // 324
 const OPP_PLAYED_SIZE: usize = 3 * DECK_SIZE;
 /// Active trick plane (cards on the table right now).
-pub const ACTIVE_TRICK_OFFSET: usize = OPP_PLAYED_OFFSET + OPP_PLAYED_SIZE; // 432
-/// Total card-plane block = 9 × 54.
-pub const CARD_PLANES_SIZE: usize = 9 * DECK_SIZE; // 486
+pub const ACTIVE_TRICK_OFFSET: usize = OPP_PLAYED_OFFSET + OPP_PLAYED_SIZE; // 486
+/// Total card-plane block = 10 × 54.
+pub const CARD_PLANES_SIZE: usize = 10 * DECK_SIZE; // 540
 /// First scalar offset.
-pub const SCALAR_OFFSET: usize = CARD_PLANES_SIZE; // 486
+pub const SCALAR_OFFSET: usize = CARD_PLANES_SIZE; // 540
 /// Contract one-hot offset.
-pub const CONTRACT_OFFSET: usize = SCALAR_OFFSET + 4; // 490 (after seat-rel)
+pub const CONTRACT_OFFSET: usize = SCALAR_OFFSET + 4; // 544 (after seat-rel)
 /// Contract one-hot feature length.
 pub const CONTRACT_SIZE: usize = 10;
 
@@ -80,10 +82,10 @@ pub const CONTRACT_SIZE: usize = 10;
 const SCALAR_TAIL_SIZE: usize =
     4 + 10 + 3 + 1 + 5 + 9 + 4 + 8 + 5 + 3 + 4 + 3 + 4 + 4 + 6 + 3 + 12 + 4 + 3 + 4; // 99
 
-/// v8 full state size.
-pub const STATE_SIZE: usize = CARD_PLANES_SIZE + SCALAR_TAIL_SIZE; // 486 + 99 = 585
+/// v9 full state size.
+pub const STATE_SIZE: usize = CARD_PLANES_SIZE + SCALAR_TAIL_SIZE; // 540 + 99 = 639
 pub const ORACLE_EXTRA: usize = 3 * DECK_SIZE; // 162
-pub const ORACLE_STATE_SIZE: usize = STATE_SIZE + ORACLE_EXTRA; // 747
+pub const ORACLE_STATE_SIZE: usize = STATE_SIZE + ORACLE_EXTRA; // 801
 
 /// Decision type codes matching Python DecisionType enum.
 pub const DT_BID: u8 = 0;
@@ -249,7 +251,14 @@ pub fn encode_state(buf: &mut [f32], state: &GameState, player: u8, decision_typ
             buf[base + c.0 as usize] = 1.0;
         }
     }
-    // Card planes 5..7: per-opponent played.
+    // Card plane 5: own discarded cards (v9 — private to the declarer).
+    if state.declarer == Some(player) {
+        let base = SELF_DISCARDED_OFFSET;
+        for c in state.put_down.iter() {
+            buf[base + c.0 as usize] = 1.0;
+        }
+    }
+    // Card planes 6..8: per-opponent played.
     for opp_offset in 1..NUM_PLAYERS {
         let opp_idx = ((player as usize + opp_offset) % NUM_PLAYERS) as u8;
         let base = OPP_PLAYED_OFFSET + (opp_offset - 1) * DECK_SIZE;

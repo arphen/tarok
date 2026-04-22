@@ -2,21 +2,25 @@
 
 Supports multiple decision types: bidding, king calling, talon selection, and card play.
 
-v8 encoding (585 dims) — blank slate, no backward-compat.  All card
+v9 encoding (639 dims) — blank slate, no backward-compat.  All card
 planes are grouped at the start in a card-attention-friendly layout
 (every plane starts on a 54-aligned offset):
 
   - 0..53     : own hand
   - 54..215   : 3 opponent belief probability planes (with suit/tarok-
                 void and forced-retention constraints applied)
-  - 216..269  : own played cards (v8 new — fixes "disappearing pagat"
-                problem where the network lost track of cards it had
+  - 216..269  : own played cards (fixes "disappearing pagat" problem
+                where the network lost track of cards it had
                 personally played)
-  - 270..431  : 3 per-opponent played planes (declarer plane also
+  - 270..323  : own discarded cards (v9 new — private to the declarer;
+                populated only when the acting player IS the declarer,
+                so their own cards add up to 12 across
+                hand + played + discarded at any time)
+  - 324..485  : 3 per-opponent played planes (declarer plane also
                 includes publicly-retired unpicked talon cards)
-  - 432..485  : active trick plane
+  - 486..539  : active trick plane
 
-Scalar tail from offset 486 (99 dims): seat, contract, phase,
+Scalar tail from offset 540 (99 dims): seat, contract, phase,
 tricks_played, decision type, highest bid, passed players, team-split
 announcements, kontra, role, partner_rel, centaur team points, trick
 leader/winner, trick context, void flags, live kings/trula, called king.
@@ -244,7 +248,12 @@ def _encode_state_into(
     for cidx in played_by_seat[player_idx]:
         buf[SELF_PLAYED_OFFSET + cidx] = 1.0
 
-    # Planes 5..7: per-opponent played cards (offsets 270, 324, 378)
+    # Plane 5: own discarded cards (offset 270 — private to declarer)
+    if state.declarer is not None and player_idx == state.declarer:
+        for card in state.put_down:
+            buf[SELF_DISCARDED_OFFSET + CARD_TO_IDX[card]] = 1.0
+
+    # Planes 6..8: per-opponent played cards (offsets 324, 378, 432)
     for opp_offset in range(1, 4):
         opp_idx = (player_idx + opp_offset) % 4
         base = OPP_PLAYED_OFFSET + (opp_offset - 1) * 54
@@ -468,27 +477,29 @@ def encode_state(state: GameState, player_idx: int, decision_type: DecisionType 
     return _state_buf.clone()
 
 
-# --- v8 layout constants (all card planes are 54-aligned) ---
+# --- v9 layout constants (all card planes are 54-aligned) ---
 # Card planes:
 #   0..53     : own hand
 #   54..215   : 3 opponent belief probability planes
-#   216..269  : own played cards (v8 new)
-#   270..431  : 3 per-opponent played planes
-#   432..485  : active trick plane
-# Scalar tail starts at 486.
+#   216..269  : own played cards
+#   270..323  : own discarded cards (v9, private to the declarer)
+#   324..485  : 3 per-opponent played planes
+#   486..539  : active trick plane
+# Scalar tail starts at 540.
 HAND_OFFSET = 0
 BELIEF_OFFSET = 54
 SELF_PLAYED_OFFSET = 216
-OPP_PLAYED_OFFSET = 270
-ACTIVE_TRICK_OFFSET = 432
-CARD_PLANES_SIZE = 9 * 54  # 486
-SCALAR_OFFSET = CARD_PLANES_SIZE  # 486
-CONTRACT_OFFSET = SCALAR_OFFSET + 4  # 490
+SELF_DISCARDED_OFFSET = 270
+OPP_PLAYED_OFFSET = 324
+ACTIVE_TRICK_OFFSET = 486
+CARD_PLANES_SIZE = 10 * 54  # 540
+SCALAR_OFFSET = CARD_PLANES_SIZE  # 540
+CONTRACT_OFFSET = SCALAR_OFFSET + 4  # 544
 CONTRACT_SIZE = 10
 
-# Compute STATE_SIZE from the v8 feature layout (card planes + scalar tail).
+# Compute STATE_SIZE from the v9 feature layout (card planes + scalar tail).
 STATE_SIZE = (
-    CARD_PLANES_SIZE  # 9 × 54 card planes (486)
+    CARD_PLANES_SIZE  # 10 × 54 card planes (540)
     # --- scalar tail (99) ---
     + 4   # seat rel dealer
     + 10  # contract
@@ -510,10 +521,10 @@ STATE_SIZE = (
     + 4   # live kings
     + 3   # live trula (pagat, mond, skis)
     + 4   # called-king suit one-hot
-)  # = 585
+)  # = 639
 # Oracle critic sees all opponent hands (Perfect Training, Imperfect Execution)
 ORACLE_EXTRA_SIZE = 3 * 54  # 3 opponent hand vectors
-ORACLE_STATE_SIZE = STATE_SIZE + ORACLE_EXTRA_SIZE  # 585 + 162 = 747
+ORACLE_STATE_SIZE = STATE_SIZE + ORACLE_EXTRA_SIZE  # 639 + 162 = 801
 
 # Pre-allocated encoding buffers (one per process, safe for async single-threaded use)
 _state_buf = torch.zeros(STATE_SIZE, dtype=torch.float32)

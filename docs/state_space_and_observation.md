@@ -5,8 +5,8 @@ It is based on the active Rust self-play path and encoder implementation.
 
 ## Short Answer
 
-- The policy acts on a 585-dimensional state vector per decision (v8).
-- Optional oracle critic training uses a 747-dimensional vector.
+- The policy acts on a 639-dimensional state vector per decision (v9).
+- Optional oracle critic training uses an 801-dimensional vector.
 - The agent sees previous trick information as public-card planes plus
   explicit per-opponent memory features (tarok-void, suit-void, per-opp
   played cards, live kings, live trula).  It does not receive an ordered
@@ -39,8 +39,8 @@ So the real environment state space is combinatorially huge.
 
 The policy/value network receives a fixed-size encoded vector:
 
-- Imperfect info actor state size: 585
-- Oracle critic state size: 747 (= 585 + 162)
+- Imperfect info actor state size: 639
+- Oracle critic state size: 801 (= 639 + 162)
 
 ## Decision Points During Self-Play
 
@@ -53,13 +53,13 @@ At each decision point, self-play encodes state from the acting seat's perspecti
 
 Note: the network architecture has an announce head, but run_self_play currently emits these 4 decision types.
 
-## 585-Dim Observation Layout (v8)
+## 639-Dim Observation Layout (v9)
 
 All offsets are zero-based and match engine-rs/src/encoding.rs.
 
-v8 groups all card planes contiguously at the start of the vector in a
+v9 groups all card planes contiguously at the start of the vector in a
 card-attention-friendly layout (every plane starts on a 54-aligned
-offset).  The scalar tail then follows from offset 486.
+offset).  The scalar tail then follows from offset 540.
 
 Slovenian Tarok rule: the entire talon is revealed to all players before
 the declarer picks one group.  The declarer's discard (put_down) remains
@@ -71,40 +71,62 @@ they are publicly known to still be in the declarer's hand; this
 information is carried by the belief block pinning those cards onto the
 declarer's column (at probability 1.0) at offset 54..215.
 
+The declarer's private discards are surfaced in a dedicated self-only
+plane at offset 270..323.  It is populated only when the acting player
+IS the declarer — opponents always see this plane as all-zero, since
+put_down is private information.  This ensures the declarer's own cards
+always add up (hand + self-played + self-discarded = 12 talon cards
+post-exchange), so the network can reason consistently about what it
+still holds.
+
 | Slice | Size | Meaning |
 |---|---:|---|
 | 0..53 | 54 | Own hand (binary card indicators) |
 | 54..107 | 54 | Opponent +1 belief probabilities |
 | 108..161 | 54 | Opponent +2 belief probabilities |
 | 162..215 | 54 | Opponent +3 belief probabilities |
-| 216..269 | 54 | Own played cards (v8 new — fixes "disappearing pagat" problem) |
-| 270..323 | 54 | Opponent +1 played cards |
-| 324..377 | 54 | Opponent +2 played cards |
-| 378..431 | 54 | Opponent +3 played cards (declarer plane ∪ unpicked talon) |
-| 432..485 | 54 | Active trick plane (cards currently on the table) |
-| 486..489 | 4 | Seat position relative to dealer (one-hot) |
-| 490..499 | 10 | Contract one-hot |
-| 500..502 | 3 | Phase one-hot: bidding / trick_play / other |
-| 503 | 1 | Tricks played (normalized by 12) |
-| 504..508 | 5 | Decision type one-hot |
-| 509..517 | 9 | Highest bid so far one-hot (no_bid + contracts) |
-| 518..521 | 4 | Passed players bit flags (dealer-relative order) |
-| 522..525 | 4 | Own-team announcements: trula, kings, pagat, valat |
-| 526..529 | 4 | Opponent-team announcements: trula, kings, pagat, valat |
-| 530..534 | 5 | Kontra levels (normalized) |
-| 535..537 | 3 | Role one-hot: declarer / partner / opposition (all-zero ⇒ bidding) |
-| 538..541 | 4 | Partner relative seat one-hot (0 = self is partner; all-zero ⇒ unknown) |
-| 542..544 | 3 | Centaur team points: mine/70, opp/70, current_trick/20 |
-| 545..548 | 4 | Trick leader relative seat one-hot |
-| 549..552 | 4 | Trick currently-winning seat relative one-hot |
-| 553..558 | 6 | Trick context: trick position + lead type/suit |
-| 559..561 | 3 | Per-opponent tarok-void flag |
-| 562..573 | 12 | Per-opponent suit-void flags (3 opponents × 4 suits) |
-| 574..577 | 4 | Live kings one-hot (per suit) — 1 if that king has not been played |
-| 578..580 | 3 | Live trula one-hot (pagat, mond, skis) — 1 if not yet played |
-| 581..584 | 4 | Called-king suit one-hot (public once king is called) |
+| 216..269 | 54 | Own played cards |
+| 270..323 | 54 | Own discarded cards (v9 new — private to declarer; zero for everyone else) |
+| 324..377 | 54 | Opponent +1 played cards |
+| 378..431 | 54 | Opponent +2 played cards |
+| 432..485 | 54 | Opponent +3 played cards (declarer plane ∪ unpicked talon) |
+| 486..539 | 54 | Active trick plane (cards currently on the table) |
+| 540..543 | 4 | Seat position relative to dealer (one-hot) |
+| 544..553 | 10 | Contract one-hot |
+| 554..556 | 3 | Phase one-hot: bidding / trick_play / other |
+| 557 | 1 | Tricks played (normalized by 12) |
+| 558..562 | 5 | Decision type one-hot |
+| 563..571 | 9 | Highest bid so far one-hot (no_bid + contracts) |
+| 572..575 | 4 | Passed players bit flags (dealer-relative order) |
+| 576..579 | 4 | Own-team announcements: trula, kings, pagat, valat |
+| 580..583 | 4 | Opponent-team announcements: trula, kings, pagat, valat |
+| 584..588 | 5 | Kontra levels (normalized) |
+| 589..591 | 3 | Role one-hot: declarer / partner / opposition (all-zero ⇒ bidding) |
+| 592..595 | 4 | Partner relative seat one-hot (0 = self is partner; all-zero ⇒ unknown) |
+| 596..598 | 3 | Centaur team points: mine/70, opp/70, current_trick/20 |
+| 599..602 | 4 | Trick leader relative seat one-hot |
+| 603..606 | 4 | Trick currently-winning seat relative one-hot |
+| 607..612 | 6 | Trick context: trick position + lead type/suit |
+| 613..615 | 3 | Per-opponent tarok-void flag |
+| 616..627 | 12 | Per-opponent suit-void flags (3 opponents × 4 suits) |
+| 628..631 | 4 | Live kings one-hot (per suit) — 1 if that king has not been played |
+| 632..634 | 3 | Live trula one-hot (pagat, mond, skis) — 1 if not yet played |
+| 635..638 | 4 | Called-king suit one-hot (public once king is called) |
 
-Total: 585.
+Total: 639.
+
+### v9 vs v8 changes (blank slate — no checkpoint migration)
+
+- Added: own-discarded plane at offset 270..323 (+54 dims).  The
+  declarer's put_down is private information (no other player is ever
+  allowed to know which cards were discarded), so the plane is
+  populated only when the acting player IS the declarer; opponents see
+  all-zero.  Without this plane the declarer's own cards stopped
+  adding up after the talon exchange — they had their current hand
+  plus played cards, but the 3 or 6 discarded cards were nowhere on
+  the observation.  The new plane closes that gap so the declarer can
+  consistently reason about which talon cards they took into private
+  retirement.
 
 ### v8 vs v7 changes (blank slate — no checkpoint migration)
 
@@ -123,9 +145,9 @@ Total: 585.
   follows unchanged from v7 (same 99 features), just shifted to offset
   486.
 
-## Oracle 747-Dim Layout
+## Oracle 801-Dim Layout
 
-Oracle state = 585 base + 162 extra dims:
+Oracle state = 639 base + 162 extra dims:
 
 - Extra 162 dims are exact opponent hands: 3 opponents × 54 cards.
 
@@ -238,7 +260,7 @@ Card-play action mapping is direct card index 0..53 in canonical deck order:
 
 Main tensors in the dictionary returned by run_self_play:
 
-- states: (N, 585) float32
+- states: (N, 639) float32
 - actions: (N,) uint16
 - log_probs: (N,) float32
 - values: (N,) float32
@@ -248,7 +270,7 @@ Main tensors in the dictionary returned by run_self_play:
 - players: (N,) uint8
 - game_ids: (N,) uint32
 - scores: (num_games, 4) int32
-- oracle_states: (N, 747) float32 (optional)
+- oracle_states: (N, 801) float32 (optional)
 
 ## How Rewards Are Assigned For PPO
 
