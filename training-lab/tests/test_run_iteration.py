@@ -237,3 +237,144 @@ def test_run_iteration_calls_phases_in_order(
     )
 
     assert call_log == ["selfplay", "ppo", "export", "benchmark", "save"]
+
+
+# ---------------------------------------------------------------------------
+# Duplicate-RL branching (docs/double_rl.md §3.5)
+# ---------------------------------------------------------------------------
+
+
+def test_run_iteration_uses_legacy_collect_when_duplicate_disabled(
+    config: TrainingConfig, identity: ModelIdentity, tmp_path: Path,
+) -> None:
+    """Default config has ``duplicate.enabled=False`` → legacy path only."""
+    selfplay = _selfplay_mock()
+    ppo = _ppo_mock()
+    benchmark = MagicMock()
+    benchmark.measure_placement.return_value = 2.0
+    model = MagicMock()
+    pairing = MagicMock()
+    reward = MagicMock()
+
+    RunIteration(
+        selfplay, ppo, benchmark, model, MagicMock(),
+        duplicate_pairing=pairing, duplicate_reward=reward,
+    ).execute(
+        iteration=1,
+        config=config,
+        identity=identity,
+        ts_path=str(tmp_path / "_current.pt"),
+        save_dir=tmp_path,
+        prev_placement=2.5,
+    )
+
+    # Legacy selfplay.run called; duplicate ports untouched.
+    assert selfplay.run.called
+    assert not selfplay.run_seeded_pods.called
+    assert not pairing.build_pods.called
+    assert not reward.compute_rewards.called
+
+
+def test_run_iteration_routes_to_duplicate_when_enabled(
+    config: TrainingConfig, identity: ModelIdentity, tmp_path: Path,
+) -> None:
+    """When ``duplicate.enabled=True`` and ports are injected, the orchestrator
+    must call ``run_seeded_pods`` / ``build_pods`` / ``compute_rewards`` and
+    skip the legacy ``selfplay.run`` path."""
+    import numpy as np
+
+    import dataclasses
+
+    from training.entities.duplicate_config import DuplicateConfig
+    from training.entities.duplicate_pod import DuplicatePod
+    from training.entities.duplicate_run_result import DuplicateRunResult
+
+    config = dataclasses.replace(
+        config, duplicate=DuplicateConfig(enabled=True, pods_per_iteration=2),
+    )
+
+    pod = DuplicatePod(
+        deck_seed=0,
+        opponents=("bot_v5", "bot_v5", "bot_v5"),
+        active_seatings=((0, 1, 2, 3),) * 8,
+        shadow_seatings=((0, 1, 2, 3),) * 8,
+        learner_positions=(0,) * 8,
+    )
+    pods = [pod, pod]
+    n_games = 16  # 2 pods * 8 games/group
+    active_raw = {
+        "players": np.zeros(n_games, dtype=np.int8),
+        "game_ids": np.arange(n_games, dtype=np.int64),
+        "states": np.zeros((n_games, 2), dtype=np.float32),
+        "scores": np.zeros((n_games, 4), dtype=np.float32),
+    }
+    run_result = DuplicateRunResult(
+        active=active_raw,
+        shadow_scores=np.zeros((n_games, 4), dtype=np.float32),
+        pod_ids=np.repeat(np.arange(2), 8).astype(np.int64),
+        learner_positions=np.zeros((2, 8), dtype=np.int8),
+        active_game_ids=np.arange(n_games, dtype=np.int64),
+    )
+
+    selfplay = _selfplay_mock()
+    selfplay.run_seeded_pods.return_value = run_result
+    selfplay.compute_run_stats.return_value = (n_games, (0.0, 0.0, 0.0, 0.0), {})
+
+    pairing = MagicMock()
+    pairing.build_pods.return_value = pods
+    reward = MagicMock()
+    reward.compute_rewards.return_value = np.zeros(n_games, dtype=np.float32)
+
+    ppo = _ppo_mock()
+    benchmark = MagicMock()
+    benchmark.measure_placement.return_value = 2.0
+    model = MagicMock()
+
+    RunIteration(
+        selfplay, ppo, benchmark, model, MagicMock(),
+        duplicate_pairing=pairing, duplicate_reward=reward,
+    ).execute(
+        iteration=1,
+        config=config,
+        identity=identity,
+        ts_path=str(tmp_path / "_current.pt"),
+        save_dir=tmp_path,
+        prev_placement=2.5,
+    )
+
+    assert pairing.build_pods.called
+    assert selfplay.run_seeded_pods.called
+    assert reward.compute_rewards.called
+    assert not selfplay.run.called  # legacy path bypassed
+
+
+def test_run_iteration_falls_back_to_legacy_when_duplicate_ports_missing(
+    config: TrainingConfig, identity: ModelIdentity, tmp_path: Path,
+) -> None:
+    """Config says enabled=True but no ports injected → safe fallback to legacy."""
+    import dataclasses
+
+    from training.entities.duplicate_config import DuplicateConfig
+
+    config = dataclasses.replace(
+        config, duplicate=DuplicateConfig(enabled=True, pods_per_iteration=2),
+    )
+
+    selfplay = _selfplay_mock()
+    ppo = _ppo_mock()
+    benchmark = MagicMock()
+    benchmark.measure_placement.return_value = 2.0
+    model = MagicMock()
+
+    # No duplicate_pairing / duplicate_reward → must fall back.
+    RunIteration(selfplay, ppo, benchmark, model, MagicMock()).execute(
+        iteration=1,
+        config=config,
+        identity=identity,
+        ts_path=str(tmp_path / "_current.pt"),
+        save_dir=tmp_path,
+        prev_placement=2.5,
+    )
+
+    assert selfplay.run.called
+    assert not selfplay.run_seeded_pods.called

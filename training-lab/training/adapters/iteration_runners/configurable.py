@@ -13,6 +13,8 @@ from training.entities.iteration_result import IterationResult
 from training.entities.model_identity import ModelIdentity
 from training.entities.training_config import TrainingConfig
 from training.ports.benchmark_port import BenchmarkPort
+from training.ports.duplicate_pairing_port import DuplicatePairingPort
+from training.ports.duplicate_reward_port import DuplicateRewardPort
 from training.ports.iteration_runner_port import IterationRunnerPort
 from training.ports.model_port import ModelPort
 from training.ports.ppo_port import PPOPort
@@ -30,12 +32,17 @@ class ConfigurableIterationRunner(IterationRunnerPort):
         benchmark: BenchmarkPort,
         model: ModelPort,
         presenter: PresenterPort,
+        *,
+        duplicate_pairing: DuplicatePairingPort | None = None,
+        duplicate_reward: DuplicateRewardPort | None = None,
     ):
         self._selfplay = selfplay
         self._ppo = ppo
         self._benchmark = benchmark
         self._model = model
         self._presenter = presenter
+        self._duplicate_pairing = duplicate_pairing
+        self._duplicate_reward = duplicate_reward
         self._delegate: IterationRunnerPort | None = None
 
     def setup(self, weights: dict, config: TrainingConfig, device: str) -> None:
@@ -44,6 +51,13 @@ class ConfigurableIterationRunner(IterationRunnerPort):
         if mode in {"spawn", "process", "subprocess"}:
             from training.adapters.iteration_runners.spawn import SpawnIterationRunner
 
+            if getattr(config, "duplicate", None) is not None and config.duplicate.enabled:
+                # Spawn runner does not yet thread duplicate ports through the
+                # worker boundary; require in-process for duplicate runs.
+                raise NotImplementedError(
+                    "duplicate.enabled=True is currently only supported with "
+                    "iteration_runner_mode='in-process'."
+                )
             self._delegate = SpawnIterationRunner(
                 adapter_factory=self._adapter_factory_for_spawn,
                 presenter=self._presenter,
@@ -58,6 +72,8 @@ class ConfigurableIterationRunner(IterationRunnerPort):
                 self._benchmark,
                 self._model,
                 self._presenter,
+                duplicate_pairing=self._duplicate_pairing,
+                duplicate_reward=self._duplicate_reward,
             )
 
         self._delegate.setup(weights, config, device)

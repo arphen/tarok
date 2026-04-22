@@ -1,6 +1,6 @@
 # Duplicate Reinforcement Learning (DRL) for Tarok
 
-> Status: **Phase 1 complete + Phase 2 use case landed.** Orchestrator wiring (branch on `config.duplicate.enabled`) still pending.
+> Status: **Phase 1 + Phase 2 complete.** Config-gated duplicate iterations now run end-to-end through the in-process runner. Phase 3 (actor-only net) and Phase 4 (arena UI) still pending.
 > Guiding principle: **strictly additive on top of the existing PPO + Fictitious Self-Play + Arena stack.** Nothing about current training, arena leaderboard, or ELO league changes unless the Duplicate feature flag is explicitly enabled.
 
 ## Implementation status (as of last commit)
@@ -9,17 +9,18 @@ Completed:
 
 - Entities: `DuplicatePod`, `DuplicateRunResult`, `DuplicateConfig` (with `actor_only` requires `enabled` validation).
 - Ports: `DuplicatePairingPort`, `DuplicateRewardPort`. `SelfPlayPort` extended with an optional `run_seeded_pods` method (default raises `NotImplementedError`).
-- Adapters: `RotationPairingAdapter` (supports `rotation_8game` / `rotation_4game` / `single_seat_2game`), `ShadowScoreRewardAdapter` (default `(R_learner − R_shadow) / 100` with terminal masking), `SeededSelfPlayAdapter` (duplicate-aware self-play on top of the Rust engine).
-- Rust engine: `SelfPlayRunner::run_with_deck_seeds(...)` accepts per-game deck seeds; `run()` delegates to it with `None` for backward-compat. PyO3 `run_self_play` exposes an optional `deck_seeds: list[int]` parameter. Integration test `engine-rs/tests/seeded_deal_determinism.rs` verifies same-seed → same-deal across independent runs.
-- Use case: `CollectDuplicateExperiences` builds pods, runs seeded self-play (active + shadow), computes the shadow-diff reward, and returns an `ExperienceBundle` whose `raw["precomputed_rewards"]` is consumed by the PPO batch path.
-- PPO batch prep: §4.1 conservative `precomputed_rewards` override wired into `ppo_batch_preparation.py` with shape validation; legacy path is unchanged when the key is absent or `None`.
+- Adapters: `RotationPairingAdapter`, `ShadowScoreRewardAdapter`, `SeededSelfPlayAdapter` (duplicate-aware self-play on top of the Rust engine).
+- Rust engine: `SelfPlayRunner::run_with_deck_seeds(...)` + PyO3 `run_self_play(deck_seeds=...)`; integration test `engine-rs/tests/seeded_deal_determinism.rs`.
+- Use case: `CollectDuplicateExperiences` builds pods, runs seeded self-play (active + shadow), computes shadow-diff rewards, and returns an `ExperienceBundle` whose `raw["precomputed_rewards"]` feeds the PPO batch path.
+- PPO batch prep: §4.1 conservative `precomputed_rewards` override wired into `ppo_batch_preparation.py`; legacy path unchanged when the key is absent or `None`.
 - Config plumbing: `duplicate:` YAML block parsed into `DuplicateConfig` via `_parse_duplicate()` and attached to `TrainingConfig`.
-- Tests: `test_duplicate_config`, `test_duplicate_pairing`, `test_duplicate_reward`, `test_seeded_self_play_adapter`, `test_collect_duplicate_experiences`, `test_duplicate_disabled_is_noop` — full training-lab suite **222 passed**; `make lint-architecture` green.
+- Orchestrator: `RunIteration` accepts optional `duplicate_pairing` / `duplicate_reward` keyword ports and routes to `CollectDuplicateExperiences` when `config.duplicate.enabled=True`; otherwise falls back to the legacy `CollectExperiences` path. Shadow-path follows `shadow_source="previous_iteration"` (bootstraps to `ts_path` on iteration 0). Threaded through `InProcessIterationRunner` and `ConfigurableIterationRunner`.
+- Tests: full training-lab suite **225 passed** (added 3 orchestrator-branching tests), 5-test noop regression, `make lint-architecture` green.
 
 Still pending:
 
-- Orchestrator branch: `RunIteration` / `TrainModelOrchestrator` choosing `CollectDuplicateExperiences` vs. `CollectExperiences` based on `config.duplicate.enabled` (§3.5).
-- Shadow-path resolution: where the orchestrator sources the shadow checkpoint (previous iteration vs. league pool entry) per `duplicate.shadow_source`.
+- `SpawnIterationRunner` support for duplicate (currently raises `NotImplementedError` if duplicate + spawn combo is configured).
+- Shadow-source "league pool" option wiring.
 - Phase 3: actor-only `TarokNet` variant + `_broadcast_terminal_advantage` helper (§2.7, §4.2).
 - Phase 4: Arena duplicate CLI + UI panel.
 
