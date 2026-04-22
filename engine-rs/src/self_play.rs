@@ -11,7 +11,8 @@
 
 use std::sync::Arc;
 
-use rand::Rng;
+use rand::{Rng, SeedableRng};
+use rand::rngs::SmallRng;
 
 use crate::card::*;
 use crate::encoding;
@@ -142,6 +143,34 @@ impl SelfPlayRunner {
     }
 
     pub fn run(&self, n_games: u32, concurrency: usize) -> Vec<GameResult> {
+        self.run_with_deck_seeds(n_games, concurrency, None)
+    }
+
+    /// Run `n_games` like [`run`], but optionally use per-game deck seeds.
+    ///
+    /// When `deck_seeds` is `Some(v)`, `v` must have exactly `n_games` entries
+    /// and game `g` deals its hands from `SmallRng::seed_from_u64(v[g])`. This
+    /// makes dealing deterministic and reproducible across seatings — the
+    /// building block for duplicate training. Policy exploration still uses
+    /// the players' own stochasticity, which is independent of the deal RNG.
+    ///
+    /// When `deck_seeds` is `None`, behavior is identical to [`run`] — dealing
+    /// uses the process-default RNG.
+    pub fn run_with_deck_seeds(
+        &self,
+        n_games: u32,
+        concurrency: usize,
+        deck_seeds: Option<Vec<u64>>,
+    ) -> Vec<GameResult> {
+        if let Some(ref seeds) = deck_seeds {
+            assert_eq!(
+                seeds.len(),
+                n_games as usize,
+                "deck_seeds length ({}) must equal n_games ({})",
+                seeds.len(),
+                n_games
+            );
+        }
         let mut rng = rand::rng();
         let mut results: Vec<GameResult> = Vec::with_capacity(n_games as usize);
         let mut slots: Vec<Option<InFlightGame>> = (0..concurrency).map(|_| None).collect();
@@ -152,7 +181,7 @@ impl SelfPlayRunner {
         // Seed initial games
         let n_initial = concurrency.min(n_games as usize);
         for i in 0..n_initial {
-            slots[i] = Some(Self::new_game(next_game, &mut rng));
+            slots[i] = Some(Self::new_game_dispatch(next_game, &mut rng, deck_seeds.as_deref()));
             game_exps.push(Vec::new());
             next_game += 1;
             active += 1;
@@ -199,7 +228,7 @@ impl SelfPlayRunner {
                             let exps = std::mem::take(&mut game_exps[gid]);
                             results.push(Self::build_result(game, exps));
                             if next_game < n_games {
-                                *game = Self::new_game(next_game, &mut rng);
+                                *game = Self::new_game_dispatch(next_game, &mut rng, deck_seeds.as_deref());
                                 game_exps.push(Vec::new());
                                 next_game += 1;
                             } else {
@@ -313,7 +342,7 @@ impl SelfPlayRunner {
                 let exps = std::mem::take(&mut game_exps[gid]);
                 results.push(Self::build_result(game, exps));
                 if next_game < n_games {
-                    *game = Self::new_game(next_game, &mut rng);
+                    *game = Self::new_game_dispatch(next_game, &mut rng, deck_seeds.as_deref());
                     game_exps.push(Vec::new());
                     next_game += 1;
                 } else {
@@ -329,6 +358,23 @@ impl SelfPlayRunner {
     // ------------------------------------------------------------------
     // Game lifecycle
     // ------------------------------------------------------------------
+
+    /// Dispatch to [`new_game`] with a per-game deck RNG:
+    /// - if `deck_seeds` is `Some`, deal from `SmallRng::seed_from_u64(deck_seeds[game_id])`.
+    /// - otherwise, deal from the shared process RNG.
+    fn new_game_dispatch(
+        game_id: u32,
+        shared_rng: &mut impl Rng,
+        deck_seeds: Option<&[u64]>,
+    ) -> InFlightGame {
+        match deck_seeds {
+            Some(seeds) => {
+                let mut per_game_rng = SmallRng::seed_from_u64(seeds[game_id as usize]);
+                Self::new_game(game_id, &mut per_game_rng)
+            }
+            None => Self::new_game(game_id, shared_rng),
+        }
+    }
 
     fn new_game(game_id: u32, rng: &mut impl Rng) -> InFlightGame {
         let dealer = (game_id % 4) as u8;

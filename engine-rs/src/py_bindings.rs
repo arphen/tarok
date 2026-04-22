@@ -887,7 +887,7 @@ fn compute_legal_plays(hand: Vec<u8>, trick_cards: Vec<(u8, u8)>, contract: Opti
 ///   initial_talon:  (n_games, 6) uint8, only when `include_replay_data=True`
 ///   traces:         list[dict], only when `include_replay_data=True`
 #[pyfunction]
-#[pyo3(signature = (n_games, concurrency=64, model_path=None, explore_rate=0.05, seat_config="nn,nn,nn,nn", include_replay_data=true, include_oracle_states=false, lapajne_mc_worlds=None, lapajne_mc_sims=None, centaur_handoff_trick=None, centaur_pimc_worlds=None, centaur_endgame_solver=None, centaur_alpha_mu_depth=None))]
+#[pyo3(signature = (n_games, concurrency=64, model_path=None, explore_rate=0.05, seat_config="nn,nn,nn,nn", include_replay_data=true, include_oracle_states=false, lapajne_mc_worlds=None, lapajne_mc_sims=None, centaur_handoff_trick=None, centaur_pimc_worlds=None, centaur_endgame_solver=None, centaur_alpha_mu_depth=None, deck_seeds=None))]
 fn run_self_play(
     py: Python<'_>,
     n_games: u32,
@@ -903,6 +903,7 @@ fn run_self_play(
     centaur_pimc_worlds: Option<u32>,
     centaur_endgame_solver: Option<&str>,
     centaur_alpha_mu_depth: Option<usize>,
+    deck_seeds: Option<Vec<u64>>,
 ) -> PyResult<PyObject> {
     use std::collections::HashMap;
     use std::sync::Arc;
@@ -1020,10 +1021,21 @@ fn run_self_play(
         matches!(seat_labels[i], "nn" | "centaur")
     });
 
+    // Validate deck_seeds if provided — must match n_games.
+    if let Some(ref seeds) = deck_seeds {
+        if seeds.len() != n_games as usize {
+            return Err(pyo3::exceptions::PyValueError::new_err(format!(
+                "deck_seeds length ({}) must equal n_games ({})",
+                seeds.len(),
+                n_games
+            )));
+        }
+    }
+
     // Release GIL — the entire self-play loop runs in pure Rust
     let results: Vec<GameResult> = py.allow_threads(|| {
         let runner = SelfPlayRunner::new(players_arr);
-        runner.run(n_games, concurrency)
+        runner.run_with_deck_seeds(n_games, concurrency, deck_seeds)
     });
 
     // Flatten results into numpy arrays
