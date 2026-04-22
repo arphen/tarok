@@ -93,9 +93,29 @@ def _default_iteration_runner(
     benchmark: BenchmarkPort,
     model: ModelPort,
     presenter: PresenterPort,
+    config: TrainingConfig | None = None,
 ) -> IterationRunnerPort:
     from training.adapters.iteration_runners import ConfigurableIterationRunner
-    return ConfigurableIterationRunner(selfplay, ppo, benchmark, model, presenter)
+
+    duplicate_pairing = None
+    duplicate_reward = None
+    if config is not None and getattr(config, "duplicate", None) is not None and config.duplicate.enabled:
+        from training.adapters.duplicate.rotation_pairing import RotationPairingAdapter
+        from training.adapters.duplicate.seeded_self_play_adapter import SeededSelfPlayAdapter
+        from training.adapters.duplicate.shadow_score_reward import ShadowScoreRewardAdapter
+
+        # Wrap the default self-play adapter so ``run_seeded_pods`` is
+        # available; legacy ``run``/``compute_run_stats`` still delegate to
+        # the inner Rust adapter.
+        selfplay = SeededSelfPlayAdapter(inner=selfplay)
+        duplicate_pairing = RotationPairingAdapter(pairing=config.duplicate.pairing)
+        duplicate_reward = ShadowScoreRewardAdapter()
+
+    return ConfigurableIterationRunner(
+        selfplay, ppo, benchmark, model, presenter,
+        duplicate_pairing=duplicate_pairing,
+        duplicate_reward=duplicate_reward,
+    )
 
 
 class Container:
@@ -160,6 +180,20 @@ class Container:
             )
         return self._iteration_runner
 
+    def _iteration_runner_for(self, config: TrainingConfig | None) -> IterationRunnerPort:
+        """Config-aware iteration runner: injects duplicate-RL adapters when
+        ``config.duplicate.enabled`` is True. Falls back to the cached default
+        runner when duplicate is disabled or config is None."""
+        if self._iteration_runner is not None:
+            return self._iteration_runner
+        if config is not None and getattr(config, "duplicate", None) is not None and config.duplicate.enabled:
+            self._iteration_runner = _default_iteration_runner(
+                self.selfplay, self.ppo, self.benchmark, self.model, self.presenter,
+                config=config,
+            )
+            return self._iteration_runner
+        return self.iteration_runner
+
     @property
     def model(self) -> ModelPort:
         if self._model is None:
@@ -204,7 +238,7 @@ class Container:
 
     def train_model(self, config: TrainingConfig | None = None) -> TrainModel:
         return TrainModel(
-            iteration_runner=self.iteration_runner,
+            iteration_runner=self._iteration_runner_for(config),
             benchmark=self.benchmark,
             model=self.model,
             presenter=self.presenter,
