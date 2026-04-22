@@ -75,6 +75,7 @@ class ConfigurableIterationRunner(IterationRunnerPort):
         iter_imitation_coef: float | None,
         iter_behavioral_clone_coef: float | None,
         iter_entropy_coef: float | None,
+        iter_explore_rate: float | None = None,
         seats_override: str | None,
         run_benchmark: bool,
     ) -> IterationResult:
@@ -92,6 +93,7 @@ class ConfigurableIterationRunner(IterationRunnerPort):
             iter_imitation_coef=iter_imitation_coef,
             iter_behavioral_clone_coef=iter_behavioral_clone_coef,
             iter_entropy_coef=iter_entropy_coef,
+            iter_explore_rate=iter_explore_rate,
             seats_override=seats_override,
             run_benchmark=run_benchmark,
         )

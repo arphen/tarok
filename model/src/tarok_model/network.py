@@ -5,7 +5,7 @@ v2 Architecture upgrades:
   - Multi-head self-attention over card embeddings for relational reasoning
   - Oracle guiding: actor latent space aligned with oracle critic via distillation
   - Expanded state encoding with belief tracking and public-memory
-    features (639 dims, v9)
+    features (585 dims, v10)
 
 Supports five decision types with separate action heads:
   - Bidding (9 actions: pass + 8 contracts)
@@ -124,10 +124,10 @@ class TarokNet(nn.Module):
         )
 
         # Card-level attention over belief vectors
-        # Each card has: own_hand(1) + played(1) + current_trick(1) +
-        #                belief_opp1(1) + belief_opp2(1) + belief_opp3(1) = 6 features
+        # Each card has 9 per-plane features (v10): own hand, 3 belief
+        # planes, own played, 3 opp played, active trick.
         self.card_attention = CardAttention(
-            num_cards=54, card_dim=10, num_heads=4, hidden_dim=hidden_size // 4,
+            num_cards=54, card_dim=9, num_heads=4, hidden_dim=hidden_size // 4,
         )
         # Fuse attention output with backbone
         attn_hidden = hidden_size // 4
@@ -198,13 +198,12 @@ class TarokNet(nn.Module):
     def _extract_card_features(self, state: torch.Tensor) -> torch.Tensor:
         """Extract per-card feature matrix from the flat state tensor.
 
-        Returns (batch, 54, 10) tensor (v9 layout, all card planes 54-aligned):
+        Returns (batch, 54, 9) tensor (v10 layout, all card planes 54-aligned):
           channel 0: own hand               (offset 0)
           channel 1-3: opponent belief      (offsets 54, 108, 162)
           channel 4: own played cards       (offset 216)
-          channel 5: own discarded cards    (offset 270, declarer-only)
-          channel 6-8: per-opponent played  (offsets 324, 378, 432)
-          channel 9: active trick cards     (offset 486)
+          channel 5-7: per-opponent played  (offsets 270, 324, 378)
+          channel 8: active trick cards     (offset 432)
         """
         if state.dim() == 1:
             state = state.unsqueeze(0)
@@ -214,15 +213,14 @@ class TarokNet(nn.Module):
         b2 = state[:, 108:162]
         b3 = state[:, 162:216]
         self_played = state[:, 216:270]
-        self_discarded = state[:, 270:324]
-        op1_played = state[:, 324:378]
-        op2_played = state[:, 378:432]
-        op3_played = state[:, 432:486]
-        active_trick = state[:, 486:540]
+        op1_played = state[:, 270:324]
+        op2_played = state[:, 324:378]
+        op3_played = state[:, 378:432]
+        active_trick = state[:, 432:486]
 
-        # Stack: (B, 54, 10)
+        # Stack: (B, 54, 9)
         return torch.stack(
-            [hand, b1, b2, b3, self_played, self_discarded,
+            [hand, b1, b2, b3, self_played,
              op1_played, op2_played, op3_played, active_trick],
             dim=-1,
         )

@@ -14,6 +14,7 @@ use crate::game_state::*;
 use crate::bots::lustrek;
 use crate::bots::lapajne;
 use crate::bots::m8;
+use crate::bots::m9;
 use crate::bots::stockskis_m6;
 use crate::bots::stockskis_pozrl;
 use crate::bots::stockskis_v1;
@@ -206,6 +207,27 @@ impl HeuristicStrategy for BotM8 {
     }
 }
 
+pub struct BotM9;
+impl HeuristicStrategy for BotM9 {
+    fn seat_label(&self) -> &'static str { "bot_m9" }
+    fn name(&self) -> &'static str { "stockskis_m9" }
+    fn evaluate_bid(&self, hand: CardSet, highest: Option<Contract>) -> Option<Contract> {
+        m9::evaluate_bid_m9(hand, highest)
+    }
+    fn choose_king(&self, hand: CardSet) -> Option<Card> {
+        m9::choose_king_m9(hand)
+    }
+    fn choose_talon_group(&self, groups: &[Vec<Card>], hand: CardSet, called_king: Option<Card>) -> usize {
+        m9::choose_talon_group_m9(groups, hand, called_king)
+    }
+    fn choose_discards(&self, hand: CardSet, must_discard: usize, called_king: Option<Card>) -> Vec<Card> {
+        m9::choose_discards_m9(hand, must_discard, called_king)
+    }
+    fn choose_card(&self, hand: CardSet, gs: &GameState, player: u8) -> Card {
+        m9::choose_card_m9(hand, gs, player)
+    }
+}
+
 pub struct BotPozrl;
 impl HeuristicStrategy for BotPozrl {
     fn seat_label(&self) -> &'static str { "bot_pozrl" }
@@ -253,7 +275,7 @@ impl HeuristicStrategy for BotLapajne {
 // -----------------------------------------------------------------------
 
 /// All recognised heuristic seat-label strings, used for error messages.
-pub const SUPPORTED_BOT_SEAT_LABELS: [&str; 9] = [
+pub const SUPPORTED_BOT_SEAT_LABELS: [&str; 10] = [
     "bot_lapajne",
     "bot_lustrek",
     "bot_v1",
@@ -262,6 +284,7 @@ pub const SUPPORTED_BOT_SEAT_LABELS: [&str; 9] = [
     "bot_v6",
     "bot_m6",
     "bot_m8",
+    "bot_m9",
     "bot_pozrl",
 ];
 
@@ -277,6 +300,7 @@ pub fn try_make_bot_by_seat_label(label: &str) -> Option<StockSkisPlayer> {
         "bot_v6"      => Box::new(BotV6),
         "bot_m6"      => Box::new(BotM6),
         "bot_m8"      => Box::new(BotM8),
+        "bot_m9"      => Box::new(BotM9),
         "bot_pozrl"   => Box::new(BotPozrl),
         _             => return None,
     };

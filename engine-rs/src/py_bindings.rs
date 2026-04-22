@@ -619,6 +619,43 @@ impl PyGameState {
         let hand = self.state.hands[player as usize];
         crate::bots::m8::choose_card_m8(hand, &self.state, player).0
     }
+
+    // -- M9 (Luštrek + constraint-aware PIMC in Klop/Berač too) --
+
+    fn m9_choose_bid(&self, player: u8) -> Option<u8> {
+        let hand = self.state.hands[player as usize];
+        let highest = self.state.bids.iter()
+            .filter_map(|b| b.contract)
+            .max_by_key(|c| c.strength());
+        crate::bots::m9::evaluate_bid_m9(hand, highest).map(|c| c as u8)
+    }
+
+    fn m9_choose_king(&self, player: u8) -> Option<u8> {
+        let hand = self.state.hands[player as usize];
+        crate::bots::m9::choose_king_m9(hand).map(|c| c.0)
+    }
+
+    fn m9_choose_talon_group(&self, player: u8, groups: Vec<Vec<u8>>) -> usize {
+        let hand = self.state.hands[player as usize];
+        let groups_cards: Vec<Vec<Card>> = groups
+            .iter()
+            .map(|g| g.iter().map(|&idx| Card(idx)).collect())
+            .collect();
+        crate::bots::m9::choose_talon_group_m9(&groups_cards, hand, self.state.called_king)
+    }
+
+    fn m9_choose_discards(&self, player: u8, must_discard: usize) -> Vec<u8> {
+        let hand = self.state.hands[player as usize];
+        crate::bots::m9::choose_discards_m9(hand, must_discard, self.state.called_king)
+            .iter()
+            .map(|c| c.0)
+            .collect()
+    }
+
+    fn m9_choose_card(&self, player: u8) -> u8 {
+        let hand = self.state.hands[player as usize];
+        crate::bots::m9::choose_card_m9(hand, &self.state, player).0
+    }
 }
 
 /// Play a single random game (for benchmarking throughput).
@@ -1237,6 +1274,7 @@ fn run_arena_games(
             "bot_v6"     => BotVersion::V6,
             "bot_m6"     => BotVersion::M6,
             "bot_m8"     => BotVersion::M8,
+            "bot_m9"     => BotVersion::M9,
             "bot_pozrl"  => BotVersion::Pozrl,
             other => {
                 return Err(pyo3::exceptions::PyValueError::new_err(format!(

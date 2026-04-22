@@ -24,13 +24,31 @@ pub struct DDState {
     pub game_trick_offset: usize,
     /// Raw card points won by declarer team in the endgame.
     pub decl_points: i32,
+    /// Raw card points accumulated per player (used for Klop objective).
+    pub player_points: [i32; NUM_PLAYERS],
+    /// Number of tricks won per player (used for Berac objective).
+    pub tricks_won: [u32; NUM_PLAYERS],
     pub roles: [PlayerRole; NUM_PLAYERS],
     pub contract: Option<Contract>,
 }
 
+/// What metric PIMC/DD should optimise for. All variants express the score
+/// so that "higher is better for `viewer`" — `solve_all_moves_viewer` uses
+/// this to compute a consistent ranking signal for world aggregation.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum DDObjective {
+    /// Team contracts: declarer team maximises raw card points.
+    DeclarerTeamPoints,
+    /// Berac: declarer minimises own tricks won; opponents maximise.
+    DeclarerTricks,
+    /// Klop: viewer minimises own captured card points; everyone else is
+    /// modelled adversarially (standard PIMC approximation).
+    ViewerCardPoints,
+}
+
 impl DDState {
     #[inline]
-    fn norm_player(player: u8) -> u8 {
+    pub fn norm_player(player: u8) -> u8 {
         (player as usize % NUM_PLAYERS) as u8
     }
 
@@ -56,6 +74,8 @@ impl DDState {
             tricks_completed: 0,
             game_trick_offset: tricks_played,
             decl_points: 0,
+            player_points: [0; NUM_PLAYERS],
+            tricks_won: [0; NUM_PLAYERS],
             roles,
             contract,
         };
@@ -120,12 +140,15 @@ impl DDState {
         let result = trick_eval::evaluate_trick(&t, self.is_game_last_trick(), self.contract);
 
         let points: i32 = (0..4).map(|i| self.trick[i].1.points() as i32).sum();
-        if self.get_team(result.winner) == Team::DeclarerTeam {
+        let winner = Self::norm_player(result.winner);
+        if self.get_team(winner) == Team::DeclarerTeam {
             self.decl_points += points;
         }
+        self.player_points[winner as usize] += points;
+        self.tricks_won[winner as usize] += 1;
 
         self.tricks_completed += 1;
-        self.lead_player = Self::norm_player(result.winner);
+        self.lead_player = winner;
         self.trick_count = 0;
         self.trick = [(0, Card(0)); 4];
     }
@@ -258,6 +281,143 @@ pub fn solve_all_moves(state: &DDState) -> Vec<(Card, i32)> {
     for card in legal.iter() {
         let child = state.play_card(player, card);
         let val = solve(&child);
+        results.push((card, val));
+    }
+    results
+}
+
+// -----------------------------------------------------------------------
+// Objective-aware solver (viewer utility)
+// -----------------------------------------------------------------------
+
+/// Compute the viewer's terminal utility for the given objective.
+/// Higher is always better for `viewer`.
+#[inline]
+fn viewer_utility(state: &DDState, viewer: u8, obj: DDObjective) -> i32 {
+    let v = DDState::norm_player(viewer) as usize;
+    match obj {
+        DDObjective::DeclarerTeamPoints => {
+            if state.get_team(viewer) == Team::DeclarerTeam {
+                state.decl_points
+            } else {
+                -state.decl_points
+            }
+        }
+        DDObjective::DeclarerTricks => {
+            // Declarer wants 0 tricks. Find declarer.
+            let declarer = (0..NUM_PLAYERS)
+                .find(|&i| state.roles[i] == PlayerRole::Declarer)
+                .unwrap_or(0) as u8;
+            let decl_tricks = state.tricks_won[DDState::norm_player(declarer) as usize] as i32;
+            if DDState::norm_player(viewer) == DDState::norm_player(declarer) {
+                -decl_tricks
+            } else {
+                decl_tricks
+            }
+        }
+        DDObjective::ViewerCardPoints => {
+            // Klop: viewer wants 0 card points. Lower viewer points = higher utility.
+            -state.player_points[v]
+        }
+    }
+}
+
+/// Should `player` maximise `viewer`'s utility at a decision node?
+#[inline]
+fn player_maximises_for_viewer(
+    state: &DDState,
+    player: u8,
+    viewer: u8,
+    obj: DDObjective,
+) -> bool {
+    let p = DDState::norm_player(player);
+    let v = DDState::norm_player(viewer);
+    match obj {
+        DDObjective::DeclarerTeamPoints => {
+            // Same-team players push decl_points the same direction as viewer.
+            state.get_team(p) == state.get_team(v)
+        }
+        DDObjective::DeclarerTricks => {
+            // Declarer alone vs everyone else.
+            let is_declarer = |pp: u8| state.roles[pp as usize] == PlayerRole::Declarer;
+            is_declarer(p) == is_declarer(v)
+        }
+        DDObjective::ViewerCardPoints => {
+            // Klop: only the viewer maximises own utility; others are
+            // modelled adversarially.
+            p == v
+        }
+    }
+}
+
+fn alpha_beta_viewer(
+    state: &DDState,
+    viewer: u8,
+    obj: DDObjective,
+    mut alpha: i32,
+    mut beta: i32,
+) -> i32 {
+    if state.is_terminal() {
+        return viewer_utility(state, viewer, obj);
+    }
+
+    let player = state.current_player();
+    let legal = state.legal_moves(player);
+    if legal.is_empty() {
+        return viewer_utility(state, viewer, obj);
+    }
+
+    let maximizing = player_maximises_for_viewer(state, player, viewer, obj);
+
+    if maximizing {
+        let mut best = i32::MIN + 1;
+        for card in legal.iter() {
+            let child = state.play_card(player, card);
+            let val = alpha_beta_viewer(&child, viewer, obj, alpha, beta);
+            if val > best {
+                best = val;
+            }
+            if val > alpha {
+                alpha = val;
+            }
+            if alpha >= beta {
+                break;
+            }
+        }
+        best
+    } else {
+        let mut best = i32::MAX - 1;
+        for card in legal.iter() {
+            let child = state.play_card(player, card);
+            let val = alpha_beta_viewer(&child, viewer, obj, alpha, beta);
+            if val < best {
+                best = val;
+            }
+            if val < beta {
+                beta = val;
+            }
+            if alpha >= beta {
+                break;
+            }
+        }
+        best
+    }
+}
+
+/// Solve all legal moves for the current player under a viewer-centric
+/// objective. Each value in the result is viewer utility (higher is better
+/// for `viewer`).
+pub fn solve_all_moves_viewer(
+    state: &DDState,
+    viewer: u8,
+    obj: DDObjective,
+) -> Vec<(Card, i32)> {
+    let player = state.current_player();
+    let legal = state.legal_moves(player);
+    let mut results = Vec::with_capacity(legal.len() as usize);
+    for card in legal.iter() {
+        let child = state.play_card(player, card);
+        let val = alpha_beta_viewer(&child, viewer, obj, i32::MIN + 1, i32::MAX - 1);
         results.push((card, val));
     }
     results

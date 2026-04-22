@@ -19,6 +19,9 @@ def _make_raw(
     values: np.ndarray | None = None,
     oracle_states: np.ndarray | None = None,
     behavioral_clone_mask: np.ndarray | None = None,
+    traces: list[dict] | None = None,
+    declarers: np.ndarray | None = None,
+    partners: np.ndarray | None = None,
 ) -> dict:
     states = np.zeros((n, STATE_SIZE), dtype=np.float32)
     actions = np.arange(n, dtype=np.int64) % CARD_ACTION_SIZE
@@ -46,6 +49,13 @@ def _make_raw(
         "scores": _scores,
         "oracle_states": oracle_states,
         "behavioral_clone_mask": behavioral_clone_mask,
+        "traces": traces,
+        "declarers": np.full((max(n_games, 1),), -1, dtype=np.int8)
+        if declarers is None
+        else declarers.astype(np.int8),
+        "partners": np.full((max(n_games, 1),), -1, dtype=np.int8)
+        if partners is None
+        else partners.astype(np.int8),
     }
     return raw
 
@@ -144,3 +154,86 @@ def test_prepare_batched_oracle_states_optional() -> None:
     out = prepare_batched(_make_raw(3, oracle_states=oracle_states))
     assert isinstance(out["oracle_states"], torch.Tensor)
     assert out["oracle_states"].shape == (3, ORACLE_STATE_SIZE)
+
+
+def test_shaped_rewards_skis_beats_mond_in_same_trick() -> None:
+    # One-step trajectories for each player so returns mirror terminal reward.
+    raw = _make_raw(
+        4,
+        game_ids=np.zeros(4, dtype=np.int64),
+        players=np.array([0, 1, 2, 3], dtype=np.int8),
+        scores=np.zeros((1, 4), dtype=np.float32),
+        values=np.zeros(4, dtype=np.float32),
+        traces=[
+            {
+                "dealer": 0,
+                # Trick order: (player, card_idx)
+                # Player 1: Mond (20), Player 2: Skis (21)
+                "cards_played": [(1, 20), (2, 21), (3, 22), (0, 23)],
+            }
+        ],
+    )
+
+    out = prepare_batched(raw, gamma=1.0, gae_lambda=1.0)
+    returns = out["vad"][:, 2].numpy()
+
+    mond_return = float(returns[1])
+    skis_return = float(returns[2])
+    assert skis_return > 0.0
+    assert mond_return < 0.0
+    assert skis_return > mond_return
+
+
+def test_shaped_rewards_pagat_beats_skis_and_mond_in_same_trick() -> None:
+    raw = _make_raw(
+        4,
+        game_ids=np.zeros(4, dtype=np.int64),
+        players=np.array([0, 1, 2, 3], dtype=np.int8),
+        scores=np.zeros((1, 4), dtype=np.float32),
+        values=np.zeros(4, dtype=np.float32),
+        traces=[
+            {
+                "dealer": 0,
+                # Mond + Skis + Pagat in one trick.
+                "cards_played": [(1, 20), (2, 21), (3, 0), (0, 22)],
+            }
+        ],
+    )
+
+    out = prepare_batched(raw, gamma=1.0, gae_lambda=1.0)
+    returns = out["vad"][:, 2].numpy()
+
+    pagat_return = float(returns[3])
+    mond_return = float(returns[1])
+    skis_return = float(returns[2])
+    assert pagat_return > 0.0
+    assert mond_return < 0.0
+    assert skis_return < 0.0
+
+
+def test_shaped_rewards_capture_opponent_mond_is_positive() -> None:
+    # Declarer team is players 0 and 2. Player 1 (opponent) loses Mond to player 0.
+    raw = _make_raw(
+        4,
+        game_ids=np.zeros(4, dtype=np.int64),
+        players=np.array([0, 1, 2, 3], dtype=np.int8),
+        scores=np.zeros((1, 4), dtype=np.float32),
+        values=np.zeros(4, dtype=np.float32),
+        declarers=np.array([0], dtype=np.int8),
+        partners=np.array([2], dtype=np.int8),
+        traces=[
+            {
+                "dealer": 0,
+                # Lead is suit; player 0 plays tarok Skis and wins, capturing player 1's Mond.
+                "cards_played": [(1, 20), (2, 22), (3, 23), (0, 21)],
+            }
+        ],
+    )
+
+    out = prepare_batched(raw, gamma=1.0, gae_lambda=1.0)
+    returns = out["vad"][:, 2].numpy()
+
+    winner_return = float(returns[0])
+    mond_owner_return = float(returns[1])
+    assert winner_return > 0.0
+    assert mond_owner_return < 0.0

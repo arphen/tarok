@@ -10,6 +10,120 @@ import tarok_engine as te
 import torch
 
 
+PAGAT_CARD_IDX = 0
+MOND_CARD_IDX = 20
+SKIS_CARD_IDX = 21
+
+# Dominance inside a trick for shaped rewards: Pagat > Skis > Mond.
+_TRULA_SHAPED_PRIORITY = (PAGAT_CARD_IDX, SKIS_CARD_IDX, MOND_CARD_IDX)
+
+TRULA_DOMINANCE_REWARD = 0.80
+TRULA_DOMINANCE_PENALTY = -0.80
+
+PAGAT_LOSS_TO_NON_PARTNER_PENALTY = -1.50
+MOND_LOSS_TO_NON_PARTNER_PENALTY = -2.00
+MOND_CAPTURE_OPPONENT_REWARD = 2.00
+SKIS_LOSS_TO_NON_PARTNER_PENALTY = -1.80
+SKIS_CAPTURE_OPPONENT_REWARD = 1.80
+
+
+def _card_suit_idx(card_idx: int) -> int | None:
+    if 0 <= card_idx <= 21:
+        return None
+    if 22 <= card_idx <= 53:
+        return (card_idx - 22) // 8
+    return None
+
+
+def _is_same_team(player_a: int, player_b: int, declarer: int, partner: int) -> bool:
+    if player_a == player_b:
+        return True
+    if declarer < 0:
+        return False
+    declarer_team = {declarer}
+    if partner >= 0:
+        declarer_team.add(partner)
+    return (player_a in declarer_team) == (player_b in declarer_team)
+
+
+def _compute_special_shaped_bonus_by_game(raw: dict[str, Any], n_games: int) -> np.ndarray:
+    bonuses = np.zeros((n_games, 4), dtype=np.float32)
+    traces = raw.get("traces")
+    if traces is None:
+        return bonuses
+
+    declarers_np = np.asarray(raw.get("declarers", np.full(n_games, -1, dtype=np.int8)), dtype=np.int16)
+    partners_np = np.asarray(raw.get("partners", np.full(n_games, -1, dtype=np.int8)), dtype=np.int16)
+
+    n_traces = min(n_games, len(traces))
+    for gid in range(n_traces):
+        trace = traces[gid]
+        if not isinstance(trace, dict):
+            continue
+        cards_played = trace.get("cards_played")
+        if not cards_played:
+            continue
+
+        declarer = int(declarers_np[gid]) if gid < len(declarers_np) else -1
+        partner = int(partners_np[gid]) if gid < len(partners_np) else -1
+
+        # cards_played is a flat sequence of (player, card_idx) in trick order.
+        n_full = (len(cards_played) // 4) * 4
+        for base in range(0, n_full, 4):
+            trick_slice = cards_played[base : base + 4]
+            trick: list[tuple[int, int]] = []
+            for entry in trick_slice:
+                try:
+                    player = int(entry[0])
+                    card_idx = int(entry[1])
+                except Exception:
+                    trick = []
+                    break
+                trick.append((player, card_idx))
+            if len(trick) != 4:
+                continue
+
+            lead_suit = _card_suit_idx(trick[0][1])
+            winning_player, winning_card = trick[0]
+            for player, card_idx in trick[1:]:
+                if te.RustGameState.card_beats(card_idx, winning_card, lead_suit):
+                    winning_player = player
+                    winning_card = card_idx
+
+            owners = {card_idx: player for player, card_idx in trick}
+
+            # Dominance shaping in the same trick: Pagat > Skis > Mond.
+            present_specials = [c for c in _TRULA_SHAPED_PRIORITY if c in owners]
+            special_winner = winning_player
+            if len(present_specials) >= 2:
+                dominant = present_specials[0]
+                dominant_owner = owners[dominant]
+                special_winner = dominant_owner
+                bonuses[gid, dominant_owner] += TRULA_DOMINANCE_REWARD
+                for losing_card in present_specials[1:]:
+                    losing_owner = owners[losing_card]
+                    bonuses[gid, losing_owner] += TRULA_DOMINANCE_PENALTY
+
+            pagat_owner = owners.get(PAGAT_CARD_IDX)
+            if pagat_owner is not None and special_winner != pagat_owner:
+                if not _is_same_team(pagat_owner, special_winner, declarer, partner):
+                    bonuses[gid, pagat_owner] += PAGAT_LOSS_TO_NON_PARTNER_PENALTY
+
+            mond_owner = owners.get(MOND_CARD_IDX)
+            if mond_owner is not None and special_winner != mond_owner:
+                if not _is_same_team(mond_owner, special_winner, declarer, partner):
+                    bonuses[gid, mond_owner] += MOND_LOSS_TO_NON_PARTNER_PENALTY
+                    bonuses[gid, special_winner] += MOND_CAPTURE_OPPONENT_REWARD
+
+            skis_owner = owners.get(SKIS_CARD_IDX)
+            if skis_owner is not None and special_winner != skis_owner:
+                if not _is_same_team(skis_owner, special_winner, declarer, partner):
+                    bonuses[gid, skis_owner] += SKIS_LOSS_TO_NON_PARTNER_PENALTY
+                    bonuses[gid, special_winner] += SKIS_CAPTURE_OPPONENT_REWARD
+
+    return bonuses
+
+
 def prepare_batched(raw: dict[str, Any], gamma: float = 0.99, gae_lambda: float = 0.95) -> dict[str, Any]:
     """Convert raw Rust arrays into batched tensors and vectorized GAE inputs."""
 
@@ -56,6 +170,9 @@ def prepare_batched(raw: dict[str, Any], gamma: float = 0.99, gae_lambda: float 
             raise ValueError("game_ids must be non-negative")
     gids = game_ids_np % scores_np.shape[0] if scores_np.shape[0] > 0 else game_ids_np
     rewards_np = scores_np[gids, players_np].astype(np.float32) / 100.0
+    if scores_np.shape[0] > 0:
+        shaped_bonus_by_game = _compute_special_shaped_bonus_by_game(raw, int(scores_np.shape[0]))
+        rewards_np = rewards_np + shaped_bonus_by_game[gids, players_np]
 
     traj_keys = game_ids_np.astype(np.int64) * 4 + players_np.astype(np.int64)
     sort_idx = np.lexsort((np.arange(n_total), traj_keys))

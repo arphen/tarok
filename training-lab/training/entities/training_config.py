@@ -30,6 +30,8 @@ class TrainingConfig:
     lr_schedule: str = "constant"
     lr_min: float | None = None
     explore_rate: float = 0.10
+    explore_rate_min: float | None = None
+    explore_rate_schedule: str = "constant"  # constant | linear | cosine | elo
     device: str = "auto"
     save_dir: str = "data/checkpoints/training_run"
     concurrency: int = 128
@@ -92,6 +94,17 @@ class TrainingConfig:
     @property
     def effective_lr_min(self) -> float:
         return self.lr_min if self.lr_min is not None else self.lr / 10
+
+    @property
+    def effective_explore_rate_min(self) -> float:
+        """Minimum epsilon for scheduled explore-rate decay.
+
+        Defaults to ``explore_rate / 10`` when not explicitly configured,
+        mirroring the behaviour of :attr:`effective_lr_min`.
+        """
+        if self.explore_rate_min is not None:
+            return self.explore_rate_min
+        return self.explore_rate / 10
 
 
 def scheduled_lr(

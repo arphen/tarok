@@ -45,6 +45,10 @@ _STOCKSKIS_NAMED_VARIANTS: dict[str, tuple[str, str]] = {
         "StockSkisPlayerM8",
         "Luštrek-style heuristic with alpha-mu endgame search for the last 4 tricks",
     ),
+    "m9": (
+        "StockSkisPlayerM9",
+        "Luštrek variant with constraint-aware PIMC extended to Klop and Berač",
+    ),
     "pozrl": ("StockSkisPlayerPozrl", "Heuristic policy based on Domen Požrl's 2021 Tarock thesis"),
     "lapajne": (
         "StockSkisPlayerLapajne",

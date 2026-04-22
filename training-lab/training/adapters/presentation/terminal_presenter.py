@@ -169,9 +169,20 @@ class TerminalPresenter(PresenterPort):
         print(f"  Iteration {iteration}/{total}  {bar}  {frac*100:3.0f}%   {eta_str}")
         print(f"{_THIN * _W}")
 
-    def on_selfplay_start(self, config: TrainingConfig, effective_seats: str | None = None, hyperparams: IterationHyperparams | None = None) -> None:
+    def on_selfplay_start(
+        self,
+        config: TrainingConfig,
+        effective_seats: str | None = None,
+        hyperparams: IterationHyperparams | None = None,
+        iter_explore_rate: float | None = None,
+    ) -> None:
         seats = effective_seats if effective_seats is not None else config.seats
-        eps = hyperparams.explore_rate if hyperparams is not None else config.explore_rate
+        if hyperparams is not None:
+            eps = hyperparams.explore_rate
+        elif iter_explore_rate is not None:
+            eps = iter_explore_rate
+        else:
+            eps = config.explore_rate
         print(f"  ① Self-play   {config.games:,} games  (ε={eps:.3f})")
         print(f"      seats: {seats}")
         print("      stats: ", end="", flush=True)

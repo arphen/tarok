@@ -2,28 +2,24 @@
 
 Supports multiple decision types: bidding, king calling, talon selection, and card play.
 
-v9 encoding (639 dims) — blank slate, no backward-compat.  All card
+v10 encoding (585 dims) — blank slate, no backward-compat.  All card
 planes are grouped at the start in a card-attention-friendly layout
 (every plane starts on a 54-aligned offset):
 
   - 0..53     : own hand
-  - 54..215   : 3 opponent belief probability planes (with suit/tarok-
-                void and forced-retention constraints applied)
-  - 216..269  : own played cards (fixes "disappearing pagat" problem
-                where the network lost track of cards it had
-                personally played)
-  - 270..323  : own discarded cards (v9 new — private to the declarer;
-                populated only when the acting player IS the declarer,
-                so their own cards add up to 12 across
-                hand + played + discarded at any time)
-  - 324..485  : 3 per-opponent played planes (declarer plane also
+  - 54..215   : 3 opponent belief marginal planes (cardinality-aware
+                IPF / Sinkhorn normalisation with void + forced-
+                retention constraints applied)
+  - 216..269  : own played cards
+  - 270..431  : 3 per-opponent played planes (declarer plane also
                 includes publicly-retired unpicked talon cards)
-  - 486..539  : active trick plane
+  - 432..485  : active trick plane
 
-Scalar tail from offset 540 (99 dims): seat, contract, phase,
+Scalar tail from offset 486 (99 dims): seat, contract, phase,
 tricks_played, decision type, highest bid, passed players, team-split
-announcements, kontra, role, partner_rel, centaur team points, trick
-leader/winner, trick context, void flags, live kings/trula, called king.
+announcements (5+5 incl. king-ultimo), kontra, role, partner_rel,
+centaur team points, trick leader/winner, trick context, void flags,
+called king, remaining-in-play counts.
 """
 
 from __future__ import annotations
@@ -149,7 +145,7 @@ def _encode_state_into(
 ) -> None:
     """Write state features into a pre-zeroed buffer (in-place).
 
-    v8 layout: card planes grouped at the start (every plane starts on a
+    v10 layout: card planes grouped at the start (every plane starts on a
     54-aligned offset), scalar tail from SCALAR_OFFSET (= 486).
     """
     # --- Talon-visibility pre-computation ---
@@ -184,6 +180,12 @@ def _encode_state_into(
         for _, card in state.current_trick.cards:
             known_cards.add(CARD_TO_IDX[card])
     known_cards.update(unpicked_talon_idx)
+    # v10: declarer knows their own put_down — fold into `known` so that
+    # every opponent belief column is forced to 0 for those cards.  For
+    # non-declarer seats put_down stays private.
+    if state.declarer is not None and player_idx == state.declarer:
+        for card in state.put_down:
+            known_cards.add(CARD_TO_IDX[card])
     unknown_card_indices = [i for i in range(54) if i not in known_cards]
 
     opp_void_suits: dict[int, set[Suit]] = {i: set() for i in range(4) if i != player_idx}
@@ -198,7 +200,13 @@ def _encode_state_into(
                 if p == player_idx or p not in opp_void_suits:
                     continue
                 if card.suit != lead_suit:
+                    # Either played tarok (natural suit-void signal) or
+                    # played an off-suit non-tarok — the latter also
+                    # implies tarok-void at that moment; tarok-void is
+                    # monotone in time ⇒ still true now (v10).
                     opp_void_suits[p].add(lead_suit)
+                    if card.card_type != CardType.TAROK:
+                        opp_tarok_void[p] = True
         elif lead_card.card_type == CardType.TAROK:
             for p, card in trick.cards[1:]:
                 if p == player_idx or p not in opp_tarok_void:
@@ -223,37 +231,76 @@ def _encode_state_into(
     for card in state.hands[player_idx]:
         buf[HAND_OFFSET + CARD_TO_IDX[card]] = 1.0
 
-    # Planes 1..3: opponent belief probabilities (offsets 54, 108, 162)
+    # Planes 1..3: opponent belief marginals via cardinality-aware IPF
+    # (offsets 54, 108, 162).  Build a 3 × |U| feasibility matrix, seed
+    # pinned cells, then Sinkhorn-iterate row/col scaling until row sums
+    # match each opponent's remaining hand size and column sums are 1.
     declarer = state.declarer
-    for opp_offset in range(1, 4):
-        opp_idx = (player_idx + opp_offset) % 4
-        base = BELIEF_OFFSET + (opp_offset - 1) * 54
-        is_declarer_col = declarer is not None and opp_idx == declarer
-        void_suits = opp_void_suits.get(opp_idx, set())
-        tarok_void = opp_tarok_void.get(opp_idx, False)
-        for cidx in unknown_card_indices:
-            if cidx in forced_retention:
-                if is_declarer_col:
-                    buf[base + cidx] = 1.0
-                continue
-            card = DECK[cidx]
+    opp_seats = [(player_idx + k) % 4 for k in (1, 2, 3)]
+    row_target = [float(len(state.hands[s])) for s in opp_seats]
+    n_u = len(unknown_card_indices)
+    # m[col][row] layout matches the Rust reference.
+    m: list[list[float]] = [[0.0, 0.0, 0.0] for _ in range(n_u)]
+    col_pinned = [False] * n_u
+    for col, cidx in enumerate(unknown_card_indices):
+        card = DECK[cidx]
+        if cidx in forced_retention:
+            for r, s in enumerate(opp_seats):
+                if declarer is not None and s == declarer:
+                    m[col][r] = 1.0
+                    row_target[r] -= 1.0
+            col_pinned[col] = True
+            continue
+        for r, s in enumerate(opp_seats):
             if card.card_type == CardType.TAROK:
-                impossible = tarok_void
+                feasible = not opp_tarok_void.get(s, False)
             else:
-                impossible = card.suit is not None and card.suit in void_suits
-            if not impossible:
-                buf[base + cidx] = 1.0 / 3.0
+                feasible = card.suit is None or card.suit not in opp_void_suits.get(s, set())
+            if feasible:
+                m[col][r] = 1.0
+    IPF_ITERS = 12
+    for _ in range(IPF_ITERS):
+        # Row scaling.
+        row_sum = [0.0, 0.0, 0.0]
+        for col in range(n_u):
+            if col_pinned[col]:
+                continue
+            for r in range(3):
+                row_sum[r] += m[col][r]
+        for r in range(3):
+            if row_sum[r] > 1e-12 and row_target[r] > 0.0:
+                sfac = row_target[r] / row_sum[r]
+                for col in range(n_u):
+                    if not col_pinned[col]:
+                        m[col][r] *= sfac
+            elif row_target[r] <= 0.0:
+                for col in range(n_u):
+                    if not col_pinned[col]:
+                        m[col][r] = 0.0
+        # Column scaling.
+        for col in range(n_u):
+            if col_pinned[col]:
+                continue
+            cs = m[col][0] + m[col][1] + m[col][2]
+            if cs > 1e-12:
+                inv = 1.0 / cs
+                for r in range(3):
+                    m[col][r] *= inv
+    for r in range(3):
+        base = BELIEF_OFFSET + r * 54
+        for col, cidx in enumerate(unknown_card_indices):
+            v = m[col][r]
+            if v > 0.0:
+                buf[base + cidx] = v
 
     # Plane 4: own played cards (offset 216)
     for cidx in played_by_seat[player_idx]:
         buf[SELF_PLAYED_OFFSET + cidx] = 1.0
 
-    # Plane 5: own discarded cards (offset 270 — private to declarer)
-    if state.declarer is not None and player_idx == state.declarer:
-        for card in state.put_down:
-            buf[SELF_DISCARDED_OFFSET + CARD_TO_IDX[card]] = 1.0
+    # (v10: no separate own-discarded plane — declarer's put_down is
+    # folded into the belief `known` set above.)
 
-    # Planes 6..8: per-opponent played cards (offsets 324, 378, 432)
+    # Planes 5..7: per-opponent played cards (offsets 270, 324, 378)
     for opp_offset in range(1, 4):
         opp_idx = (player_idx + opp_offset) % 4
         base = OPP_PLAYED_OFFSET + (opp_offset - 1) * 54
@@ -316,8 +363,15 @@ def _encode_state_into(
             buf[o + i] = 1.0
     o += 4
 
-    # Announcements split by team (4 + 4)
-    _ANNS = [Announcement.TRULA, Announcement.KINGS, Announcement.PAGAT_ULTIMO, Announcement.VALAT]
+    # Announcements split by team (5 + 5): trula, kings, pagat,
+    # king-ultimo, valat (v10).
+    _ANNS = [
+        Announcement.TRULA,
+        Announcement.KINGS,
+        Announcement.PAGAT_ULTIMO,
+        Announcement.KING_ULTIMO,
+        Announcement.VALAT,
+    ]
     if state.declarer is not None:
         own_ann: set[Announcement] = set()
         opp_ann: set[Announcement] = set()
@@ -330,8 +384,8 @@ def _encode_state_into(
             if ann in own_ann:
                 buf[o + i] = 1.0
             if ann in opp_ann:
-                buf[o + 4 + i] = 1.0
-    o += 8
+                buf[o + 5 + i] = 1.0
+    o += 10
 
     # Kontra levels (5 normalized)
     _KONTRA_KEYS = ["game", Announcement.TRULA.value, Announcement.KINGS.value,
@@ -426,44 +480,37 @@ def _encode_state_into(
                 buf[o + s_i] = 1.0
         o += 4
 
-    # Live kings + live trula (from played cards across tricks + active trick)
-    king_played_suits: set[Suit] = set()
-    trula_played_bits = [False, False, False]  # pagat, mond, skis
+    # v10: live-kings and live-trula scalar blocks removed (derivable
+    # from played planes).  Replaced by remaining-in-play counts below.
+    taroks_played = 0
+    suit_played = [0, 0, 0, 0]
+    _SUIT_INDEX = {s: i for i, s in enumerate(_SUIT_ORDER)}
 
-    def _check_card(card: Card) -> None:
-        if card.is_king and card.suit is not None:
-            king_played_suits.add(card.suit)
+    def _tally(card: Card) -> None:
+        nonlocal taroks_played
         if card.card_type == CardType.TAROK:
-            cidx_local = CARD_TO_IDX[card]
-            if cidx_local == 0:
-                trula_played_bits[0] = True
-            elif cidx_local == 20:
-                trula_played_bits[1] = True
-            elif cidx_local == 21:
-                trula_played_bits[2] = True
+            taroks_played += 1
+        elif card.suit is not None:
+            suit_played[_SUIT_INDEX[card.suit]] += 1
 
     for trick in state.tricks:
         for _p, card in trick.cards:
-            _check_card(card)
+            _tally(card)
     if state.current_trick:
         for _p, card in state.current_trick.cards:
-            _check_card(card)
-
-    for s_i, s in enumerate(_SUIT_ORDER):
-        if s not in king_played_suits:
-            buf[o + s_i] = 1.0
-    o += 4
-
-    for i, played in enumerate(trula_played_bits):
-        if not played:
-            buf[o + i] = 1.0
-    o += 3
+            _tally(card)
 
     # Called-king suit one-hot (4)
     if state.called_king is not None and state.called_king.suit is not None:
         suit_idx = _SUIT_ORDER.index(state.called_king.suit)
         buf[o + suit_idx] = 1.0
     o += 4
+
+    # Remaining-in-play counts (5): taroks/22, H/8, D/8, C/8, S/8.
+    buf[o] = max(0, 22 - taroks_played) / 22.0
+    for s_i in range(4):
+        buf[o + 1 + s_i] = max(0, 8 - suit_played[s_i]) / 8.0
+    o += 5
 
     assert o == STATE_SIZE
 
@@ -477,29 +524,27 @@ def encode_state(state: GameState, player_idx: int, decision_type: DecisionType 
     return _state_buf.clone()
 
 
-# --- v9 layout constants (all card planes are 54-aligned) ---
+# --- v10 layout constants (all card planes are 54-aligned) ---
 # Card planes:
 #   0..53     : own hand
-#   54..215   : 3 opponent belief probability planes
+#   54..215   : 3 opponent belief marginal planes
 #   216..269  : own played cards
-#   270..323  : own discarded cards (v9, private to the declarer)
-#   324..485  : 3 per-opponent played planes
-#   486..539  : active trick plane
-# Scalar tail starts at 540.
+#   270..431  : 3 per-opponent played planes
+#   432..485  : active trick plane
+# Scalar tail starts at 486.
 HAND_OFFSET = 0
 BELIEF_OFFSET = 54
 SELF_PLAYED_OFFSET = 216
-SELF_DISCARDED_OFFSET = 270
-OPP_PLAYED_OFFSET = 324
-ACTIVE_TRICK_OFFSET = 486
-CARD_PLANES_SIZE = 10 * 54  # 540
-SCALAR_OFFSET = CARD_PLANES_SIZE  # 540
-CONTRACT_OFFSET = SCALAR_OFFSET + 4  # 544
+OPP_PLAYED_OFFSET = 270
+ACTIVE_TRICK_OFFSET = 432
+CARD_PLANES_SIZE = 9 * 54  # 486
+SCALAR_OFFSET = CARD_PLANES_SIZE  # 486
+CONTRACT_OFFSET = SCALAR_OFFSET + 4  # 490
 CONTRACT_SIZE = 10
 
-# Compute STATE_SIZE from the v9 feature layout (card planes + scalar tail).
+# Compute STATE_SIZE from the v10 feature layout (card planes + scalar tail).
 STATE_SIZE = (
-    CARD_PLANES_SIZE  # 10 × 54 card planes (540)
+    CARD_PLANES_SIZE  # 9 × 54 card planes (486)
     # --- scalar tail (99) ---
     + 4   # seat rel dealer
     + 10  # contract
@@ -508,7 +553,7 @@ STATE_SIZE = (
     + 5   # decision_type
     + 9   # highest_bid
     + 4   # passed_players
-    + 8   # announcements (own-team + opp-team, 4 each)
+    + 10  # announcements (own-team + opp-team, 5 each incl. king-ultimo)
     + 5   # kontra_levels
     + 3   # role
     + 4   # partner_rel
@@ -518,13 +563,12 @@ STATE_SIZE = (
     + 6   # trick context (position + lead type/suit)
     + 3   # per-opponent tarok-void flags
     + 3 * 4  # per-opponent suit-void flags
-    + 4   # live kings
-    + 3   # live trula (pagat, mond, skis)
     + 4   # called-king suit one-hot
-)  # = 639
+    + 5   # remaining-in-play counts (taroks + 4 suits)
+)  # = 585
 # Oracle critic sees all opponent hands (Perfect Training, Imperfect Execution)
 ORACLE_EXTRA_SIZE = 3 * 54  # 3 opponent hand vectors
-ORACLE_STATE_SIZE = STATE_SIZE + ORACLE_EXTRA_SIZE  # 639 + 162 = 801
+ORACLE_STATE_SIZE = STATE_SIZE + ORACLE_EXTRA_SIZE  # 585 + 162 = 747
 
 # Pre-allocated encoding buffers (one per process, safe for async single-threaded use)
 _state_buf = torch.zeros(STATE_SIZE, dtype=torch.float32)

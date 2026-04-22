@@ -17,14 +17,14 @@ centaur_pimc_worlds: 100    # worlds sampled per endgame card decision
 #centaur_alpha_mu_depth: 2     # αμ iterative deepening depth (M parameter)
 
 iterations: 100
-games: 5000
+games: 3000
 outplace_session_size: 50  # compare cumulative scores per 50-game session for Elo outplacing
 bench_games: 3000
 benchmark_checkpoints: [0, 10, 20, 30, 40, 50, 60, 70, 80, 90, 100, 110, 120, 130, 140, 149]
 best_model_metric: "elo"
 
 ppo_epochs: 4
-batch_size: 16384
+batch_size: 8192
 lr: 0.0003
 lr_schedule: elo
 lr_min: 0.00001
@@ -38,16 +38,16 @@ entropy_coef_min: 0.0005
 imitation_coef: 0.05
 imitation_schedule: gaussian_elo
 imitation_coef_min: 0.0
-imitation_center_elo: 1450
+imitation_center_elo: 1650
 imitation_width_elo: 250
 explore_rate: 0.10
+explore_rate_schedule: elo
+explore_rate_min: 0.01
 
-concurrency: 256
-lapajne_mc_worlds: 24   # Optional: worlds per Lapajne card decision (1..512)
-lapajne_mc_sims: 20   # Optional: sims per Lapajne MCTS tree (1..4096)
+concurrency: 64
 device: auto
 iteration_runner_mode: spawn
-iteration_runner_restart_every: 10
+iteration_runner_restart_every: 5
 
 league:
   enabled: true
@@ -63,8 +63,6 @@ league:
   initial_calibration_anchor_elo: 1500
 
   opponents:
-    - name: StockSkis
-      type: bot_v1
     - name: V3
       type: bot_v3
     - name: V5

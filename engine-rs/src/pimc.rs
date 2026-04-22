@@ -1,10 +1,12 @@
 /// PIMC (Perfect Information Monte Carlo) card selection.
 ///
 /// Samples `N` consistent worlds by redistributing unknown cards among
-/// opponents (respecting known suit voids), double-dummy solves each world,
-/// and picks the legal move with the best average outcome.
+/// opponents (respecting known suit voids AND — in overplay contracts like
+/// klop/berac — rank ceilings inferred from the must-overplay rule),
+/// double-dummy solves each world, and picks the legal move with the best
+/// average viewer utility.
 use crate::card::*;
-use crate::double_dummy::{self, DDState};
+use crate::double_dummy::{self, DDObjective, DDState};
 use crate::game_state::*;
 use crate::legal_moves;
 use rand::prelude::*;
@@ -14,17 +16,88 @@ use rayon::prelude::*;
 
 const VOID_CHANNELS: usize = 5;
 const TAROK_VOID_IDX: usize = 4;
+const NO_CEILING: u8 = u8::MAX;
 
 /// Default number of worlds to sample.
 pub const DEFAULT_NUM_WORLDS: u32 = 100;
+
+/// Per-player constraints inferred from past play.
+///
+/// * `void[s]`           — player cannot hold any card of suit `s`
+///   (0..=3 = suits, 4 = tarok void).
+/// * `suit_max[s]`       — player's highest possible rank in suit `s`
+///   (SuitRank u8 value 1..=8), or `NO_CEILING` if no upper bound known.
+/// * `tarok_max`         — player's highest possible tarok value (1..=22),
+///   or `NO_CEILING`.
+///
+/// Ceilings come from the must-overplay rule in klop/berac: when a player
+/// follows suit/tarok but does not play a card that beats the current best
+/// card in the trick, we infer they hold no higher card of that suit/tarok.
+#[derive(Clone, Copy, Debug)]
+pub struct PlayerConstraints {
+    pub void: [bool; VOID_CHANNELS],
+    pub suit_max: [u8; 4],
+    pub tarok_max: u8,
+}
+
+impl PlayerConstraints {
+    pub const fn new() -> Self {
+        PlayerConstraints {
+            void: [false; VOID_CHANNELS],
+            suit_max: [NO_CEILING; 4],
+            tarok_max: NO_CEILING,
+        }
+    }
+
+    #[inline]
+    fn tighten_suit_max(&mut self, suit: Suit, rank_value: u8) {
+        let s = suit as usize;
+        if rank_value < self.suit_max[s] {
+            self.suit_max[s] = rank_value;
+        }
+    }
+
+    #[inline]
+    fn tighten_tarok_max(&mut self, tarok_value: u8) {
+        if tarok_value < self.tarok_max {
+            self.tarok_max = tarok_value;
+        }
+    }
+
+    /// Would assigning `card` to this player violate any known constraint?
+    #[inline]
+    pub fn card_allowed(&self, card: Card) -> bool {
+        match card.card_type() {
+            CardType::Tarok => {
+                if self.void[TAROK_VOID_IDX] {
+                    return false;
+                }
+                card.value() <= self.tarok_max
+            }
+            CardType::Suit => {
+                let suit = match card.suit() {
+                    Some(s) => s,
+                    None => return true,
+                };
+                if self.void[suit as usize] {
+                    return false;
+                }
+                card.value() <= self.suit_max[suit as usize]
+            }
+        }
+    }
+}
+
+impl Default for PlayerConstraints {
+    fn default() -> Self {
+        Self::new()
+    }
+}
 
 /// Choose the best card for `viewer` using PIMC.
 ///
 /// Panics (debug) if no legal moves exist.
 pub fn pimc_choose_card(gs: &GameState, viewer: u8, num_worlds: u32) -> Card {
-    let viewer_team = gs.get_team(viewer);
-    let maximizing = viewer_team == Team::DeclarerTeam;
-
     // Legal moves for the viewer
     let legal = {
         let ctx = legal_moves::MoveCtx::from_state(gs, viewer);
@@ -37,24 +110,29 @@ pub fn pimc_choose_card(gs: &GameState, viewer: u8, num_worlds: u32) -> Card {
         return legal_vec[0];
     }
 
-    let voids = detect_voids(gs);
+    let constraints = detect_constraints(gs);
     // O(1) map from card id to legal index in `scores`.
     let mut legal_idx: [Option<usize>; DECK_SIZE] = [None; DECK_SIZE];
     for (i, card) in legal_vec.iter().enumerate() {
         legal_idx[card.0 as usize] = Some(i);
     }
 
+    // Pick the DD objective from the contract.
+    let objective = objective_for_contract(gs.contract);
+
     let base_seed: u64 = rand::rng().random();
 
     // Parallel over worlds, then reduce into per-card aggregates:
-    // (total_dd_value, sample_count) per legal card.
+    // (total_viewer_utility, sample_count) per legal card.
     let scores: Vec<(f64, u32)> = (0..num_worlds)
         .into_par_iter()
         .map(|world_i| {
             let mut local = vec![(0.0, 0u32); legal_vec.len()];
-            let mut rng = SmallRng::seed_from_u64(base_seed ^ (world_i as u64).wrapping_mul(0x9E37_79B9_7F4A_7C15));
+            let mut rng = SmallRng::seed_from_u64(
+                base_seed ^ (world_i as u64).wrapping_mul(0x9E37_79B9_7F4A_7C15),
+            );
 
-            let sampled_hands = match sample_world(gs, viewer, &voids, &mut rng) {
+            let sampled_hands = match sample_world(gs, viewer, &constraints, &mut rng) {
                 Some(h) => h,
                 None => return local,
             };
@@ -68,7 +146,8 @@ pub fn pimc_choose_card(gs: &GameState, viewer: u8, num_worlds: u32) -> Card {
                 gs.contract,
             );
 
-            let move_values = double_dummy::solve_all_moves(&dd_state);
+            let move_values =
+                double_dummy::solve_all_moves_viewer(&dd_state, viewer, objective);
             for (card, val) in &move_values {
                 if let Some(idx) = legal_idx[card.0 as usize] {
                     local[idx].0 += *val as f64;
@@ -88,34 +167,24 @@ pub fn pimc_choose_card(gs: &GameState, viewer: u8, num_worlds: u32) -> Card {
             },
         );
 
-    // Pick card with best average value
+    // Pick card with best average viewer utility (higher is always better).
     let best_idx = scores
         .iter()
         .enumerate()
         .max_by(|(_, a), (_, b)| {
             let avg_a = if a.1 > 0 {
                 a.0 / a.1 as f64
-            } else if maximizing {
-                f64::NEG_INFINITY
             } else {
-                f64::INFINITY
+                f64::NEG_INFINITY
             };
             let avg_b = if b.1 > 0 {
                 b.0 / b.1 as f64
-            } else if maximizing {
+            } else {
                 f64::NEG_INFINITY
-            } else {
-                f64::INFINITY
             };
-            if maximizing {
-                avg_a
-                    .partial_cmp(&avg_b)
-                    .unwrap_or(std::cmp::Ordering::Equal)
-            } else {
-                avg_b
-                    .partial_cmp(&avg_a)
-                    .unwrap_or(std::cmp::Ordering::Equal)
-            }
+            avg_a
+                .partial_cmp(&avg_b)
+                .unwrap_or(std::cmp::Ordering::Equal)
         })
         .map(|(i, _)| i)
         .unwrap();
@@ -123,67 +192,114 @@ pub fn pimc_choose_card(gs: &GameState, viewer: u8, num_worlds: u32) -> Card {
     legal_vec[best_idx]
 }
 
+fn objective_for_contract(contract: Option<Contract>) -> DDObjective {
+    match contract {
+        Some(Contract::Klop) => DDObjective::ViewerCardPoints,
+        Some(Contract::Berac) => DDObjective::DeclarerTricks,
+        _ => DDObjective::DeclarerTeamPoints,
+    }
+}
+
 // -----------------------------------------------------------------------
-// Void detection
+// Constraint detection
 // -----------------------------------------------------------------------
 
-/// Detect known suit voids from completed tricks and the current trick.
-/// `voids[player][suit]` is true when `player` failed to follow `suit`.
-/// Channel mapping: 0..=3 = suits, 4 = tarok void.
-pub fn detect_voids(gs: &GameState) -> [[bool; VOID_CHANNELS]; NUM_PLAYERS] {
-    let mut voids = [[false; VOID_CHANNELS]; NUM_PLAYERS];
-    record_voids_from_tricks(&gs.tricks, &mut voids);
+/// Detect per-player constraints from completed tricks and the current trick:
+/// suit/tarok voids everywhere, plus rank ceilings when must-overplay is in
+/// force (klop/berac).
+pub fn detect_constraints(gs: &GameState) -> [PlayerConstraints; NUM_PLAYERS] {
+    let mut constraints = [PlayerConstraints::new(); NUM_PLAYERS];
+    let overplay = gs.contract.map_or(false, |c| c.requires_overplay());
+    for trick in &gs.tricks {
+        update_from_trick(trick, overplay, &mut constraints);
+    }
     if let Some(ref trick) = gs.current_trick {
-        record_voids_from_trick(trick, &mut voids);
+        update_from_trick(trick, overplay, &mut constraints);
     }
-    voids
+    constraints
 }
 
-fn record_voids_from_tricks(tricks: &[Trick], voids: &mut [[bool; VOID_CHANNELS]; NUM_PLAYERS]) {
-    for trick in tricks {
-        record_voids_from_trick(trick, voids);
-    }
-}
-
-fn record_voids_from_trick(trick: &Trick, voids: &mut [[bool; VOID_CHANNELS]; NUM_PLAYERS]) {
+fn update_from_trick(
+    trick: &Trick,
+    overplay: bool,
+    constraints: &mut [PlayerConstraints; NUM_PLAYERS],
+) {
     if trick.count == 0 {
         return;
     }
     let lead_card = trick.cards[0].1;
-    if lead_card.card_type() == CardType::Tarok {
-        // Tarok lead: anyone not playing tarok is void in tarok.
-        for i in 1..trick.count as usize {
-            let (player, card) = trick.cards[i];
-            if card.card_type() != CardType::Tarok {
-                voids[player as usize][TAROK_VOID_IDX] = true;
-            }
-        }
-        return;
-    }
-    let lead_suit = match lead_card.suit() {
-        Some(s) => s,
-        None => return,
-    };
+    let lead_is_tarok = lead_card.card_type() == CardType::Tarok;
+    let lead_suit = lead_card.suit();
+    // For trick-winning comparisons: when a tarok leads, lead_suit=None
+    // is what `Card::beats` expects. Otherwise use the lead suit.
+    let beats_lead_suit: Option<Suit> = if lead_is_tarok { None } else { lead_suit };
+
+    // Running best card in the trick (used for overplay ceiling inference).
+    let mut best_card = lead_card;
+
     for i in 1..trick.count as usize {
         let (player, card) = trick.cards[i];
-        if card.card_type() == CardType::Tarok || card.suit() != Some(lead_suit) {
-            voids[player as usize][lead_suit as usize] = true;
+        let pi = player as usize;
+
+        // -- Void / ceiling inference relative to this card's play --
+        if lead_is_tarok {
+            if card.card_type() != CardType::Tarok {
+                // Not following tarok → void in tarok.
+                constraints[pi].void[TAROK_VOID_IDX] = true;
+            } else if overplay {
+                // In klop/berac: must beat current best tarok if possible.
+                // If the played tarok does not beat `best_card`, the
+                // player has no higher tarok than the one played.
+                if !card.beats(best_card, None) {
+                    constraints[pi].tighten_tarok_max(card.value());
+                }
+            }
+        } else if let Some(ls) = lead_suit {
+            if card.card_type() == CardType::Tarok {
+                // Played a tarok on a suit lead → void in that suit.
+                constraints[pi].void[ls as usize] = true;
+            } else if card.suit() != Some(ls) {
+                // Discarded off-suit (no taroks either) → void in both.
+                constraints[pi].void[ls as usize] = true;
+                constraints[pi].void[TAROK_VOID_IDX] = true;
+            } else if overplay {
+                // Followed the suit. In klop/berac the player must play
+                // a higher card of the lead suit if they can.
+                if !card.beats(best_card, Some(ls)) {
+                    constraints[pi].tighten_suit_max(ls, card.value());
+                }
+            }
+        }
+
+        // Update running best.
+        if card.beats(best_card, beats_lead_suit) {
+            best_card = card;
         }
     }
+}
+
+// Back-compat alias for existing callers / tests that want just voids.
+pub fn detect_voids(gs: &GameState) -> [[bool; VOID_CHANNELS]; NUM_PLAYERS] {
+    let c = detect_constraints(gs);
+    let mut voids = [[false; VOID_CHANNELS]; NUM_PLAYERS];
+    for p in 0..NUM_PLAYERS {
+        voids[p] = c[p].void;
+    }
+    voids
 }
 
 // -----------------------------------------------------------------------
 // World sampling
 // -----------------------------------------------------------------------
 
-/// Redistribute unknown cards among other players, respecting `voids`.
+/// Redistribute unknown cards among other players, respecting `constraints`.
 ///
 /// Returns `None` only when the card counts don't add up (should not happen
 /// in a well-formed game state).
 pub fn sample_world(
     gs: &GameState,
     viewer: u8,
-    voids: &[[bool; VOID_CHANNELS]; NUM_PLAYERS],
+    constraints: &[PlayerConstraints; NUM_PLAYERS],
     rng: &mut impl Rng,
 ) -> Option<[CardSet; NUM_PLAYERS]> {
     // Cards known to the viewer
@@ -216,13 +332,13 @@ pub fn sample_world(
     // Rejection sampling (cheap for ≤3 tricks / ≤9 unknown cards)
     for _ in 0..500 {
         unknown.shuffle(rng);
-        if let Some(mut hands) = try_deal(&unknown, viewer, &expected, voids) {
+        if let Some(mut hands) = try_deal(&unknown, viewer, &expected, constraints) {
             hands[viewer as usize] = gs.hands[viewer as usize];
             return Some(hands);
         }
     }
 
-    // Fallback: deal ignoring void constraints
+    // Fallback: deal ignoring constraints
     unknown.shuffle(rng);
     let mut hands = [CardSet::EMPTY; NUM_PLAYERS];
     hands[viewer as usize] = gs.hands[viewer as usize];
@@ -240,12 +356,12 @@ pub fn sample_world(
     Some(hands)
 }
 
-/// Try to assign `unknown` cards to other players respecting void constraints.
+/// Try to assign `unknown` cards to other players respecting constraints.
 fn try_deal(
     unknown: &[Card],
     viewer: u8,
     expected: &[u32; NUM_PLAYERS],
-    voids: &[[bool; VOID_CHANNELS]; NUM_PLAYERS],
+    constraints: &[PlayerConstraints; NUM_PLAYERS],
 ) -> Option<[CardSet; NUM_PLAYERS]> {
     let mut hands = [CardSet::EMPTY; NUM_PLAYERS];
     let mut idx = 0;
@@ -255,11 +371,7 @@ fn try_deal(
         }
         let count = expected[p] as usize;
         for &card in &unknown[idx..idx + count] {
-            if let Some(suit) = card.suit() {
-                if voids[p][suit as usize] {
-                    return None;
-                }
-            } else if voids[p][TAROK_VOID_IDX] {
+            if !constraints[p].card_allowed(card) {
                 return None;
             }
             hands[p].insert(card);
@@ -293,5 +405,57 @@ mod tests {
         assert!(voids[1][Suit::Hearts as usize]);
         assert!(!voids[0][Suit::Hearts as usize]);
         assert!(!voids[2][Suit::Hearts as usize]);
+    }
+
+    #[test]
+    fn tarok_ceiling_in_klop() {
+        // Klop: lead V (5), then XIII (13). Player 2 plays IV (4).
+        // In klop the third player MUST overplay (XIII is the current
+        // best). Playing IV means they had no tarok > XIII.
+        let mut gs = GameState::new(0);
+        gs.contract = Some(Contract::Klop);
+        let mut trick = Trick::new(0);
+        trick.play(0, Card::tarok(5));
+        trick.play(1, Card::tarok(13));
+        trick.play(2, Card::tarok(4));
+        gs.current_trick = Some(trick);
+
+        let c = detect_constraints(&gs);
+        assert_eq!(c[2].tarok_max, 4);
+        assert!(!c[2].card_allowed(Card::tarok(14)));
+        assert!(c[2].card_allowed(Card::tarok(3)));
+    }
+
+    #[test]
+    fn suit_ceiling_in_berac() {
+        // Berač: hearts lead King (8), next plays Jack (5).
+        // Must overplay → no heart higher than Jack.
+        let mut gs = GameState::new(0);
+        gs.contract = Some(Contract::Berac);
+        let mut trick = Trick::new(0);
+        trick.play(0, Card::suit_card(Suit::Hearts, SuitRank::King));
+        trick.play(1, Card::suit_card(Suit::Hearts, SuitRank::Jack));
+        gs.current_trick = Some(trick);
+
+        let c = detect_constraints(&gs);
+        assert_eq!(c[1].suit_max[Suit::Hearts as usize], 5);
+        assert!(!c[1].card_allowed(Card::suit_card(Suit::Hearts, SuitRank::Queen)));
+        assert!(c[1].card_allowed(Card::suit_card(Suit::Hearts, SuitRank::Jack)));
+    }
+
+    #[test]
+    fn no_ceiling_in_normal_contract() {
+        // Three: tarok lead V, next plays IV. Normal contracts don't force
+        // overplay when following tarok (only void rules apply).
+        let mut gs = GameState::new(0);
+        gs.contract = Some(Contract::Three);
+        let mut trick = Trick::new(0);
+        trick.play(0, Card::tarok(5));
+        trick.play(1, Card::tarok(4));
+        gs.current_trick = Some(trick);
+
+        let c = detect_constraints(&gs);
+        assert_eq!(c[1].tarok_max, NO_CEILING);
+        assert!(c[1].card_allowed(Card::tarok(20)));
     }
 }

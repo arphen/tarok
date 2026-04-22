@@ -2,6 +2,7 @@
 
 from training.ports.benchmark_port import BenchmarkPort
 from training.ports.config_port import ConfigPort
+from training.ports.explore_rate_policy_port import ExploreRatePolicyPort
 from training.ports.imitation_coef_policy_port import ImitationCoefPolicyPort
 from training.ports.iteration_runner_port import IterationRunnerPort
 from training.ports.league_persistence_port import LeagueStatePersistencePort
@@ -14,6 +15,7 @@ from training.ports.selfplay_port import SelfPlayPort
 __all__ = [
     "BenchmarkPort",
     "ConfigPort",
+    "ExploreRatePolicyPort",
     "ImitationCoefPolicyPort",
     "IterationRunnerPort",
     "LeagueStatePersistencePort",

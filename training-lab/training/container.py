@@ -10,6 +10,7 @@ from training.entities.training_config import TrainingConfig
 from training.ports import (
     BenchmarkPort,
     ConfigPort,
+    ExploreRatePolicyPort,
     ImitationCoefPolicyPort,
     IterationRunnerPort,
     LeagueStatePersistencePort,
@@ -58,6 +59,14 @@ def _default_entropy_policy(config: TrainingConfig | None = None):
         return EloDecayEntropyPolicy()
     from training.use_cases.train_model.policies import DefaultEntropyCoefPolicy
     return DefaultEntropyCoefPolicy()
+
+
+def _default_explore_rate_policy(config: TrainingConfig | None = None) -> ExploreRatePolicyPort:
+    if config is not None and config.explore_rate_schedule == "elo":
+        from training.use_cases.train_model.policies import EloDecayExplorePolicy
+        return EloDecayExplorePolicy()
+    from training.use_cases.train_model.policies import DefaultExploreRatePolicy
+    return DefaultExploreRatePolicy()
 
 
 def _default_league_persistence() -> LeagueStatePersistencePort:
@@ -203,5 +212,6 @@ class Container:
             lr_policy=self.lr_policy,
             imitation_policy=self._imitation_policy or _default_imitation_policy(config),
             entropy_policy=_default_entropy_policy(config),
+            explore_rate_policy=_default_explore_rate_policy(config),
             league_persistence=self.league_persistence,
         )

@@ -256,6 +256,7 @@ class Announcement(str, Enum):
     TRULA = "trula"
     KINGS = "kings"
     PAGAT_ULTIMO = "pagat_ultimo"
+    KING_ULTIMO = "king_ultimo"
     VALAT = "valat"
 
 

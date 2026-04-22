@@ -5,6 +5,7 @@ from __future__ import annotations
 import math
 
 from training.entities.training_config import TrainingConfig, scheduled_coef, scheduled_lr
+from training.ports.explore_rate_policy_port import ExploreRatePolicyPort
 from training.ports.imitation_coef_policy_port import ImitationCoefPolicyPort
 from training.ports.learning_rate_policy_port import LearningRatePolicyPort
 
@@ -58,6 +59,24 @@ class DefaultBehavioralCloneCoefPolicy:
         )
 
 
+class DefaultExploreRatePolicy(ExploreRatePolicyPort):
+    """Iteration-scheduled explore rate (constant / linear / cosine).
+
+    Mirrors :class:`DefaultEntropyCoefPolicy` so the classic non-Elo schedules
+    remain available when ``explore_rate_schedule`` is set to one of those
+    values.  Elo-aware scheduling is handled by :class:`EloDecayExplorePolicy`.
+    """
+
+    def compute(self, config: TrainingConfig, iteration: int, learner_elo: float = 0.0) -> float:
+        return scheduled_coef(
+            iteration=max(0, iteration - 1),
+            total_iterations=config.iterations,
+            coef_max=config.explore_rate,
+            coef_min=config.effective_explore_rate_min,
+            schedule=config.explore_rate_schedule,
+        )
+
+
 class EloDecayEntropyPolicy:
     """Entropy coefficient that decays with Elo — full exploration at low skill, minimal at high.
 
@@ -108,6 +127,33 @@ class EloGaussianILPolicy(ImitationCoefPolicyPort):
         )
         coef = config.imitation_coef * math.exp(exponent)
         return 0.0 if coef < self.floor else coef
+
+
+class EloDecayExplorePolicy(ExploreRatePolicyPort):
+    """Explore rate (epsilon) that decays with learner Elo.
+
+    Uses the same power-law interpolation as :func:`elo_based_lr` so epsilon
+    stays in sync with the Elo-decayed LR and entropy schedules: maximum
+    exploration at the Elo floor (800), minimal at the ceiling (2000).  EMA
+    smoothing with the same ``alpha`` prevents thrashing on noisy Elo
+    estimates.
+    """
+
+    def __init__(self, alpha: float = 0.05) -> None:
+        self.alpha = alpha
+        self._smoothed_elo: float | None = None
+
+    def compute(self, config: TrainingConfig, iteration: int, learner_elo: float = 0.0) -> float:
+        if self._smoothed_elo is None:
+            self._smoothed_elo = learner_elo
+        else:
+            self._smoothed_elo = self.alpha * learner_elo + (1.0 - self.alpha) * self._smoothed_elo
+        min_rate = config.effective_explore_rate_min
+        return elo_based_lr(
+            current_elo=self._smoothed_elo,
+            base_lr=config.explore_rate,
+            min_lr=min_rate if min_rate > 0 else 1e-6,
+        )
 
 
 def elo_based_lr(

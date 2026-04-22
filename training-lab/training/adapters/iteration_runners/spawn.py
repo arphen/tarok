@@ -55,6 +55,7 @@ class _IterationTask:
     iter_entropy_coef: float | None
     seats_override: str | None
     run_benchmark: bool
+    iter_explore_rate: float | None = None
 
 
 @dataclass
@@ -91,8 +92,13 @@ class _QueuePresenter(PresenterPort):
     def on_iteration_start(self, iteration, total, elapsed):
         self._send("on_iteration_start", iteration, total, elapsed)
 
-    def on_selfplay_start(self, config, effective_seats=None):
-        self._send("on_selfplay_start", config, effective_seats=effective_seats)
+    def on_selfplay_start(self, config, effective_seats=None, iter_explore_rate=None):
+        self._send(
+            "on_selfplay_start",
+            config,
+            effective_seats=effective_seats,
+            iter_explore_rate=iter_explore_rate,
+        )
 
     def on_selfplay_done(self, n_total, n_learner, elapsed):
         self._send("on_selfplay_done", n_total, n_learner, elapsed)
@@ -167,6 +173,7 @@ def _worker_main(
                 iter_imitation_coef=getattr(task, "iter_imitation_coef", None),
                 iter_behavioral_clone_coef=getattr(task, "iter_behavioral_clone_coef", None),
                 iter_entropy_coef=getattr(task, "iter_entropy_coef", None),
+                iter_explore_rate=getattr(task, "iter_explore_rate", None),
                 seats_override=task.seats_override,
                 run_benchmark=task.run_benchmark,
             )
@@ -220,6 +227,7 @@ class SpawnIterationRunner(IterationRunnerPort):
         iter_imitation_coef: float | None,
         iter_behavioral_clone_coef: float | None,
         iter_entropy_coef: float | None,
+        iter_explore_rate: float | None = None,
         seats_override: str | None,
         run_benchmark: bool,
     ) -> IterationResult:
@@ -241,6 +249,7 @@ class SpawnIterationRunner(IterationRunnerPort):
                 iter_imitation_coef=iter_imitation_coef,
                 iter_behavioral_clone_coef=iter_behavioral_clone_coef,
                 iter_entropy_coef=iter_entropy_coef,
+                iter_explore_rate=iter_explore_rate,
                 seats_override=seats_override,
                 run_benchmark=run_benchmark,
             )

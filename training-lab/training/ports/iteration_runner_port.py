@@ -29,6 +29,7 @@ class IterationRunnerPort(ABC):
         iter_imitation_coef: float | None,
         iter_behavioral_clone_coef: float | None,
         iter_entropy_coef: float | None,
+        iter_explore_rate: float | None = None,
         seats_override: str | None,
         run_benchmark: bool,
     ) -> IterationResult:

@@ -1,21 +1,21 @@
 /// State encoding — writes features directly into a numpy buffer.
 ///
-/// v8 encoding (585 dims).  All card planes are grouped at the start in
+/// v10 encoding (585 dims).  All card planes are grouped at the start in
 /// a card-attention-friendly layout — every plane starts on a 54-aligned
 /// offset so slicing is trivial.
 ///
 ///  - 0..53     : own hand
-///  - 54..107   : opponent +1 belief probabilities
-///  - 108..161  : opponent +2 belief probabilities
-///  - 162..215  : opponent +3 belief probabilities
-///  - 216..269  : own played cards (cards this player has played)   ← v8
+///  - 54..107   : opponent +1 belief marginals (cardinality-aware IPF)
+///  - 108..161  : opponent +2 belief marginals
+///  - 162..215  : opponent +3 belief marginals
+///  - 216..269  : own played cards
 ///  - 270..323  : opponent +1 played cards
 ///  - 324..377  : opponent +2 played cards
 ///  - 378..431  : opponent +3 played cards  (declarer's plane also
 ///                includes publicly-retired unpicked talon cards)
 ///  - 432..485  : active trick plane (cards in the current trick)
 ///
-///  Scalar tail (starts at 486):
+///  Scalar tail (starts at 486, 99 dims):
 ///  - 486..489  : seat position relative to dealer (4 one-hot)
 ///  - 490..499  : contract one-hot (10)
 ///  - 500..502  : phase one-hot (3: bidding / trick_play / other)
@@ -23,69 +23,65 @@
 ///  - 504..508  : decision type one-hot (5)
 ///  - 509..517  : highest bid one-hot (9)
 ///  - 518..521  : passed players (4, dealer-relative)
-///  - 522..525  : own-team announcements (4)
-///  - 526..529  : opponent-team announcements (4)
-///  - 530..534  : kontra levels (5, normalized)
-///  - 535..537  : role one-hot (3: declarer / partner / opposition)
-///  - 538..541  : partner relative seat (4, all-zero ⇒ unknown)
-///  - 542..544  : centaur team points (mine/70, opp/70, current/20)
-///  - 545..548  : trick leader relative seat (4)
-///  - 549..552  : trick currently-winning relative seat (4)
-///  - 553..558  : trick context (position + lead type/suit) (6)
-///  - 559..561  : per-opponent tarok-void flags (3)
-///  - 562..573  : per-opponent suit-void flags (12)
-///  - 574..577  : live kings one-hot (4)
-///  - 578..580  : live trula one-hot (pagat / mond / skis) (3)
-///  - 581..584  : called-king suit one-hot (4)
+///  - 522..526  : own-team announcements (5: trula, kings, pagat, king, valat)
+///  - 527..531  : opponent-team announcements (5)
+///  - 532..536  : kontra levels (5, normalized)
+///  - 537..539  : role one-hot (3: declarer / partner / opposition)
+///  - 540..543  : partner relative seat (4, all-zero ⇒ unknown)
+///  - 544..546  : centaur team points (mine/70, opp/70, current/20)
+///  - 547..550  : trick leader relative seat (4)
+///  - 551..554  : trick currently-winning relative seat (4)
+///  - 555..560  : trick context (position + lead type/suit) (6)
+///  - 561..563  : per-opponent tarok-void flags (3)
+///  - 564..575  : per-opponent suit-void flags (12)
+///  - 576..579  : called-king suit one-hot (4)
+///  - 580..584  : remaining-in-play counts (taroks/22, H/8, D/8, C/8, S/8)
 ///
-/// Rule semantics:
-///  - `talon_revealed` is public (Slovenian Tarok).  Unpicked talon
-///    cards are publicly retired — they appear in the belief `known` set
-///    and in the declarer's per-opp played plane (for counting).
-///  - Forced-retention: taroks and kings from the picked talon group
-///    cannot legally be discarded, so they are publicly known to still
-///    be in declarer's hand.  The belief block pins these cards onto
-///    the declarer's column (prob 1.0; 0 for other opponent columns).
-///  - Role reports the acting player's own role (known post-bidding).
-///    Partner identity (which seat holds the called king) is a separate
-///    feature: partner_rel, populated only for players who actually
-///    know (partner themselves always; everyone else after the king has
-///    been played).
+/// v10 vs v9 changes (see docs/state_space_and_observation.md):
+///  - Removed own-discarded plane (54 dims) — folded into belief `known`
+///    set for the declarer's perspective.
+///  - Removed live-kings (4) and live-trula (3) scalar blocks —
+///    derivable from played planes.
+///  - Added King Ultimo announcement slot (+2, own + opp).
+///  - Added remaining-in-play counts block (+5).
+///  - Belief planes use cardinality-aware IPF (Sinkhorn) normalisation
+///    instead of a flat 1/3 prior.
+///  - New tarok-void inference: suit-void opponent playing a non-tarok
+///    non-lead-suit card is also tarok-void.
 use crate::card::*;
 use crate::game_state::*;
 use crate::trick_eval::evaluate_trick;
 
-// --- v9 layout constants (all card planes are 54-aligned) ---
+// --- v10 layout constants (all card planes are 54-aligned) ---
 pub const HAND_OFFSET: usize = 0;
 /// Belief feature block offset (3 × 54 starting here).
 pub const BELIEF_OFFSET: usize = 54;
 const BELIEF_SIZE: usize = 3 * DECK_SIZE;
-/// Own played-cards plane (v8).
+/// Own played-cards plane.
 pub const SELF_PLAYED_OFFSET: usize = BELIEF_OFFSET + BELIEF_SIZE; // 216
-/// Own discarded-cards plane (v9, private to the declarer).
-pub const SELF_DISCARDED_OFFSET: usize = SELF_PLAYED_OFFSET + DECK_SIZE; // 270
 /// Per-opponent played planes start here (3 × 54).
-pub const OPP_PLAYED_OFFSET: usize = SELF_DISCARDED_OFFSET + DECK_SIZE; // 324
+pub const OPP_PLAYED_OFFSET: usize = SELF_PLAYED_OFFSET + DECK_SIZE; // 270
 const OPP_PLAYED_SIZE: usize = 3 * DECK_SIZE;
 /// Active trick plane (cards on the table right now).
-pub const ACTIVE_TRICK_OFFSET: usize = OPP_PLAYED_OFFSET + OPP_PLAYED_SIZE; // 486
-/// Total card-plane block = 10 × 54.
-pub const CARD_PLANES_SIZE: usize = 10 * DECK_SIZE; // 540
+pub const ACTIVE_TRICK_OFFSET: usize = OPP_PLAYED_OFFSET + OPP_PLAYED_SIZE; // 432
+/// Total card-plane block = 9 × 54.
+pub const CARD_PLANES_SIZE: usize = 9 * DECK_SIZE; // 486
 /// First scalar offset.
-pub const SCALAR_OFFSET: usize = CARD_PLANES_SIZE; // 540
+pub const SCALAR_OFFSET: usize = CARD_PLANES_SIZE; // 486
 /// Contract one-hot offset.
-pub const CONTRACT_OFFSET: usize = SCALAR_OFFSET + 4; // 544 (after seat-rel)
+pub const CONTRACT_OFFSET: usize = SCALAR_OFFSET + 4; // 490 (after seat-rel)
 /// Contract one-hot feature length.
 pub const CONTRACT_SIZE: usize = 10;
 
-// Scalar-tail constituent sizes (kept for documentation / debug asserts)
+// Scalar-tail constituent sizes (kept for documentation / debug asserts).
+// v10 tail: 4 + 10 + 3 + 1 + 5 + 9 + 4 + 10 + 5 + 3 + 4 + 3 + 4 + 4 + 6 + 3 + 12 + 4 + 5 = 99
 const SCALAR_TAIL_SIZE: usize =
-    4 + 10 + 3 + 1 + 5 + 9 + 4 + 8 + 5 + 3 + 4 + 3 + 4 + 4 + 6 + 3 + 12 + 4 + 3 + 4; // 99
+    4 + 10 + 3 + 1 + 5 + 9 + 4 + 10 + 5 + 3 + 4 + 3 + 4 + 4 + 6 + 3 + 12 + 4 + 5;
 
-/// v9 full state size.
-pub const STATE_SIZE: usize = CARD_PLANES_SIZE + SCALAR_TAIL_SIZE; // 540 + 99 = 639
+/// v10 full state size.
+pub const STATE_SIZE: usize = CARD_PLANES_SIZE + SCALAR_TAIL_SIZE; // 486 + 99 = 585
 pub const ORACLE_EXTRA: usize = 3 * DECK_SIZE; // 162
-pub const ORACLE_STATE_SIZE: usize = STATE_SIZE + ORACLE_EXTRA; // 801
+pub const ORACLE_STATE_SIZE: usize = STATE_SIZE + ORACLE_EXTRA; // 747
 
 /// Decision type codes matching Python DecisionType enum.
 pub const DT_BID: u8 = 0;
@@ -145,6 +141,13 @@ pub fn encode_state(buf: &mut [f32], state: &GameState, player: u8, decision_typ
     if let Some(ref trick) = state.current_trick {
         known = known.union(trick.played_cards_set());
     }
+    // v10: declarer knows their own put_down — fold into the belief
+    // `known` set so every opponent column is forced to 0 for those cards.
+    // Only applied when the acting player IS the declarer; for other
+    // seats `put_down` is private and must not leak.
+    if state.declarer == Some(player) {
+        known = known.union(state.put_down);
+    }
 
     // Suit-void and tarok-void inference from trick history.
     let mut opp_void: [u8; NUM_PLAYERS] = [0; NUM_PLAYERS];
@@ -168,7 +171,13 @@ pub fn encode_state(buf: &mut [f32], state: &GameState, player: u8, decision_typ
                     match card.card_type() {
                         CardType::Suit => {
                             if card.suit() != Some(ls) {
+                                // Suit-void in lead suit AND did not play
+                                // tarok — so at that moment tarok-void
+                                // too (forced-follow rule). Tarok-void
+                                // is monotone in time ⇒ still holds.
+                                // (v10 addition.)
                                 opp_void[p as usize] |= 1 << (ls as u8);
+                                opp_tarok_void[p as usize] = true;
                             }
                         }
                         CardType::Tarok => {
@@ -191,34 +200,140 @@ pub fn encode_state(buf: &mut [f32], state: &GameState, player: u8, decision_typ
         }
     }
 
-    // --- Card planes 1..3: opponent belief probabilities ---
+    // --- Card planes 1..3: opponent belief marginals (cardinality-aware IPF) ---
+    //
+    // Build a 3 × |U| matrix of feasibility weights, where U is the set
+    // of cards whose location is unknown to the acting player.  Then
+    // rescale rows (to opp remaining-slot counts) and columns (to 1.0
+    // per card) iteratively until both marginals converge (Sinkhorn).
+    //
+    // Pre-seed rules:
+    //   * pinned absent (void / declarer-pinned-elsewhere) → 0
+    //   * forced-retention card on declarer column → 1 (pinned present)
+    //   * otherwise → 1 (feasible, uniform starting weight)
+    //
+    // Row targets: hand_size_i − cards already pinned to opp i.
+    // Column targets: 1 − pinned column mass (usually 1; 0 for pinned cards).
     let declarer_opt = state.declarer;
-    for opp_offset in 1..NUM_PLAYERS {
-        let opp_idx = ((player as usize + opp_offset) % NUM_PLAYERS) as u8;
-        let base = BELIEF_OFFSET + (opp_offset - 1) * DECK_SIZE;
-        let is_declarer_col = declarer_opt == Some(opp_idx);
-        let void_mask = opp_void[opp_idx as usize];
-        let tarok_void = opp_tarok_void[opp_idx as usize];
-        for cidx in 0..DECK_SIZE {
-            let c = Card(cidx as u8);
-            if known.contains(c) {
-                continue;
-            }
-            if forced_retention.contains(c) {
-                if is_declarer_col {
-                    buf[base + cidx] = 1.0;
+
+    // Compute each opponent's remaining hand size (free + pinned slots).
+    let mut opp_hand_size: [usize; NUM_PLAYERS] = [0; NUM_PLAYERS];
+    for seat in 0..NUM_PLAYERS {
+        opp_hand_size[seat] = state.hands[seat].len() as usize;
+    }
+
+    // Collect unknown card indices.
+    let mut unknown: Vec<usize> = Vec::with_capacity(DECK_SIZE);
+    for cidx in 0..DECK_SIZE {
+        if !known.contains(Card(cidx as u8)) {
+            unknown.push(cidx);
+        }
+    }
+
+    // Map relative opponent offset (0..=2) ↔ absolute seat.
+    let opp_seats: [u8; 3] = [
+        ((player as usize + 1) % NUM_PLAYERS) as u8,
+        ((player as usize + 2) % NUM_PLAYERS) as u8,
+        ((player as usize + 3) % NUM_PLAYERS) as u8,
+    ];
+
+    // Matrix M[row][col] where row = relative opponent index, col = pos in `unknown`.
+    let mut m: Vec<[f32; 3]> = vec![[0.0; 3]; unknown.len()];
+    // Free-slot row targets (hand size minus pinned-present count for that row).
+    let mut row_target: [f32; 3] = [0.0; 3];
+    for r in 0..3 {
+        row_target[r] = opp_hand_size[opp_seats[r] as usize] as f32;
+    }
+    let mut col_pinned: Vec<bool> = vec![false; unknown.len()];
+
+    for (col, &cidx) in unknown.iter().enumerate() {
+        let c = Card(cidx as u8);
+        // Forced retention: pin to declarer's relative column.
+        if forced_retention.contains(c) {
+            for r in 0..3 {
+                if declarer_opt == Some(opp_seats[r]) {
+                    m[col][r] = 1.0;
+                    row_target[r] -= 1.0;
                 }
-                continue;
             }
-            let impossible = match c.card_type() {
-                CardType::Tarok => tarok_void,
+            col_pinned[col] = true;
+            continue;
+        }
+        // Feasibility per row (void constraints).
+        for r in 0..3 {
+            let seat = opp_seats[r] as usize;
+            let feasible = match c.card_type() {
+                CardType::Tarok => !opp_tarok_void[seat],
                 CardType::Suit => match c.suit() {
-                    Some(s) => void_mask & (1 << (s as u8)) != 0,
-                    None => false,
+                    Some(s) => opp_void[seat] & (1 << (s as u8)) == 0,
+                    None => true,
                 },
             };
-            if !impossible {
-                buf[base + cidx] = 1.0 / 3.0;
+            if feasible {
+                m[col][r] = 1.0;
+            }
+        }
+    }
+
+    // Iterative proportional fitting (Sinkhorn).  Fixed iterations —
+    // deterministic; ~10 iters is ample for 3×|U| matrices this small.
+    const IPF_ITERS: usize = 12;
+    for _ in 0..IPF_ITERS {
+        // Row scaling: each opponent's free cells should sum to their free slots.
+        let mut row_sum: [f32; 3] = [0.0; 3];
+        for col in 0..unknown.len() {
+            if col_pinned[col] {
+                continue;
+            }
+            for r in 0..3 {
+                row_sum[r] += m[col][r];
+            }
+        }
+        for r in 0..3 {
+            if row_sum[r] > 1e-12 && row_target[r] > 0.0 {
+                let s = row_target[r] / row_sum[r];
+                for col in 0..unknown.len() {
+                    if col_pinned[col] {
+                        continue;
+                    }
+                    m[col][r] *= s;
+                }
+            } else if row_target[r] <= 0.0 {
+                // No free slots — zero this row's free cells.
+                for col in 0..unknown.len() {
+                    if col_pinned[col] {
+                        continue;
+                    }
+                    m[col][r] = 0.0;
+                }
+            }
+        }
+        // Column scaling: each unknown card has total probability 1.
+        for col in 0..unknown.len() {
+            if col_pinned[col] {
+                continue;
+            }
+            let cs: f32 = m[col][0] + m[col][1] + m[col][2];
+            if cs > 1e-12 {
+                let s = 1.0 / cs;
+                for r in 0..3 {
+                    m[col][r] *= s;
+                }
+            }
+            // If cs == 0 here, the column is infeasible under our
+            // constraints; leave zeros (belief = 0 for all opponents).
+            // The declarer-pinned case cannot hit this branch because
+            // `col_pinned` is true and we skipped above.
+        }
+    }
+
+    // Write belief planes.
+    for r in 0..3 {
+        let base = BELIEF_OFFSET + r * DECK_SIZE;
+        for (col, &cidx) in unknown.iter().enumerate() {
+            let v = m[col][r];
+            if v > 0.0 {
+                buf[base + cidx] = v;
             }
         }
     }
@@ -251,14 +366,9 @@ pub fn encode_state(buf: &mut [f32], state: &GameState, player: u8, decision_typ
             buf[base + c.0 as usize] = 1.0;
         }
     }
-    // Card plane 5: own discarded cards (v9 — private to the declarer).
-    if state.declarer == Some(player) {
-        let base = SELF_DISCARDED_OFFSET;
-        for c in state.put_down.iter() {
-            buf[base + c.0 as usize] = 1.0;
-        }
-    }
-    // Card planes 6..8: per-opponent played.
+    // (v10: no separate own-discarded plane; declarer's put_down is
+    // folded into the belief `known` set above.)
+    // Card planes 5..7: per-opponent played.
     for opp_offset in 1..NUM_PLAYERS {
         let opp_idx = ((player as usize + opp_offset) % NUM_PLAYERS) as u8;
         let base = OPP_PLAYED_OFFSET + (opp_offset - 1) * DECK_SIZE;
@@ -350,7 +460,8 @@ pub fn encode_state(buf: &mut [f32], state: &GameState, player: u8, decision_typ
     }
     o += 4;
 
-    // Announcements split by team (4 own + 4 opp).
+    // Announcements split by team (5 own + 5 opp): trula, kings, pagat,
+    // king-ultimo, valat (v10).
     if state.declarer.is_some() {
         let mut own_ann: u8 = 0;
         let mut opp_ann: u8 = 0;
@@ -362,16 +473,16 @@ pub fn encode_state(buf: &mut [f32], state: &GameState, player: u8, decision_typ
                 opp_ann |= a;
             }
         }
-        for i in 0..4u8 {
+        for i in 0..5u8 {
             if own_ann & (1 << i) != 0 {
                 buf[o + i as usize] = 1.0;
             }
             if opp_ann & (1 << i) != 0 {
-                buf[o + 4 + i as usize] = 1.0;
+                buf[o + 5 + i as usize] = 1.0;
             }
         }
     }
-    o += 8;
+    o += 10;
 
     // Kontra levels (5 normalized).
     for i in 0..KontraTarget::NUM {
@@ -489,46 +600,32 @@ pub fn encode_state(buf: &mut [f32], state: &GameState, player: u8, decision_typ
         o += 4;
     }
 
-    // Live kings & live trula from trick + current-trick cards.
-    let mut king_played_mask: u8 = 0;
-    let mut tarok_played_mask: u8 = 0;
-    let check_card = |c: Card, kpm: &mut u8, tpm: &mut u8| {
-        if c.is_king() {
-            if let Some(s) = c.suit() {
-                *kpm |= 1 << (s as u8);
-            }
-        }
-        if c.card_type() == CardType::Tarok {
-            match c.0 as usize {
-                0 => *tpm |= 1,
-                20 => *tpm |= 2,
-                21 => *tpm |= 4,
-                _ => {}
+    // v10: live-kings and live-trula scalar blocks removed — fully
+    // derivable from played planes via attention.  Instead we count
+    // taroks and per-suit cards already played and emit their
+    // remaining-in-play counts as normalised scalars (5 dims).
+    let mut taroks_played: u32 = 0;
+    let mut suit_played: [u32; 4] = [0; 4];
+    let mut tally = |c: Card| {
+        match c.card_type() {
+            CardType::Tarok => taroks_played += 1,
+            CardType::Suit => {
+                if let Some(s) = c.suit() {
+                    suit_played[s as usize] += 1;
+                }
             }
         }
     };
     for trick in &state.tricks {
         for i in 0..trick.count as usize {
-            check_card(trick.cards[i].1, &mut king_played_mask, &mut tarok_played_mask);
+            tally(trick.cards[i].1);
         }
     }
     if let Some(ref trick) = state.current_trick {
         for i in 0..trick.count as usize {
-            check_card(trick.cards[i].1, &mut king_played_mask, &mut tarok_played_mask);
+            tally(trick.cards[i].1);
         }
     }
-    for s in 0u8..4u8 {
-        if king_played_mask & (1 << s) == 0 {
-            buf[o + s as usize] = 1.0;
-        }
-    }
-    o += 4;
-    for bit in 0u8..3u8 {
-        if tarok_played_mask & (1 << bit) == 0 {
-            buf[o + bit as usize] = 1.0;
-        }
-    }
-    o += 3;
 
     // Called-king suit one-hot (4).
     if let Some(k) = state.called_king {
@@ -537,6 +634,13 @@ pub fn encode_state(buf: &mut [f32], state: &GameState, player: u8, decision_typ
         }
     }
     o += 4;
+
+    // Remaining-in-play counts (5): taroks/22, H/8, D/8, C/8, S/8.
+    buf[o] = (22u32.saturating_sub(taroks_played)) as f32 / 22.0;
+    for s in 0..4 {
+        buf[o + 1 + s] = (8u32.saturating_sub(suit_played[s])) as f32 / 8.0;
+    }
+    o += 5;
 
     debug_assert_eq!(o, STATE_SIZE);
 }

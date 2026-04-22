@@ -29,7 +29,7 @@ use rand::SeedableRng;
 use rayon::prelude::*;
 
 // Re-use void detection + world sampling from pimc module.
-use crate::pimc::{detect_voids, sample_world};
+use crate::pimc::{detect_constraints, sample_world};
 
 /// Default iterative-deepening depth (number of Max moves to look ahead).
 pub const DEFAULT_MAX_DEPTH: usize = 2;
@@ -218,7 +218,7 @@ pub fn alpha_mu_choose_card(
     }
 
     // Sample worlds
-    let voids = detect_voids(gs);
+    let constraints = detect_constraints(gs);
     let base_seed: u64 = rand::rng().random();
     let worlds: Vec<[CardSet; NUM_PLAYERS]> = (0..num_worlds)
         .into_par_iter()
@@ -226,7 +226,7 @@ pub fn alpha_mu_choose_card(
             let mut rng = SmallRng::seed_from_u64(
                 base_seed ^ (i as u64).wrapping_mul(0x9E37_79B9_7F4A_7C15),
             );
-            sample_world(gs, viewer, &voids, &mut rng)
+            sample_world(gs, viewer, &constraints, &mut rng)
         })
         .collect();
 

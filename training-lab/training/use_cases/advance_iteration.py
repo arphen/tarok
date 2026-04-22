@@ -7,6 +7,7 @@ from dataclasses import replace as dc_replace
 
 from training.entities.training_context import TrainingContext
 from training.entities.training_config import scheduled_coef
+from training.ports.explore_rate_policy_port import ExploreRatePolicyPort
 from training.ports.imitation_coef_policy_port import ImitationCoefPolicyPort
 from training.ports.iteration_runner_port import IterationRunnerPort
 from training.ports.learning_rate_policy_port import LearningRatePolicyPort
@@ -35,12 +36,14 @@ class AdvanceIteration:
         league_maintenance: MaintainLeaguePool,
         sample_seats: SampleLeagueSeats,
         behavioral_clone_policy=None,
+        explore_rate_policy: ExploreRatePolicyPort | None = None,
     ) -> None:
         self._iteration_runner = iteration_runner
         self._lr_policy = lr_policy
         self._imitation_policy = imitation_policy
         self._entropy_policy = entropy_policy
         self._behavioral_clone_policy = behavioral_clone_policy
+        self._explore_rate_policy = explore_rate_policy
         self._presenter = presenter
         self._league_maintenance = league_maintenance
         self._sample_seats = sample_seats
@@ -73,6 +76,18 @@ class AdvanceIteration:
         iter_entropy_coef = self._entropy_policy.compute(
             config=config, iteration=iteration, learner_elo=ctx.pool.learner_elo,
         )
+        if self._explore_rate_policy is None:
+            iter_explore_rate = scheduled_coef(
+                iteration=max(0, iteration - 1),
+                total_iterations=config.iterations,
+                coef_max=config.explore_rate,
+                coef_min=config.effective_explore_rate_min,
+                schedule=config.explore_rate_schedule,
+            )
+        else:
+            iter_explore_rate = self._explore_rate_policy.compute(
+                config=config, iteration=iteration, learner_elo=ctx.pool.learner_elo,
+            )
 
         seats_override = self._sample_seats.execute(ctx.pool)
         prev_placement = ctx.run.placements[-1]
@@ -84,6 +99,7 @@ class AdvanceIteration:
             iter_imitation_coef=iter_imitation_coef,
             iter_behavioral_clone_coef=iter_behavioral_clone_coef,
             iter_entropy_coef=iter_entropy_coef,
+            iter_explore_rate=iter_explore_rate,
             seats_override=seats_override,
             run_benchmark=config.should_benchmark_iteration(iteration),
         )

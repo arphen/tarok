@@ -57,11 +57,13 @@ class RunIteration:
         iter_imitation_coef: float | None = None,
         iter_behavioral_clone_coef: float | None = None,
         iter_entropy_coef: float | None = None,
+        iter_explore_rate: float | None = None,
         seats_override: str | None = None,
         run_benchmark: bool = True,
     ) -> tuple[IterationResult, dict]:
         bundle = self._collect_experiences.execute(
-            config, identity, ts_path, seats_override, iter_imitation_coef, iter_behavioral_clone_coef
+            config, identity, ts_path, seats_override, iter_imitation_coef, iter_behavioral_clone_coef,
+            iter_explore_rate=iter_explore_rate,
         )
 
         update = self._update_policy.execute(

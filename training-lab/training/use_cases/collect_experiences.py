@@ -38,9 +38,17 @@ class CollectExperiences:
         seats_override: str | None = None,
         iter_imitation_coef: float | None = None,
         iter_behavioral_clone_coef: float | None = None,
+        iter_explore_rate: float | None = None,
     ) -> ExperienceBundle:
         effective_seats = seats_override if seats_override is not None else config.seats
-        self._presenter.on_selfplay_start(config, effective_seats=effective_seats)
+        effective_explore_rate = (
+            iter_explore_rate if iter_explore_rate is not None else config.explore_rate
+        )
+        self._presenter.on_selfplay_start(
+            config,
+            effective_seats=effective_seats,
+            iter_explore_rate=effective_explore_rate,
+        )
 
         t0 = time.time()
         include_oracle_states = bool(
@@ -51,7 +59,7 @@ class CollectExperiences:
             ts_path,
             config.games,
             effective_seats,
-            config.explore_rate,
+            effective_explore_rate,
             config.concurrency,
             include_oracle_states=include_oracle_states,
             lapajne_mc_worlds=config.lapajne_mc_worlds,

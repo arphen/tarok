@@ -85,6 +85,8 @@ class ResolveConfig:
             lr_schedule=str(merged.get("lr_schedule", "constant")),
             lr_min=merged.get("lr_min"),
             explore_rate=merged.get("explore_rate", 0.10),
+            explore_rate_min=merged.get("explore_rate_min"),
+            explore_rate_schedule=str(merged.get("explore_rate_schedule", "constant")),
             device=merged.get("device", "auto"),
             save_dir=merged.get("save_dir", "data/checkpoints/training_run"),
             concurrency=merged.get("concurrency", 128),

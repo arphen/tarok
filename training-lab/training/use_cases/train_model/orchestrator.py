@@ -12,6 +12,7 @@ from training.entities.model_identity import ModelIdentity
 from training.entities.training_config import TrainingConfig
 from training.entities.training_run import TrainingRun
 from training.ports.benchmark_port import BenchmarkPort
+from training.ports.explore_rate_policy_port import ExploreRatePolicyPort
 from training.ports.imitation_coef_policy_port import ImitationCoefPolicyPort
 from training.ports.iteration_runner_port import IterationRunnerPort
 from training.ports.league_persistence_port import LeagueStatePersistencePort
@@ -25,6 +26,7 @@ from training.use_cases.sample_league_seats import SampleLeagueSeats
 from training.use_cases.train_model.policies import (
     DefaultBehavioralCloneCoefPolicy,
     DefaultEntropyCoefPolicy,
+    DefaultExploreRatePolicy,
     DefaultImitationCoefPolicy,
     DefaultLearningRatePolicy,
     EloDecayEntropyPolicy,
@@ -43,6 +45,7 @@ class TrainModel:
         lr_policy: LearningRatePolicyPort | None = None,
         imitation_policy: ImitationCoefPolicyPort | None = None,
         entropy_policy: DefaultEntropyCoefPolicy | EloDecayEntropyPolicy | None = None,
+        explore_rate_policy: ExploreRatePolicyPort | None = None,
         league_persistence: LeagueStatePersistencePort | None = None,
         behavioral_clone_policy: DefaultBehavioralCloneCoefPolicy | None = None,
     ):
@@ -56,6 +59,9 @@ class TrainModel:
             imitation_policy if imitation_policy is not None else DefaultImitationCoefPolicy()
         )
         self._entropy_policy = entropy_policy if entropy_policy is not None else DefaultEntropyCoefPolicy()
+        self._explore_rate_policy: ExploreRatePolicyPort = (
+            explore_rate_policy if explore_rate_policy is not None else DefaultExploreRatePolicy()
+        )
         self._bc_policy = behavioral_clone_policy if behavioral_clone_policy is not None else DefaultBehavioralCloneCoefPolicy()
         if league_persistence is None:
             raise ValueError("league_persistence must be provided — wire JsonLeagueStatePersistence via the container")
@@ -204,6 +210,9 @@ class TrainModel:
                 iter_behavioral_clone_coef = self._bc_policy.compute(
                     config=config, iteration=i, learner_elo=pool.learner_elo,
                 )
+                iter_explore_rate = self._explore_rate_policy.compute(
+                    config=config, iteration=i, learner_elo=pool.learner_elo,
+                )
 
                 seats_override = sample_seats.execute(pool)
 
@@ -216,6 +225,7 @@ class TrainModel:
                     iter_imitation_coef=iter_imitation_coef,
                     iter_entropy_coef=iter_entropy_coef,
                     iter_behavioral_clone_coef=iter_behavioral_clone_coef,
+                    iter_explore_rate=iter_explore_rate,
                     seats_override=seats_override,
                     run_benchmark=should_bench,
                 )

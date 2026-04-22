@@ -9,6 +9,7 @@ import pytest
 from training.entities.training_config import TrainingConfig
 from training.use_cases.train_model.policies import (
     EloDecayEntropyPolicy,
+    EloDecayExplorePolicy,
     EloGaussianILPolicy,
     elo_based_lr,
 )
@@ -176,3 +177,60 @@ class TestEloGaussianILPolicy:
         assert smoothed_after > smoothed_before
         assert smoothed_after < 1500.0
         assert spike < 0.3
+
+
+# ---------------------------------------------------------------------------
+# EloDecayExplorePolicy
+# ---------------------------------------------------------------------------
+
+
+class TestEloDecayExplorePolicy:
+    def test_floor_elo_returns_base_explore_rate(self) -> None:
+        cfg = _config(explore_rate=0.10, explore_rate_min=0.01)
+        policy = EloDecayExplorePolicy(alpha=1.0)
+
+        value = policy.compute(cfg, iteration=1, learner_elo=800.0)
+        assert value == pytest.approx(0.10)
+
+    def test_ceiling_elo_returns_min_explore_rate(self) -> None:
+        cfg = _config(explore_rate=0.10, explore_rate_min=0.01)
+        policy = EloDecayExplorePolicy(alpha=1.0)
+
+        value = policy.compute(cfg, iteration=1, learner_elo=2000.0)
+        assert value == pytest.approx(0.01)
+
+    def test_decays_monotonically_as_elo_increases(self) -> None:
+        cfg = _config(explore_rate=0.10, explore_rate_min=0.01)
+        policy = EloDecayExplorePolicy(alpha=1.0)
+
+        low = policy.compute(cfg, iteration=1, learner_elo=900.0)
+        policy._smoothed_elo = None
+        high = policy.compute(cfg, iteration=2, learner_elo=1800.0)
+
+        assert low > high
+
+    def test_default_min_is_base_over_ten(self) -> None:
+        # explore_rate_min unset -> effective_explore_rate_min == explore_rate / 10
+        cfg = _config(explore_rate=0.20)
+        policy = EloDecayExplorePolicy(alpha=1.0)
+
+        value = policy.compute(cfg, iteration=1, learner_elo=2000.0)
+        assert value == pytest.approx(0.02, rel=1e-6)
+
+    def test_min_floored_when_config_zero(self) -> None:
+        cfg = _config(explore_rate=0.10, explore_rate_min=0.0)
+        policy = EloDecayExplorePolicy(alpha=1.0)
+
+        value = policy.compute(cfg, iteration=1, learner_elo=2000.0)
+        # explore_rate_min=0 is replaced with 1e-6 so the power law stays defined.
+        assert value == pytest.approx(1e-6)
+
+    def test_smoothing_uses_ema_with_configured_alpha(self) -> None:
+        cfg = _config(explore_rate=0.10, explore_rate_min=0.01)
+        policy = EloDecayExplorePolicy(alpha=0.1)
+
+        policy.compute(cfg, iteration=1, learner_elo=1000.0)
+        policy.compute(cfg, iteration=2, learner_elo=1400.0)
+
+        expected = 0.1 * 1400.0 + 0.9 * 1000.0
+        assert policy._smoothed_elo == pytest.approx(expected)

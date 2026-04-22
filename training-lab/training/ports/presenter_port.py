@@ -33,7 +33,12 @@ class PresenterPort(ABC):
     def on_iteration_start(self, iteration: int, total: int, elapsed: float) -> None: ...
 
     @abstractmethod
-    def on_selfplay_start(self, config: TrainingConfig, effective_seats: str | None = None) -> None: ...
+    def on_selfplay_start(
+        self,
+        config: TrainingConfig,
+        effective_seats: str | None = None,
+        iter_explore_rate: float | None = None,
+    ) -> None: ...
 
     @abstractmethod
     def on_selfplay_done(self, n_total: int, n_learner: int, elapsed: float) -> None: ...

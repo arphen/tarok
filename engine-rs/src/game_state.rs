@@ -159,14 +159,16 @@ pub enum Announcement {
     Trula = 0,
     Kings = 1,
     PagatUltimo = 2,
-    Valat = 3,
+    KingUltimo = 3,
+    Valat = 4,
 }
 
 impl Announcement {
-    pub const ALL: [Announcement; 4] = [
+    pub const ALL: [Announcement; 5] = [
         Announcement::Trula,
         Announcement::Kings,
         Announcement::PagatUltimo,
+        Announcement::KingUltimo,
         Announcement::Valat,
     ];
 
@@ -175,7 +177,8 @@ impl Announcement {
             0 => Some(Announcement::Trula),
             1 => Some(Announcement::Kings),
             2 => Some(Announcement::PagatUltimo),
-            3 => Some(Announcement::Valat),
+            3 => Some(Announcement::KingUltimo),
+            4 => Some(Announcement::Valat),
             _ => None,
         }
     }
@@ -234,6 +237,8 @@ impl KontraTarget {
             Announcement::Trula => KontraTarget::Trula,
             Announcement::Kings => KontraTarget::Kings,
             Announcement::PagatUltimo => KontraTarget::PagatUltimo,
+            // KingUltimo has no dedicated kontra target; alias to game-level.
+            Announcement::KingUltimo => KontraTarget::Game,
             Announcement::Valat => KontraTarget::Valat,
         }
     }
