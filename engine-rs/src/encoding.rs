@@ -1,51 +1,53 @@
 /// State encoding — writes features directly into a numpy buffer.
 ///
-/// v6 encoding (578 dims):
-///  - Header card planes (162 dims):
+/// v7 encoding (531 dims):
+///  - Header card planes (108 dims):
 ///      * 0..53   : own hand
 ///      * 54..107 : active trick plane (cards in the current trick)
-///      * 108..161: declarer forced-retention plane (public; taroks and
-///                  kings in the picked talon group that declarer must
-///                  still hold)
-///  - v1 base features tail (60 dims): position, contract, phase,
-///    tricks_won_by_team, tricks_played, decision_type, highest_bid,
-///    passed_players, announcements, kontra, role.
+///    (v6's forced-retention plane is dropped — those cards are already
+///     pinned onto the declarer column of the belief block.)
+///  - v1 base features tail (56 dims): position, contract, phase,
+///    tricks_played, decision_type, highest_bid, passed_players,
+///    announcements (own-team + opp-team), kontra, role, partner_rel.
 ///  - Centaur trick context (11 dims):
 ///      * team points: mine/70, opp/70, current_trick/20
 ///      * trick leader relative seat one-hot (4)
 ///      * trick currently-winning relative seat one-hot (4)
-///  - Belief block 222..383 (162 dims): 3×54 opponent card likelihoods
+///  - Belief block 175..336 (162 dims): 3×54 opponent card likelihoods
 ///    with suit-void, tarok-void, unpicked-talon-retirement, and
 ///    forced-retention (declarer must-hold) constraints applied.
-///  - Trick context 384..389 (6 dims): position + lead suit/type.
-///  - Per-opponent played planes 390..551 (162 dims): 3×54 cards played.
+///  - Trick context 337..342 (6 dims): position + lead suit/type.
+///  - Per-opponent played planes 343..504 (162 dims): 3×54 cards played.
 ///    Declarer's plane additionally includes publicly-retired unpicked
 ///    talon cards so the network can count remaining suits easily.
-///  - Per-opponent tarok-void flags 552..554 (3 dims).
-///  - Per-opponent suit-void flags 555..566 (12 dims).
-///  - Live kings one-hot 567..570 (4 dims).
-///  - Live trula one-hot 571..573 (3 dims): pagat / mond / skis.
-///  - Called-king suit one-hot 574..577 (4 dims).
+///  - Per-opponent tarok-void flags 505..507 (3 dims).
+///  - Per-opponent suit-void flags 508..519 (12 dims).
+///  - Live kings one-hot 520..523 (4 dims).
+///  - Live trula one-hot 524..526 (3 dims): pagat / mond / skis.
+///  - Called-king suit one-hot 527..530 (4 dims).
 ///
 /// Rule semantics:
 ///  - `talon_revealed` is public (Slovenian Tarok).  Unpicked talon cards
 ///    are publicly retired — they appear in the belief `known` set and in
 ///    the declarer's per-opp played plane (for counting purposes).
-///  - The "declarer forced retention" plane contains cards that declarer
-///    is publicly known to still hold: taroks and kings from the picked
-///    talon group (these cards cannot legally be discarded).  The belief
-///    block pins these cards to the declarer's column.
-///  - Role one-hot doubles as the partner-known signal (all-zeros ⇒ role
-///    not yet determined).
+///  - Forced-retention: taroks and kings from the picked talon group
+///    cannot legally be discarded, so they are publicly known to still
+///    be in declarer's hand.  The belief block pins these cards onto the
+///    declarer's column (prob 1.0; 0 for other opponent columns).
+///  - Role one-hot (208..210 of v6 equivalent) reports the acting
+///    player's own role (known post-bidding).  Partner identity (which
+///    seat holds the called king) is a separate feature: partner_rel,
+///    populated only for players who actually know (partner themselves
+///    always; everyone else after the king has been played).
 use crate::card::*;
 use crate::game_state::*;
 use crate::trick_eval::evaluate_trick;
 
 /// v1 base features size (header planes + base scalars + centaur block).
 /// Belief block always starts immediately after this.
-pub const V1_STATE_SIZE: usize = 222;
+pub const V1_STATE_SIZE: usize = 175;
 /// Contract one-hot feature offset in the flat state vector.
-pub const CONTRACT_OFFSET: usize = 166;
+pub const CONTRACT_OFFSET: usize = 112;
 /// Contract one-hot feature length.
 pub const CONTRACT_SIZE: usize = 10;
 /// Belief feature block offset in the flat state vector.
@@ -66,7 +68,7 @@ const LIVE_KINGS_SIZE: usize = 4;
 const LIVE_TRULA_SIZE: usize = 3;
 /// Called-king suit one-hot.
 const CALLED_KING_SIZE: usize = 4;
-/// v6 full state size.
+/// v7 full state size.
 pub const STATE_SIZE: usize = V1_STATE_SIZE
     + BELIEF_SIZE
     + TRICK_CTX_SIZE
@@ -75,9 +77,9 @@ pub const STATE_SIZE: usize = V1_STATE_SIZE
     + SUIT_VOID_SIZE
     + LIVE_KINGS_SIZE
     + LIVE_TRULA_SIZE
-    + CALLED_KING_SIZE; // 578
+    + CALLED_KING_SIZE; // 531
 pub const ORACLE_EXTRA: usize = 3 * DECK_SIZE; // 162
-pub const ORACLE_STATE_SIZE: usize = STATE_SIZE + ORACLE_EXTRA; // 740
+pub const ORACLE_STATE_SIZE: usize = STATE_SIZE + ORACLE_EXTRA; // 693
 
 /// Decision type codes matching Python DecisionType enum.
 pub const DT_BID: u8 = 0;
@@ -124,15 +126,9 @@ pub fn encode_state(buf: &mut [f32], state: &GameState, player: u8, decision_typ
     }
     o += DECK_SIZE;
 
-    // Declarer forced-retention plane (54 binary, public).
-    // Contains cards from the picked talon group that declarer MUST still
-    // hold (taroks and kings — not legally discardable).  From every
-    // player's perspective this is public knowledge; non-declarers use it
-    // to pin these cards onto declarer in the belief block below.
-    for c in forced_retention.iter() {
-        buf[o + c.0 as usize] = 1.0;
-    }
-    o += DECK_SIZE;
+    // (v7: the forced-retention plane is gone — those cards are pinned
+    //  onto the declarer's column of the belief block below, which is
+    //  all the information it ever carried.)
 
     // Player position relative to dealer (4 one-hot)
     let rel_pos = ((player as usize + NUM_PLAYERS - state.dealer as usize) % NUM_PLAYERS) as usize;
@@ -156,10 +152,11 @@ pub fn encode_state(buf: &mut [f32], state: &GameState, player: u8, decision_typ
     }
     o += 3;
 
-    // Tricks won by my team (normalized 0-1)
+    // Running team card-point totals (used by centaur block) +
+    // tricks_played.  Team tricks-won count is omitted in v7 — it's
+    // derivable and doesn't drive decisions.
     let my_team = state.get_team(player);
     let contract_opt = state.contract;
-    let mut my_tricks: u32 = 0;
     let mut my_team_points: i32 = 0;
     let mut opp_team_points: i32 = 0;
     for (i, trick) in state.tricks.iter().enumerate() {
@@ -169,14 +166,11 @@ pub fn encode_state(buf: &mut [f32], state: &GameState, player: u8, decision_typ
             .map(|j| trick.cards[j].1.points() as i32)
             .sum();
         if state.get_team(tr.winner) == my_team {
-            my_tricks += 1;
             my_team_points += trick_cards_points;
         } else {
             opp_team_points += trick_cards_points;
         }
     }
-    buf[o] = my_tricks as f32 / 12.0;
-    o += 1;
 
     // Tricks played (normalized 0-1)
     buf[o] = state.tricks_played() as f32 / 12.0;
@@ -229,14 +223,31 @@ pub fn encode_state(buf: &mut [f32], state: &GameState, player: u8, decision_typ
     }
     o += 4;
 
-    // Announcements made (4 binary)
-    let all_ann = state.all_announcements();
-    for i in 0..4u8 {
-        if all_ann & (1 << i) != 0 {
-            buf[o + i as usize] = 1.0;
+    // Announcements split by team (4 + 4 = 8 binary).  Own-team first,
+    // opposition second.  Each 4-bit slot is {trula, kings, pagat, valat}.
+    // During bidding the team partition is not yet defined — both slots
+    // stay zero until declarer is known.
+    if state.declarer.is_some() {
+        let mut own_ann: u8 = 0;
+        let mut opp_ann: u8 = 0;
+        for seat in 0..NUM_PLAYERS as u8 {
+            let a = state.announcements[seat as usize];
+            if state.get_team(seat) == my_team {
+                own_ann |= a;
+            } else {
+                opp_ann |= a;
+            }
+        }
+        for i in 0..4u8 {
+            if own_ann & (1 << i) != 0 {
+                buf[o + i as usize] = 1.0;
+            }
+            if opp_ann & (1 << i) != 0 {
+                buf[o + 4 + i as usize] = 1.0;
+            }
         }
     }
-    o += 4;
+    o += 8;
 
     // Kontra levels (5 features, normalized)
     for i in 0..KontraTarget::NUM {
@@ -246,8 +257,9 @@ pub fn encode_state(buf: &mut [f32], state: &GameState, player: u8, decision_typ
     o += 5;
 
     // Role one-hot (3 features: is_declarer, is_partner, is_opposition).
-    // All zeros ⇒ role not yet determined (also serves as the old
-    // "partner_known = 0" signal).
+    // The acting player always knows their own role once bidding ends
+    // (declarer is public; holding the called king ⇒ partner; else
+    // opposition).  All-zero ⇒ bidding still in progress.
     if let Some(decl) = state.declarer {
         if player == decl {
             buf[o] = 1.0; // is_declarer
@@ -260,6 +272,25 @@ pub fn encode_state(buf: &mut [f32], state: &GameState, player: u8, decision_typ
         }
     }
     o += 3;
+
+    // Partner relative seat (4 one-hot; 0 = self is partner).  This
+    // identifies *which seat* holds the called king.  Set only for
+    // players who actually know:
+    //   * the partner themselves (always — they hold the king),
+    //   * any seat once the king has been publicly played,
+    //   * a self-called-king declarer (partner == declarer).
+    // Declarer cannot otherwise distinguish which opponent is the
+    // partner until the king falls, so this stays all-zero for them.
+    if let Some(part) = state.partner {
+        let known = player == part
+            || state.is_partner_revealed()
+            || state.declarer == Some(part);
+        if known {
+            let rel = ((part as usize + NUM_PLAYERS - player as usize) % NUM_PLAYERS) as usize;
+            buf[o + rel] = 1.0;
+        }
+    }
+    o += 4;
 
     // --- v6 Centaur trick context (11 dims) ---
     // High-signal features for the early/mid-game (the centaur hands off

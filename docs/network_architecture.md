@@ -21,9 +21,9 @@ A standard RL environment has a single homogeneous action space. In Tarok, a pla
 
 ## 2. Network Topology & Dimensions
 
-### Inputs (State Encoding v6)
-- **Actor State (`STATE_SIZE=578`):** Represents imperfect information (v6 encoding, Slovenian-talon semantics). Includes the player's current hand, the active trick plane, the declarer **forced-retention plane** (54 dims: taroks and kings in the picked talon group are public knowledge), bid history, trick counts, running team card-point totals, trick leader & currently-winning seat, announcements, **opponent belief probability vectors** (3×54 = 162 dims, with forced-retention pinned on the declarer column and tarok/suit-void constraints applied), **trick context features** (6 dims), **per-opponent played-cards identity planes** (3×54 = 162 dims; declarer's plane also carries publicly-retired unpicked talon cards), and **public-memory features** (26 dims: per-opponent tarok/suit-void flags, live kings one-hot, live trula one-hot, called-king suit one-hot).
-- **Oracle State (`ORACLE_STATE_SIZE=740`):** During training, the perfect-information Critic receives the base 578 dimensions *plus* 162 additional dimensions (3 opponents $\times$ 54 possible cards) that reveal exactly where every unplayed card is located.
+### Inputs (State Encoding v7)
+- **Actor State (`STATE_SIZE=531`):** Represents imperfect information (v7 encoding, Slovenian-talon semantics). Includes the player's current hand, the active trick plane, bid history, trick counts, running team card-point totals, trick leader & currently-winning seat, **announcements split by team** (4 dims own-team + 4 dims opposition-team), **role one-hot** (declarer / partner / opposition — the acting player's own role is always known), **partner relative seat** one-hot (4 dims; populated only for players who actually know who holds the called king), **opponent belief probability vectors** (3×54 = 162 dims, with declarer forced-retention pinned on the declarer column and tarok/suit-void constraints applied), **trick context features** (6 dims), **per-opponent played-cards identity planes** (3×54 = 162 dims; declarer's plane also carries publicly-retired unpicked talon cards), and **public-memory features** (26 dims: per-opponent tarok/suit-void flags, live kings one-hot, live trula one-hot, called-king suit one-hot).
+- **Oracle State (`ORACLE_STATE_SIZE=693`):** During training, the perfect-information Critic receives the base 531 dimensions *plus* 162 additional dimensions (3 opponents $\times$ 54 possible cards) that reveal exactly where every unplayed card is located.
 
 ### v2 Belief Tracking (Public Belief State)
 The v2 encoding adds **Bayesian belief vectors** for each opponent:
@@ -35,15 +35,15 @@ The v2 encoding adds **Bayesian belief vectors** for each opponent:
 All observations first pass through a shared sequence of layers, followed by **residual blocks** and **card-level multi-head self-attention**:
 
 **Input Projection:**
-1. `Linear(578, 256)` → `LayerNorm(256)` → `ReLU`
+1. `Linear(531, 256)` → `LayerNorm(256)` → `ReLU`
 2. `Linear(256, 256)` → `LayerNorm(256)` → `ReLU`
 
 **Residual Blocks (×2):**
 Each block: `LayerNorm(256)` → `Linear(256, 256)` → `ReLU` → `Linear(256, 256)` → `Add(residual)`
 
 **Card-Level Self-Attention:**
-- Extracts per-card features (hand, played, trick, 3× belief = 6 channels per card)
-- 54 card tokens → `Linear(6, 64)` → `MultiheadAttention(64, 4 heads)` → `LayerNorm` → `MeanPool` → `Linear(64, 64)`
+- Extracts per-card features (hand, active trick, 3× belief = 5 channels per card)
+- 54 card tokens → `Linear(5, 64)` → `MultiheadAttention(64, 4 heads)` → `LayerNorm` → `MeanPool` → `Linear(64, 64)`
 - Captures card-card relationships (suit correlations, void inference patterns)
 
 **Fusion:**
@@ -51,7 +51,7 @@ Each block: `LayerNorm(256)` → `Linear(256, 256)` → `ReLU` → `Linear(256, 
 
 ### The Critic Backbone (Oracle Enabled)
 A secondary, entirely distinct backbone is instantiated for the Critic:
-1. `Linear(740, 256)` → `LayerNorm(256)` → `ReLU`
+1. `Linear(693, 256)` → `LayerNorm(256)` → `ReLU`
 2. `Linear(256, 256)` → `LayerNorm(256)` → `ReLU`
 3. `ResidualBlock(256)` (×1)
 

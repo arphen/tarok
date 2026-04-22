@@ -5,8 +5,8 @@ It is based on the active Rust self-play path and encoder implementation.
 
 ## Short Answer
 
-- The policy acts on a 578-dimensional state vector per decision (v6).
-- Optional oracle critic training uses a 740-dimensional vector.
+- The policy acts on a 531-dimensional state vector per decision (v7).
+- Optional oracle critic training uses a 693-dimensional vector.
 - The agent sees previous trick information as public-card planes plus
   explicit per-opponent memory features (tarok-void, suit-void, per-opp
   played cards, live kings, live trula).  It does not receive an ordered
@@ -39,8 +39,8 @@ So the real environment state space is combinatorially huge.
 
 The policy/value network receives a fixed-size encoded vector:
 
-- Imperfect info actor state size: 578
-- Oracle critic state size: 740 (= 578 + 162)
+- Imperfect info actor state size: 531
+- Oracle critic state size: 693 (= 531 + 162)
 
 ## Decision Points During Self-Play
 
@@ -53,66 +53,76 @@ At each decision point, self-play encodes state from the acting seat's perspecti
 
 Note: the network architecture has an announce head, but run_self_play currently emits these 4 decision types.
 
-## 578-Dim Observation Layout (v6)
+## 531-Dim Observation Layout (v7)
 
 All offsets are zero-based and match engine-rs/src/encoding.rs.
 
 Slovenian Tarok rule: the entire talon is revealed to all players before
 the declarer picks one group.  The declarer's discard (put_down) remains
 private.  Non-picked groups are publicly retired — they can never appear
-in tricks.  In v6 these unpicked-talon cards are folded into the
-declarer's per-opponent played plane (390..551) rather than a separate
+in tricks.  In v7 these unpicked-talon cards are folded into the
+declarer's per-opponent played plane (343..504) rather than a separate
 global played plane.  Of the picked group, taroks and kings cannot
 legally be discarded, so they are publicly known to still be in the
-declarer's hand and are surfaced via the forced-retention plane
-(108..161).
+declarer's hand; the v6 dedicated forced-retention plane was dropped —
+that information is now carried by the belief block pinning those
+cards onto the declarer's column (at probability 1.0) at offset 175..336.
 
 | Slice | Size | Meaning |
 |---|---:|---|
 | 0..53 | 54 | Own hand (binary card indicators) |
 | 54..107 | 54 | Active trick plane (cards currently on the table) |
-| 108..161 | 54 | Declarer forced-retention plane: taroks & kings from picked talon group (public) |
-| 162..165 | 4 | Seat position relative to dealer (one-hot) |
-| 166..175 | 10 | Contract one-hot |
-| 176..178 | 3 | Phase one-hot: bidding / trick_play / other |
-| 179 | 1 | Tricks won by my team (normalized by 12) |
-| 180 | 1 | Tricks played (normalized by 12) |
-| 181..185 | 5 | Decision type one-hot |
-| 186..194 | 9 | Highest bid so far one-hot (no_bid + contracts) |
-| 195..198 | 4 | Passed players bit flags (dealer-relative order) |
-| 199..202 | 4 | Any team announced: trula, kings, pagat, valat |
-| 203..207 | 5 | Kontra levels (normalized) |
-| 208..210 | 3 | Role one-hot: declarer / partner / opposition (all-zero ⇒ role unknown) |
-| 211..213 | 3 | Centaur team points: mine/70, opp/70, current_trick/20 |
-| 214..217 | 4 | Trick leader relative seat one-hot |
-| 218..221 | 4 | Trick currently-winning seat relative one-hot |
-| 222..383 | 162 | Opponent belief block: 3 opponents × 54 cards (with forced-retention + void constraints) |
-| 384..389 | 6 | Trick context: trick position + lead type/suit |
-| 390..551 | 162 | Per-opponent played identity planes: 3 opponents × 54 (declarer plane ∪ unpicked talon) |
-| 552..554 | 3 | Per-opponent tarok-void flag |
-| 555..566 | 12 | Per-opponent suit-void flags (3 opponents × 4 suits) |
-| 567..570 | 4 | Live kings one-hot (per suit) — 1 if that king has not been played |
-| 571..573 | 3 | Live trula one-hot (pagat, mond, skis) — 1 if not yet played |
-| 574..577 | 4 | Called-king suit one-hot (public once king is called) |
+| 108..111 | 4 | Seat position relative to dealer (one-hot) |
+| 112..121 | 10 | Contract one-hot |
+| 122..124 | 3 | Phase one-hot: bidding / trick_play / other |
+| 125 | 1 | Tricks played (normalized by 12) |
+| 126..130 | 5 | Decision type one-hot |
+| 131..139 | 9 | Highest bid so far one-hot (no_bid + contracts) |
+| 140..143 | 4 | Passed players bit flags (dealer-relative order) |
+| 144..147 | 4 | Own-team announcements: trula, kings, pagat, valat |
+| 148..151 | 4 | Opponent-team announcements: trula, kings, pagat, valat |
+| 152..156 | 5 | Kontra levels (normalized) |
+| 157..159 | 3 | Role one-hot: declarer / partner / opposition (all-zero ⇒ bidding) |
+| 160..163 | 4 | Partner relative seat one-hot (0 = self is partner; all-zero ⇒ unknown) |
+| 164..166 | 3 | Centaur team points: mine/70, opp/70, current_trick/20 |
+| 167..170 | 4 | Trick leader relative seat one-hot |
+| 171..174 | 4 | Trick currently-winning seat relative one-hot |
+| 175..336 | 162 | Opponent belief block: 3 opponents × 54 cards (with forced-retention pinning + void constraints) |
+| 337..342 | 6 | Trick context: trick position + lead type/suit |
+| 343..504 | 162 | Per-opponent played identity planes: 3 opponents × 54 (declarer plane ∪ unpicked talon) |
+| 505..507 | 3 | Per-opponent tarok-void flag |
+| 508..519 | 12 | Per-opponent suit-void flags (3 opponents × 4 suits) |
+| 520..523 | 4 | Live kings one-hot (per suit) — 1 if that king has not been played |
+| 524..526 | 3 | Live trula one-hot (pagat, mond, skis) — 1 if not yet played |
+| 527..530 | 4 | Called-king suit one-hot (public once king is called) |
 
-Total: 578.
+Total: 531.
 
-### v6 vs v5 changes (blank slate — no checkpoint migration)
+### v7 vs v6 changes (blank slate — no checkpoint migration)
 
-- Removed: global "publicly played" plane (subsumed by per-opp planes
-  with declarer ∪ unpicked talon), `partner_known` flag (subsumed by the
-  role one-hot: all-zeros means unknown), hand-strength summary (low
-  mid-play signal).
-- Added: running team card-point totals + current-trick value, trick
-  leader relative seat, trick currently-winning seat.  These three
-  features target the early/mid trick regime where the NN drives play
-  (the centaur hands off to PIMC from trick 9 onward).
-- Header plane reorder for cleaner card-attention channels:
-  hand → active trick → declarer forced-retention.
+- Removed: dedicated declarer forced-retention plane (−54 dims) — those
+  cards are already pinned onto the declarer's column of the belief
+  block (probability 1.0), which is all the information the plane ever
+  carried.
+- Removed: "tricks won by my team" scalar (−1 dim) — derivable and not
+  decision-relevant; the team card-point totals in the centaur block
+  already cover "how well are we doing?" information.
+- Changed: single 4-bit "any team announced" split into two 4-bit
+  blocks — own-team announcements and opponent-team announcements
+  (+4 dims).  This matters because reactive kontras / counter-plays
+  depend on *who* announced what, not on a team-agnostic flag.
+- Added: partner relative seat one-hot (+4 dims).  Previously the
+  network only had a binary "is partner" role bit but no signal about
+  *which seat* held the called king.  The partner themselves always
+  know (they hold the king); any seat knows once the king falls; and
+  a self-called-king declarer also knows.  Without this, the hidden
+  partner had no structural way to avoid blowing a big tarok onto
+  the partner's trick.
+- Header plane reorder stays the same as v6 (hand → active trick).
 
-## Oracle 740-Dim Layout
+## Oracle 693-Dim Layout
 
-Oracle state = 578 base + 162 extra dims:
+Oracle state = 531 base + 162 extra dims:
 
 - Extra 162 dims are exact opponent hands: 3 opponents × 54 cards.
 
@@ -140,7 +150,7 @@ So history is present mostly as public-card sets and derived summaries/inference
 
 ## Imperfect Information And Belief Encoding
 
-The belief block (222..383) is built per acting player:
+The belief block (175..336) is built per acting player:
 
 - Known cards are removed: own hand, completed-trick cards, current-trick
   cards, and unpicked-talon cards (which are public and publicly
@@ -148,7 +158,9 @@ The belief block (222..383) is built per acting player:
 - Forced retention: every tarok and king in the picked talon group is
   public knowledge that it sits in the declarer's hand.  In the belief
   block this pins probability 1.0 onto the declarer's column (and 0 on
-  the other two opponent columns) for each such card.
+  the other two opponent columns) for each such card.  In v7 this
+  pinning is the *only* surface for forced-retention — the v6 dedicated
+  plane was dropped.
 - For the remaining unknown cards, each opponent initially gets uniform
   1/3 probability.
 - If trick history implies an opponent is void in a suit (failed to
@@ -158,12 +170,20 @@ The belief block (222..383) is built per acting player:
   is marked tarok-void: all remaining tarok cards get zero probability
   for that opponent.
 
-Partner-known flag (233) is true when the partner is publicly revealed
-(called king has fallen) OR when the acting player already knows their
-own pairing — the declarer always knows, and the hidden partner knows
-as soon as the bidding is over because they hold the called king.
+Role and partner identity are carried by two adjacent blocks:
 
-The public-memory tail (600..625) surfaces high-signal features
+- Role one-hot (157..159): declarer / partner / opposition.  The acting
+  player always knows their own role once bidding ends (declarer is
+  public; holding the called king ⇒ partner; otherwise opposition).
+  All-zero means bidding is still in progress.
+- Partner relative seat (160..163): one-hot identifying *which seat*
+  holds the called king.  Populated only for players who actually know
+  — the partner themselves, every seat once the called king has been
+  publicly played, and self-called-king declarers.  Declarer cannot
+  otherwise distinguish which opponent is the partner, so this stays
+  all-zero for them.
+
+The public-memory tail (505..530) surfaces high-signal features
 explicitly so the network doesn't have to re-derive them:
 
 - 3 dims: per-opponent tarok-void flags.
@@ -173,7 +193,7 @@ explicitly so the network doesn't have to re-derive them:
 - 4 dims: called-king suit one-hot (public once the king has been called).
 
 Opponent order in the 3x54 belief block, the 3x54 per-opponent played
-planes, and all per-opponent v5 features is relative to the current
+planes, and all per-opponent features is relative to the current
 player:
 
 - Opponent +1 seat, then +2, then +3 (modulo 4).
@@ -216,7 +236,7 @@ Card-play action mapping is direct card index 0..53 in canonical deck order:
 
 Main tensors in the dictionary returned by run_self_play:
 
-- states: (N, 578) float32
+- states: (N, 531) float32
 - actions: (N,) uint16
 - log_probs: (N,) float32
 - values: (N,) float32
@@ -226,7 +246,7 @@ Main tensors in the dictionary returned by run_self_play:
 - players: (N,) uint8
 - game_ids: (N,) uint32
 - scores: (num_games, 4) int32
-- oracle_states: (N, 740) float32 (optional)
+- oracle_states: (N, 693) float32 (optional)
 
 ## How Rewards Are Assigned For PPO
 

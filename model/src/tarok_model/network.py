@@ -5,7 +5,7 @@ v2 Architecture upgrades:
   - Multi-head self-attention over card embeddings for relational reasoning
   - Oracle guiding: actor latent space aligned with oracle critic via distillation
   - Expanded state encoding with belief tracking and public-memory
-    features (578 dims, v6)
+    features (531 dims, v7)
 
 Supports five decision types with separate action heads:
   - Bidding (9 actions: pass + 8 contracts)
@@ -128,7 +128,7 @@ class TarokNet(nn.Module):
         # Each card has: own_hand(1) + played(1) + current_trick(1) +
         #                belief_opp1(1) + belief_opp2(1) + belief_opp3(1) = 6 features
         self.card_attention = CardAttention(
-            num_cards=54, card_dim=6, num_heads=4, hidden_dim=hidden_size // 4,
+            num_cards=54, card_dim=5, num_heads=4, hidden_dim=hidden_size // 4,
         )
         # Fuse attention output with backbone
         attn_hidden = hidden_size // 4
@@ -199,19 +199,17 @@ class TarokNet(nn.Module):
     def _extract_card_features(self, state: torch.Tensor) -> torch.Tensor:
         """Extract per-card feature matrix from the flat state tensor.
 
-        Returns (batch, 54, 6) tensor:
+        Returns (batch, 54, 5) tensor:
           channel 0: own hand
           channel 1: active trick cards
-          channel 2: declarer forced-retention (public must-hold)
-          channel 3-5: belief probabilities for opponents 1-3
+          channel 2-4: belief probabilities for opponents 1-3
         """
         if state.dim() == 1:
             state = state.unsqueeze(0)
         B = state.shape[0]
 
         hand = state[:, 0:54]           # own hand
-        played = state[:, 54:108]       # active trick cards (v6 channel 1)
-        trick = state[:, 108:162]       # declarer forced-retention (v6 channel 2)
+        trick = state[:, 54:108]        # active trick cards
         # Belief vectors start at the canonical belief offset.
         # Zero-extend once so legacy shorter state encodings still produce
         # fixed-width belief slices without shape-dependent Python branching.
@@ -227,8 +225,8 @@ class TarokNet(nn.Module):
         b2 = state_ext[:, belief_start + 54:belief_start + 108]
         b3 = state_ext[:, belief_start + 108:belief_start + 162]
 
-        # Stack: (B, 54, 6)
-        return torch.stack([hand, played, trick, b1, b2, b3], dim=-1)
+        # Stack: (B, 54, 5)
+        return torch.stack([hand, trick, b1, b2, b3], dim=-1)
 
     # ------------------------------------------------------------------
     # Auto-migration: pad old checkpoints to new dimensions
