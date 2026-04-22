@@ -237,3 +237,77 @@ def test_shaped_rewards_capture_opponent_mond_is_positive() -> None:
     mond_owner_return = float(returns[1])
     assert winner_return > 0.0
     assert mond_owner_return < 0.0
+
+
+# ---------------------------------------------------------------------------
+# Duplicate RL: precomputed_rewards fallback (docs/double_rl.md §4.1).
+# ---------------------------------------------------------------------------
+
+
+def test_precomputed_rewards_override_replaces_score_extraction() -> None:
+    """When ``precomputed_rewards`` is present, ``scores`` is ignored entirely."""
+    n = 3
+    game_ids = np.zeros(n, dtype=np.int64)
+    players = np.zeros(n, dtype=np.int8)
+    # Rust-computed scores that would normally drive reward...
+    scores = np.array([[999.0, 0.0, 0.0, 0.0]], dtype=np.float32)
+    values = np.zeros(n, dtype=np.float32)
+    raw = _make_raw(n, game_ids=game_ids, players=players, scores=scores, values=values)
+
+    # ...but the duplicate adapter injects its own reward array whose terminal
+    # entry is the duplicate advantage. Non-terminals are zero.
+    duplicate_reward = np.array([0.0, 0.0, 0.42], dtype=np.float32)
+    raw["precomputed_rewards"] = duplicate_reward
+
+    out = prepare_batched(raw, gamma=1.0, gae_lambda=1.0)
+    returns = out["vad"][:, 2].numpy()
+    # With gamma=1, lambda=1, the constant-return = terminal reward = 0.42.
+    assert returns == pytest.approx(np.full(n, 0.42), abs=1e-6)
+
+
+def test_precomputed_rewards_suppresses_special_shaped_bonuses() -> None:
+    """Duplicate mode disables trick-shaping; both tables saw the same trick."""
+    raw = _make_raw(
+        4,
+        game_ids=np.zeros(4, dtype=np.int64),
+        players=np.array([0, 1, 2, 3], dtype=np.int8),
+        scores=np.zeros((1, 4), dtype=np.float32),
+        values=np.zeros(4, dtype=np.float32),
+        traces=[
+            {
+                "dealer": 0,
+                # A Mond-loses-to-Skis trick that would normally shape rewards.
+                "cards_played": [(1, 20), (2, 21), (3, 22), (0, 23)],
+            }
+        ],
+    )
+    raw["precomputed_rewards"] = np.zeros(4, dtype=np.float32)
+
+    out = prepare_batched(raw, gamma=1.0, gae_lambda=1.0)
+    returns = out["vad"][:, 2].numpy()
+    # Bonuses would make Mond-owner negative and Skis-owner positive. With
+    # duplicate rewards injected, they should all be zero.
+    assert returns == pytest.approx(np.zeros(4), abs=1e-6)
+
+
+def test_precomputed_rewards_shape_mismatch_raises() -> None:
+    raw = _make_raw(3)
+    raw["precomputed_rewards"] = np.zeros(5, dtype=np.float32)  # wrong length
+    with pytest.raises(ValueError, match="precomputed_rewards shape"):
+        prepare_batched(raw)
+
+
+def test_missing_precomputed_rewards_uses_legacy_path() -> None:
+    """``precomputed_rewards=None`` preserves the current behaviour exactly."""
+    n = 3
+    game_ids = np.zeros(n, dtype=np.int64)
+    players = np.zeros(n, dtype=np.int8)
+    scores = np.array([[80.0, 0.0, 0.0, 0.0]], dtype=np.float32)
+    values = np.zeros(n, dtype=np.float32)
+
+    raw = _make_raw(n, game_ids=game_ids, players=players, scores=scores, values=values)
+    assert "precomputed_rewards" not in raw
+
+    out = prepare_batched(raw, gamma=1.0, gae_lambda=1.0)
+    returns = out["vad"][:, 2].numpy()
+    assert returns == pytest.approx(np.full(n, 0.80), abs=1e-6)

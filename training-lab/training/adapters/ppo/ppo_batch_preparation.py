@@ -169,10 +169,24 @@ def prepare_batched(raw: dict[str, Any], gamma: float = 0.99, gae_lambda: float 
         if int(game_ids_np.min()) < 0:
             raise ValueError("game_ids must be non-negative")
     gids = game_ids_np % scores_np.shape[0] if scores_np.shape[0] > 0 else game_ids_np
-    rewards_np = scores_np[gids, players_np].astype(np.float32) / 100.0
-    if scores_np.shape[0] > 0:
-        shaped_bonus_by_game = _compute_special_shaped_bonus_by_game(raw, int(scores_np.shape[0]))
-        rewards_np = rewards_np + shaped_bonus_by_game[gids, players_np]
+    precomputed_rewards = raw.get("precomputed_rewards")
+    if precomputed_rewards is not None:
+        # Duplicate-RL conservative mode: the reward source has been replaced by
+        # an adapter that supplies the per-step terminal reward directly. Skip
+        # the score-based extraction and any additional shaping — the adapter
+        # is responsible for emitting exactly the reward the PPO update should
+        # receive. See docs/double_rl.md §4.1.
+        rewards_np = np.asarray(precomputed_rewards, dtype=np.float32)
+        if rewards_np.shape != (n_total,):
+            raise ValueError(
+                f"precomputed_rewards shape {rewards_np.shape} does not match "
+                f"experience count {n_total}"
+            )
+    else:
+        rewards_np = scores_np[gids, players_np].astype(np.float32) / 100.0
+        if scores_np.shape[0] > 0:
+            shaped_bonus_by_game = _compute_special_shaped_bonus_by_game(raw, int(scores_np.shape[0]))
+            rewards_np = rewards_np + shaped_bonus_by_game[gids, players_np]
 
     traj_keys = game_ids_np.astype(np.int64) * 4 + players_np.astype(np.int64)
     sort_idx = np.lexsort((np.arange(n_total), traj_keys))

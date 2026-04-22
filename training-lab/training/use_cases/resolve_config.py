@@ -7,6 +7,7 @@ from typing import Any
 
 from training.entities.league import LeagueConfig, LeagueOpponent
 from training.entities.training_config import TrainingConfig
+from training.entities.duplicate_config import DuplicateConfig
 from training.ports.config_port import ConfigPort
 
 
@@ -49,6 +50,26 @@ def _parse_league(raw: dict[str, Any], default_outplace_unit_weight: float) -> L
     )
 
 
+def _parse_duplicate(raw: dict[str, Any]) -> DuplicateConfig:
+    """Parse the optional ``duplicate:`` block from a YAML dict.
+
+    An absent or empty block yields a default :class:`DuplicateConfig` which is
+    equivalent to the feature being disabled.
+    """
+    if not raw:
+        return DuplicateConfig()
+    return DuplicateConfig(
+        enabled=bool(raw.get("enabled", False)),
+        actor_only=bool(raw.get("actor_only", False)),
+        pairing=str(raw.get("pairing", "rotation_8game")),
+        pods_per_iteration=int(raw.get("pods_per_iteration", 400)),
+        shadow_source=str(raw.get("shadow_source", "previous_iteration")),
+        apply_shaped_bonuses=bool(raw.get("apply_shaped_bonuses", False)),
+        reward_model=str(raw.get("reward_model", "shadow_score_diff")),
+        rng_seed=int(raw.get("rng_seed", 0)),
+    )
+
+
 class ResolveConfig:
     def __init__(self, config_loader: ConfigPort):
         self._loader = config_loader
@@ -62,6 +83,7 @@ class ResolveConfig:
 
         default_outplace_unit_weight = float(max(1, int(merged.get("outplace_session_size", 50))))
         league = _parse_league(merged.get("league") or {}, default_outplace_unit_weight)
+        duplicate = _parse_duplicate(merged.get("duplicate") or {})
 
         raw_bench_checkpoints = merged.get("benchmark_checkpoints", [0, 4, 7])
         bench_checkpoints = tuple(sorted({int(x) for x in raw_bench_checkpoints if int(x) >= 0}))
@@ -122,4 +144,5 @@ class ResolveConfig:
             oracle_critic=bool(merged.get("oracle_critic", True)),
             human_data_dir=merged.get("human_data_dir"),
             league=league,
+            duplicate=duplicate,
         )

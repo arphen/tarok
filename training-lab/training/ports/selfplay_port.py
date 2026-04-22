@@ -3,7 +3,11 @@
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
-from typing import Any
+from typing import TYPE_CHECKING, Any
+
+if TYPE_CHECKING:
+    from training.entities.duplicate_pod import DuplicatePod
+    from training.entities.duplicate_run_result import DuplicateRunResult
 
 
 class SelfPlayPort(ABC):
@@ -41,3 +45,35 @@ class SelfPlayPort(ABC):
         label ``"nn"`` (``min_nn_per_game > 1``), outcomes are accumulated
         across *all* nn seats vs each opponent seat.
         """
+
+    def run_seeded_pods(
+        self,
+        learner_path: str,
+        shadow_path: str,
+        pods: list["DuplicatePod"],
+        explore_rate: float,
+        concurrency: int,
+        include_oracle_states: bool = False,
+        lapajne_mc_worlds: int | None = None,
+        lapajne_mc_sims: int | None = None,
+        centaur_handoff_trick: int | None = None,
+        centaur_pimc_worlds: int | None = None,
+        centaur_endgame_solver: str | None = None,
+        centaur_alpha_mu_depth: int | None = None,
+    ) -> "DuplicateRunResult":
+        """Run a batch of duplicate pods deterministically.
+
+        Each pod is a seeded deal played at both an active table (learner
+        seat rotated through seats 0..3) and a shadow table (same deal, same
+        opponents, learner replaced by the frozen snapshot at ``shadow_path``).
+
+        The default implementation raises ``NotImplementedError`` so that
+        adapters which do not yet support duplicate RL (e.g., the current
+        ``RustSelfPlay``) can inherit it unchanged. Duplicate-capable
+        adapters override this method. See ``docs/double_rl.md`` §5.
+        """
+        raise NotImplementedError(
+            f"{type(self).__name__} does not implement run_seeded_pods; "
+            "duplicate RL requires a seeded self-play adapter."
+        )
+

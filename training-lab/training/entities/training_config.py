@@ -3,11 +3,13 @@
 from __future__ import annotations
 
 import math
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
     from training.entities.league import LeagueConfig
+
+from training.entities.duplicate_config import DuplicateConfig
 
 # Seat labels that represent learner agents (NN-backed, generate PPO experiences).
 LEARNER_SEAT_LABELS: frozenset[str] = frozenset({"nn", "centaur"})
@@ -70,6 +72,7 @@ class TrainingConfig:
     oracle_critic: bool = True
     human_data_dir: str | None = None
     league: LeagueConfig | None = None
+    duplicate: DuplicateConfig = field(default_factory=DuplicateConfig)
 
     def should_benchmark_initial(self) -> bool:
         return 0 in set(self.benchmark_checkpoints)

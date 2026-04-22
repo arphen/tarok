@@ -1,7 +1,26 @@
 # Duplicate Reinforcement Learning (DRL) for Tarok
 
-> Status: **Design / Implementation Plan** — not yet built.
+> Status: **Phase 1 (Python side) — landed.** Rust seeded-pods binding + Phase 2 orchestration still pending.
 > Guiding principle: **strictly additive on top of the existing PPO + Fictitious Self-Play + Arena stack.** Nothing about current training, arena leaderboard, or ELO league changes unless the Duplicate feature flag is explicitly enabled.
+
+## Implementation status (as of last commit)
+
+Completed:
+
+- Entities: `DuplicatePod`, `DuplicateRunResult`, `DuplicateConfig` (with `actor_only` requires `enabled` validation).
+- Ports: `DuplicatePairingPort`, `DuplicateRewardPort`. `SelfPlayPort` extended with an optional `run_seeded_pods` method (default raises `NotImplementedError`).
+- Adapters: `RotationPairingAdapter` (supports `rotation_8game` / `rotation_4game` / `single_seat_2game`), `ShadowScoreRewardAdapter` (default `(R_learner − R_shadow) / 100` with terminal masking).
+- PPO batch prep: §4.1 conservative `precomputed_rewards` override wired into `ppo_batch_preparation.py` with shape validation; legacy path is unchanged when the key is absent.
+- Config plumbing: `duplicate:` YAML block parsed into `DuplicateConfig` via `_parse_duplicate()` and attached to `TrainingConfig`.
+- Tests: 40 new unit tests; full training-lab suite (**209 passed**); `make lint-architecture` green.
+
+Still pending:
+
+- Rust: `deck_seed` path in `SelfPlayRunner` and `run_seeded_pods` PyO3 binding (§5).
+- `SeededSelfPlayAdapter` (trivial Python wrapper on top of the above).
+- `CollectDuplicateExperiences` use case + `TrainModelOrchestrator` branching (§3.5).
+- `test_duplicate_disabled_is_noop` regression gate (§10).
+- Phase 3 actor-only network pruning (§2.7), Phase 4 arena duplicate CLI + UI.
 
 ---
 
@@ -54,7 +73,7 @@ where:
 - $R_{\text{learner}}$: learner's per-game score in a game it participated in.
 - $R_{\text{shadow}}$: score of the shadow (frozen previous-iteration snapshot) in the paired baseline game.
 
-This replaces **only the per-trajectory reward fed into GAE** — everything else in PPO (ratio, clip, value loss, entropy, behavioral cloning, oracle distillation) is untouched.
+In the conservative (Phase 2) integration this replaces only the per-trajectory reward fed into GAE while keeping the critic and Oracle intact. Section §2.7 describes the more aggressive consequence: that once you have a mathematically pure empirical advantage, the Critic network, the Oracle, GAE itself, and oracle distillation all become redundant and can be pruned. The two are separate config modes.
 
 ### 2.3 The Shadow Baseline is the learner's *own previous snapshot*
 Not `bot_v5`. Not a static fixed bot. The shadow is the learner frozen at the start of the current PPO iteration. This gives a self-referential advantage — "am I better than I was one iteration ago?" — which keeps the baseline co-evolving with the learner and eliminates overfitting to a specific bot's weaknesses.
@@ -81,6 +100,102 @@ Operators can also configure **4-game pods** (learner-vs-shadow in a single seat
 
 ### 2.6 Coexistence, not replacement
 The existing PPO path (`run_self_play` → `CollectExperiences` → `TorchPPO`) remains the default. Duplicate RL is opt-in via config flag (`duplicate.enabled: true`). Both paths must continue to work in CI.
+
+### 2.7 Actor-Only mode: amputating the Value side of the network
+
+This section records an important architectural consequence of §2.2 that the initial plan underestimated.
+
+#### Why the Critic existed in the first place
+
+In standard PPO, the critic's sole purpose is to produce a low-variance baseline for $A$:
+
+$$
+A_{\text{vanilla}} = R_{\text{game}} - V_\theta(s)
+$$
+
+Without a good $V_\theta$, luck dominates the gradient. Being dealt the Tarok 21 inflates $R$ by +30; the network incorrectly learns that whatever it did was brilliant. The Oracle Critic was introduced specifically to give $V_\theta$ access to perfect-information opponent hands so it could distinguish skill-driven outcomes from card-luck outcomes.
+
+#### Why Duplicate RL makes the Critic mathematically redundant
+
+In Duplicate RL, the Shadow *is* the baseline:
+
+$$
+A_{\text{duplicate}} = R_{\text{learner}} - R_{\text{shadow}}
+$$
+
+Both learner and shadow receive the exact same deck and opponents. The Tarok-21 luck cancels:
+
+$$
+(\underbrace{30}_{\text{luck}} + \delta_\text{learner}) - (\underbrace{30}_{\text{luck}} + \delta_\text{shadow}) = \delta_\text{learner} - \delta_\text{shadow}
+$$
+
+The residual is purely the policy delta — the quantity PPO was always trying to isolate. This cancellation is **exact** (not statistical) because the deals are byte-identical. No neural network can improve on an exact cancellation.
+
+#### What can be deleted
+
+| Component | Role | Status under Duplicate RL |
+|---|---|---|
+| `critic` value head | Estimates $V(s)$ for baseline | **Redundant** — Shadow is the baseline |
+| Oracle critic backbone | Estimates $V(s)$ from perfect info | **Redundant** — variance already cancelled |
+| `ORACLE_STATE_SIZE` (+162 dims) | Input to oracle critic | **Deletable** — no oracle critic in actor-only |
+| Oracle distillation loss | Aligns actor latent ↔ oracle critic | **Deletable** |
+| GAE (`te.compute_gae`) | Bootstraps $V$ across steps | **Replaceable** — see below |
+
+#### What replaces GAE
+
+GAE with $\lambda < 1$ does temporal credit assignment within a trajectory by exponentially discounting the value-bootstrap across steps. Under duplicate RL with terminal-only rewards, the per-step advantage becomes:
+
+$$
+A_t = \gamma^{T-t} \cdot A_{\text{duplicate}}
+$$
+
+where $T$ is the terminal step and $\gamma = 0.99$. This is REINFORCE with a duplicate baseline: every step in the trajectory gets the discounted duplicate advantage, and no critic bootstrap is needed. The `te.compute_gae` call in `ppo_batch_preparation.py` is replaced by a simple broadcast:
+
+```python
+# actor-only duplicate path
+duplicate_adv = precomputed_rewards   # terminal reward = A_duplicate
+returns_np = broadcast_terminal_reward_to_trajectory(
+    duplicate_adv, game_ids_np, players_np, gamma=config.gamma
+)
+advantages_np = returns_np          # no critic subtraction needed
+```
+
+The critic value loss term and the `vad` matrix column for `old_values` are dropped from the PPO update.
+
+#### Network size impact
+
+Current TarokNet v2 (oracle critic enabled):
+- Input: 450-dim actor state + 612-dim oracle state
+- Critic backbone: `Linear(612) → LN → ReLU → Linear(256) → LN → ReLU → ResidualBlock(256)`
+- Oracle distillation loss adds a forward pass on the oracle backbone each step
+
+After actor-only pruning:
+- Input: 450-dim actor state only
+- Critic backbone: **deleted**
+- Oracle backbone: **deleted**
+- Critic head `Linear(256) → ReLU → Linear(1)`: **deleted**
+- Net effect: ~30–40% fewer parameters, significantly faster per-step forward pass on Apple Silicon MPS, no oracle-state buffer in Rust (saves memory during rollout).
+
+#### The trade-off: within-game credit assignment
+
+The critic, even a noisy one, provides *within-game* credit assignment — it can signal that the state after a brilliant Trick 4 discard is intrinsically more valuable than before. The duplicate baseline only operates at *game* granularity. Removing the critic entirely means all ~50 decisions in a game get the same advantage signal, and the network has to learn credit assignment implicitly from policy gradient alone.
+
+This is acceptable because:
+1. Tarok rewards are already **terminal** — there is no intermediate reward signal the critic was bootstrapping, only its own value estimate.
+2. The within-game variance the critic was reducing is small compared to the between-game card-luck variance that duplicate RL eliminates.
+3. A larger `pods_per_iteration` can compensate for the coarser within-game signal by providing more trajectory samples.
+
+#### Configuration
+
+```yaml
+duplicate:
+  enabled: true
+  actor_only: true    # drops critic, oracle, GAE; broadcasts terminal duplicate advantage
+```
+
+When `actor_only: false` (default for Phase 2), the critic is retained and duplicate RL only changes the reward source — a conservative starting point. When `actor_only: true` (Phase 3 opt-in), the network is pruned and GAE replaced. The two config flags are independent so research can compare the two regimes on equal footing.
+
+**Important:** `actor_only: true` produces a checkpoint without a critic head. The existing checkpoint loader (`load_state_dict` with `strict=False`) already tolerates missing modules; no migration code is needed.
 
 ---
 
@@ -260,14 +375,18 @@ This mirrors the existing Tarok architecture style (see [.github/copilot-instruc
 
 ## 4. Changes to PPO batch preparation
 
-[training-lab/training/adapters/ppo/ppo_batch_preparation.py](training-lab/training/adapters/ppo/ppo_batch_preparation.py) currently computes:
+[training-lab/training/adapters/ppo/ppo_batch_preparation.py](training-lab/training/adapters/ppo/ppo_batch_preparation.py) is touched in two distinct ways depending on which mode is active.
+
+### 4.1 Conservative mode (`actor_only: false`) — reward source only
+
+The current reward computation:
 
 ```python
 rewards_np = scores_np[gids, players_np].astype(np.float32) / 100.0
 rewards_np = rewards_np + shaped_bonus_by_game[gids, players_np]
 ```
 
-The change is **minimal and additive**:
+becomes:
 
 ```python
 precomputed = raw.get("precomputed_rewards")
@@ -278,9 +397,47 @@ else:
     rewards_np = rewards_np + shaped_bonus_by_game[gids, players_np]
 ```
 
-Everything downstream — trajectory-key sort, terminal masking, `te.compute_gae`, global advantage normalisation, mini-batching — is untouched. This is the key architectural win: duplicate RL plugs into PPO as a **reward source**, not a PPO variant.
+Everything downstream — trajectory-key sort, terminal masking, `te.compute_gae`, global advantage normalisation, critic value loss, oracle distillation, mini-batching — is untouched. This is the minimal viable change: duplicate RL plugs in purely as a **reward source**.
 
 **Shaped bonuses under duplicate RL.** The existing `_compute_special_shaped_bonus_by_game` adds small trick-point shaping. Under pure duplicate RL these bonuses also cancel (both tables experience the same deck), so they are **disabled by default** when `duplicate.enabled`. A config flag `duplicate.apply_shaped_bonuses` can override.
+
+### 4.2 Actor-only mode (`actor_only: true`) — full Value side removed
+
+When `actor_only: true`, `ppo_batch_preparation.py` skips GAE entirely and replaces it with a simple terminal-reward broadcast:
+
+```python
+# actor-only path — no critic, no GAE
+assert raw.get("precomputed_rewards") is not None, "actor_only requires precomputed_rewards"
+terminal_adv_np = np.asarray(raw["precomputed_rewards"], dtype=np.float32)
+
+# Broadcast: every step in a (game, player) trajectory gets the discounted terminal advantage
+advantages_np = _broadcast_terminal_advantage(
+    terminal_adv_np, game_ids_np, players_np, gamma=gamma
+)
+
+# vad matrix shrinks: no old_values column (critic gone)
+vad_np = np.stack([advantages_np, advantages_np], axis=1)  # col 0=adv, col 1=returns (same)
+```
+
+The PPO loss in `torch_ppo.py` correspondingly drops the `value_loss` term and the oracle distillation forward pass. The `values` tensor returned by the Rust NN forward pass is also suppressed (the actor-only TarokNet simply doesn't produce it).
+
+The `_broadcast_terminal_advantage` helper is a new function in `ppo_batch_preparation.py`:
+
+```python
+def _broadcast_terminal_advantage(
+    terminal_adv: np.ndarray,   # shape (n_steps,) — nonzero only at terminal steps
+    game_ids: np.ndarray,
+    players: np.ndarray,
+    gamma: float,
+) -> np.ndarray:
+    """Assign discounted terminal advantage to every step in the trajectory.
+
+    For a trajectory of T steps ending with advantage A, step t gets γ^(T−t) × A.
+    This is REINFORCE with a duplicate baseline — no critic bootstrap required.
+    """
+```
+
+This function is pure numpy, fully testable without Rust or PyTorch.
 
 ---
 
@@ -324,9 +481,11 @@ The binding returns:
 ```python
 {
     # active group, stitched across all pods — same schema as today's run_self_play
-    "states": ..., "actions": ..., "log_probs": ..., "values": ...,
+    "states": ..., "actions": ..., "log_probs": ...,
+    "values": ...,                # zeros / absent when actor_only=True
     "decision_types": ..., "game_ids": ..., "players": ..., "scores": ...,
     "legal_masks": ..., "game_modes": ...,
+    "oracle_states": ...,         # absent when actor_only=True (no oracle backbone)
 
     # duplicate-specific
     "pod_ids": np.ndarray,        # shape (n_active_steps,)
@@ -335,7 +494,7 @@ The binding returns:
 }
 ```
 
-This keeps `ppo_batch_preparation.py` able to use the same GAE / sort path on the active-group slice.
+When `actor_only=True`, the Rust actor-only TarokNet does not run a critic forward pass and does not allocate oracle-state buffers, so `values` is a zero tensor and `oracle_states` is absent. `ppo_batch_preparation.py` detects this and routes to the `_broadcast_terminal_advantage` path (§4.2).
 
 ### 5.5 Throughput
 
@@ -398,6 +557,7 @@ Extend [training-lab/configs/self-play.yaml](training-lab/configs/self-play.yaml
 ```yaml
 duplicate:
   enabled: false                   # master switch
+  actor_only: false                # drop critic/oracle/GAE (see §2.7); requires enabled: true
   pairing: rotation_8game          # "rotation_8game" | "rotation_4game" | "single_seat_2game"
   pods_per_iteration: 400          # produces 4 × 400 = 1600 learner trajectories/iter
   shadow_source: previous_iteration   # "previous_iteration" | "league_pool_role"
@@ -407,6 +567,8 @@ duplicate:
 ```
 
 Config resolution lives in [training-lab/training/use_cases/resolve_config.py](training-lab/training/use_cases/resolve_config.py) (existing). A dataclass `DuplicateConfig` is added to `TrainingConfig`; absent/disabled means the existing path runs unchanged.
+
+**Constraint:** `actor_only: true` requires `enabled: true`. `resolve_config.py` raises a `ConfigError` if `actor_only` is set without `enabled`.
 
 ---
 
@@ -418,8 +580,11 @@ Config resolution lives in [training-lab/training/use_cases/resolve_config.py](t
 | Rust | 8-game pod with learner-NN scores recoverable equally from any seat rotation. | same file |
 | Port | `DuplicatePairingPort.build_pods` returns 8 seatings with invariants: each seat hosts learner exactly once in active, and opponent identity set is constant across pod. | `backend/tests/test_duplicate_pairing.py` |
 | Port | `DuplicateRewardPort.compute_rewards` on synthetic `active_raw` + `shadow_scores` returns exactly `(learner_score − matched_shadow_score) / 100`. | `backend/tests/test_duplicate_reward.py` |
+| Batch prep | `_broadcast_terminal_advantage` with a 2-game trajectory of length 10 returns exactly `γ^(T-t) × A` at each step. | `training-lab/tests/test_ppo_batch_preparation.py` (extend existing) |
+| Batch prep | `actor_only=true` path produces no `old_values` column in `vad`, no `value_loss` in metrics. | same file |
 | Use case | `CollectDuplicateExperiences.execute` with fakes for all three ports returns a well-shaped `ExperienceBundle` and does not import `numpy`/`torch`/`tarok_engine` at module top. | `backend/tests/test_collect_duplicate_experiences.py` |
-| Integration | End-to-end iteration with `duplicate.enabled=true` on 4 pods runs, updates weights, and writes a checkpoint whose Elo against `bot_v5` is at least as high as the starting checkpoint's. | `training-lab/tests/test_duplicate_iteration.py` |
+| Integration | End-to-end iteration with `duplicate.enabled=true, actor_only=false` on 4 pods runs, updates weights, checkpoint survives reload. | `training-lab/tests/test_duplicate_iteration.py` |
+| Integration | Same with `actor_only=true` — checkpoint has no `critic` or `oracle_critic_backbone` keys. | same file, second parametrized case |
 | Regression | `duplicate.enabled=false` produces **bit-identical** gradients to `main` on a fixed seed. | `training-lab/tests/test_duplicate_disabled_is_noop.py` |
 | Architecture | `make lint-architecture` passes with new ports/adapters/use-cases. The two new ports import nothing outside `training.entities`. | existing import-linter |
 
@@ -437,26 +602,35 @@ The `test_duplicate_disabled_is_noop.py` is a critical gate — it guarantees th
 
 **Exit criterion:** `SeededSelfPlayAdapter.run_seeded_pods(...)` runs 1 pod end-to-end and returns a `DuplicateRunResult` whose active and shadow games are confirmed to use the same deck.
 
-### Phase 2 — PPO wiring
+### Phase 2 — Conservative PPO wiring (`actor_only: false`)
 5. `CollectDuplicateExperiences` use case.
-6. Minimal patch to `ppo_batch_preparation.py` (the `precomputed_rewards` fallback).
-7. Config `DuplicateConfig` + YAML plumbing.
+6. Reward-source patch to `ppo_batch_preparation.py` (the `precomputed_rewards` fallback, §4.1).
+7. Config `DuplicateConfig` + YAML plumbing including `actor_only` flag.
 8. `TrainModelOrchestrator` branching on `config.duplicate.enabled`.
 9. The disabled-is-noop regression test.
 10. Full integration test: 4-pod iteration produces non-zero advantages, updated weights, checkpoint survives reload.
 
 **Exit criterion:** 100-pod smoke training run completes without crash, `duplicate_advantage_std` decreases over 5 iterations.
 
-### Phase 3 — Arena & UI
-11. `arena duplicate` CLI subcommand.
-12. Arena page: new "Duplicate Match" card.
-13. TrainingDashboard: "Duplicate RL" collapsible panel with advantage histogram per session.
-14. Frontend Playwright test covering the new UI affordances.
+### Phase 3 — Actor-Only pruning (`actor_only: true`)
+11. `_broadcast_terminal_advantage` helper + actor-only branch in `ppo_batch_preparation.py` (§4.2).
+12. `TarokNet` actor-only variant: `critic`, `oracle_critic_backbone`, oracle distillation loss deleted when `actor_only=True` is passed to constructor. Existing `load_state_dict(strict=False)` already handles missing keys.
+13. Rust: suppress `values` output and oracle-state buffer allocation when actor-only model is loaded.
+14. Integration test: `actor_only=true` checkpoint has no critic keys; loads cleanly; outplaces `bot_v5` after 200-pod training.
+15. Ablation test: compare `actor_only=false` vs `actor_only=true` Elo after 1,000 pods on identical seeds.
 
-### Phase 4 — Research knobs
-15. `IMPsRewardAdapter` + `RankingRewardAdapter` alternatives.
-16. League-pool shadow role (shadow = learner from k iterations ago).
-17. Hyperparameter sweep: pod size (2/4/8), `pods_per_iteration`, shadow staleness.
+**Exit criterion:** actor-only forward pass is measurably faster on MPS (target: ≥20% throughput gain).
+
+### Phase 4 — Arena & UI
+16. `arena duplicate` CLI subcommand.
+17. Arena page: new "Duplicate Match" card.
+18. TrainingDashboard: "Duplicate RL" collapsible panel with advantage histogram and `actor_only` indicator.
+19. Frontend Playwright test covering the new UI affordances.
+
+### Phase 5 — Research knobs
+20. `IMPsRewardAdapter` + `RankingRewardAdapter` alternatives.
+21. League-pool shadow role (shadow = learner from k iterations ago).
+22. Hyperparameter sweep: pod size (2/4/8), `pods_per_iteration`, shadow staleness, `actor_only` on/off.
 
 ---
 
@@ -483,16 +657,26 @@ Because shadow and learner share the deal, opponents, and seating, $\text{Cov}(R
 1. **Bid/discard coverage.** Discards are still heuristic today. A duplicate advantage on a hand whose decisive moment was a discard has zero gradient to apply. Worth investigating whether the duplicate advantage should be attributed only to RL-driven decision steps (BID, KING, TALON, CARD, ANNOUNCE) — which the existing `decision_types` routing already supports.
 2. **Klop equalisation.** Klop scores each player individually; the shadow subtraction must be done per-player, not team-level. The `ShadowScoreRewardAdapter` handles this naturally (score is indexed by player), but it's worth an explicit test.
 3. **Centaur variance.** When a seat is `centaur`, its policy is partly deterministic (PIMC worlds + α-μ depth). The PIMC world sampling uses the Rust RNG — so its variance is **not** cancelled by duplicate seeding unless we also seed the PIMC sampler. This must be fixed as part of Phase 1 or documented as a known limitation.
+4. **Within-game credit assignment in actor-only mode.** Broadcasting the terminal duplicate advantage to all ~50 steps with $\gamma^{T-t}$ decay is a rough proxy for credit assignment. A learned lightweight step-value head (much smaller than today's oracle critic — e.g., 2-layer MLP on 64 dims) could provide finer within-game credit without reintroducing the full oracle machinery. Worth experimenting with after Phase 3 establishes the actor-only baseline.
+5. **Entropy scheduling.** Today entropy coefficient is fixed. In actor-only mode with a pure REINFORCE gradient, entropy regularisation becomes more important to prevent premature convergence. An entropy schedule (high early, decay over iterations) may be needed and should be part of the Phase 5 sweep.
 
 ---
 
 ## 14. Summary
 
-Duplicate RL is implemented as a **reward source plugin** on top of the existing PPO + FSP + Arena stack:
+Duplicate RL is implemented in two tiers, both strictly additive:
 
+**Tier 1 — Conservative (`enabled: true, actor_only: false`):**
 - **Three new ports** cleanly delimit the pairing policy, the reward model, and the seeded self-play capability.
 - **Four new adapters** provide the default rotation pairing, shadow-difference reward, seeded self-play wrapper, and (Rust-side) seeded pod runner.
 - **One new use case** orchestrates a duplicate iteration and produces the exact `ExperienceBundle` shape the existing orchestrator already consumes.
-- **Minimal patches** to `ppo_batch_preparation.py`, `maintain_league_pool.py`, and the config schema — all behind a disabled-by-default flag.
+- Critic, Oracle, and GAE are retained — duplicate RL only changes the *reward source* fed into GAE.
 
-The existing training, arena, and ELO-league PPO loop continue to run unchanged when the flag is off, and the `test_duplicate_disabled_is_noop` regression test enforces that this remains true.
+**Tier 2 — Actor-Only (`actor_only: true`):**
+- The duplicate Shadow baseline provides an exact, mathematically perfect variance cancellation that no neural network baseline can improve on.
+- The Critic head, Oracle critic backbone, Oracle state inputs (+162 dims), oracle distillation loss, and GAE are all **deleted**.
+- GAE is replaced by `_broadcast_terminal_advantage`: a pure-numpy REINFORCE broadcast of the terminal duplicate advantage across the trajectory.
+- Network shrinks by ~30–40% of parameters; forward passes are faster; Rust rollout buffers shrink (no oracle states).
+- Existing `load_state_dict(strict=False)` already handles missing critic keys — no migration code needed.
+
+**In both tiers:** minimal patches to `ppo_batch_preparation.py`, `maintain_league_pool.py`, and the config schema — all behind a disabled-by-default flag. The existing training, arena, and ELO-league PPO loop continue to run unchanged when `duplicate.enabled=false`, enforced by `test_duplicate_disabled_is_noop`.
