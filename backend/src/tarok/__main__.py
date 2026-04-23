@@ -12,6 +12,8 @@ def main():
         asyncio.run(run_generate_dd_data())
     elif cmd == "dd-pretrain":
         asyncio.run(run_dd_pretrain())
+    elif cmd == "arena-duplicate":
+        run_arena_duplicate(sys.argv[2:])
     else:
         run_server()
 
@@ -233,6 +235,122 @@ async def run_dd_pretrain():
     os.makedirs(os.path.dirname(save_path), exist_ok=True)
     torch.save(net.state_dict(), save_path)
     print(f"\nSaved DD-pretrained model to {save_path}")
+
+
+def run_arena_duplicate(argv: list[str]) -> None:
+    """Head-to-head duplicate match between two checkpoints.
+
+    Usage::
+
+        python -m tarok arena-duplicate \
+            --challenger <ckpt_A.ts> \
+            --defender <ckpt_B.ts> \
+            --boards 1000 \
+            --seed 42 \
+            [--explore-rate 0.0] [--concurrency 1] \
+            [--pairing rotation_8game] [--bootstrap 1000] \
+            [--output out.json]
+
+    Reuses ``SeededSelfPlayAdapter`` + ``RotationPairingAdapter`` +
+    ``NumpyDuplicateArenaStats`` — the same ports that drive duplicate-RL
+    training. One engine path, two call sites (see ``docs/double_rl.md``
+    §8).
+    """
+    import argparse
+    import json
+
+    from training.adapters.duplicate.numpy_arena_stats import (
+        NumpyDuplicateArenaStats,
+    )
+    from training.adapters.duplicate.rotation_pairing import (
+        RotationPairingAdapter,
+    )
+    from training.adapters.duplicate.seeded_self_play_adapter import (
+        SeededSelfPlayAdapter,
+    )
+    from training.adapters.self_play import RustSelfPlay
+    from training.use_cases.run_duplicate_arena import RunDuplicateArena
+
+    parser = argparse.ArgumentParser(
+        prog="python -m tarok arena-duplicate",
+        description="Head-to-head duplicate match between two TorchScript checkpoints.",
+    )
+    parser.add_argument("--challenger", required=True, help="Path to challenger .ts")
+    parser.add_argument("--defender", required=True, help="Path to defender .ts")
+    parser.add_argument(
+        "--boards", type=int, default=1000, help="Target paired games (default 1000)"
+    )
+    parser.add_argument("--seed", type=int, default=0, help="Pairing + bootstrap RNG seed")
+    parser.add_argument(
+        "--explore-rate",
+        type=float,
+        default=0.0,
+        help="Policy exploration rate (default 0 = greedy)",
+    )
+    parser.add_argument("--concurrency", type=int, default=1, help="Rust self-play concurrency")
+    parser.add_argument(
+        "--pairing",
+        choices=["rotation_8game", "rotation_4game", "single_seat_2game"],
+        default="rotation_8game",
+        help="Pod rotation scheme (default rotation_8game)",
+    )
+    parser.add_argument(
+        "--bootstrap",
+        type=int,
+        default=1000,
+        help="Bootstrap CI resamples (default 1000; 0 to skip)",
+    )
+    parser.add_argument("--output", default=None, help="Optional JSON output file")
+    args = parser.parse_args(argv)
+
+    selfplay = SeededSelfPlayAdapter(inner=RustSelfPlay())
+    pairing = RotationPairingAdapter(pairing=args.pairing)
+    stats = NumpyDuplicateArenaStats()
+
+    use_case = RunDuplicateArena(selfplay=selfplay, pairing=pairing, stats=stats)
+
+    print(
+        f"Duplicate arena: challenger={args.challenger} defender={args.defender} "
+        f"boards={args.boards} seed={args.seed} pairing={args.pairing}"
+    )
+    result = use_case.execute(
+        challenger_path=args.challenger,
+        defender_path=args.defender,
+        n_boards=args.boards,
+        rng_seed=args.seed,
+        explore_rate=args.explore_rate,
+        concurrency=args.concurrency,
+        bootstrap_samples=args.bootstrap,
+    )
+
+    summary = {
+        "challenger": args.challenger,
+        "defender": args.defender,
+        "pairing": args.pairing,
+        "seed": args.seed,
+        "boards_played": result.boards_played,
+        "challenger_mean_score": result.challenger_mean_score,
+        "defender_mean_score": result.defender_mean_score,
+        "mean_duplicate_advantage": result.mean_duplicate_advantage,
+        "duplicate_advantage_std": result.duplicate_advantage_std,
+        "ci_low_95": result.ci_low_95,
+        "ci_high_95": result.ci_high_95,
+        "imps_per_board": result.imps_per_board,
+    }
+
+    print("")
+    print(f"  Boards played:          {result.boards_played}")
+    print(f"  Challenger mean score:  {result.challenger_mean_score:+.3f}")
+    print(f"  Defender mean score:    {result.defender_mean_score:+.3f}")
+    print(f"  Mean duplicate advantage: {result.mean_duplicate_advantage:+.3f}")
+    print(f"  Advantage std:          {result.duplicate_advantage_std:.3f}")
+    print(f"  95% CI:                 [{result.ci_low_95:+.3f}, {result.ci_high_95:+.3f}]")
+    print(f"  IMPs / board:           {result.imps_per_board:+.4f}")
+
+    if args.output:
+        with open(args.output, "w") as f:
+            json.dump(summary, f, indent=2)
+        print(f"\nWrote {args.output}")
 
 
 if __name__ == "__main__":

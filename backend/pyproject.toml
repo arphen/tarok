@@ -46,6 +46,9 @@ packages = ["src/tarok"]
 [tool.ruff]
 line-length = 100
 
+[tool.ty.environment]
+extra-paths = ["../training-lab"]
+
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 asyncio_mode = "auto"
