@@ -43,6 +43,7 @@ class TrainingConfig:
     centaur_pimc_worlds: int | None = None
     centaur_endgame_solver: str | None = None
     centaur_alpha_mu_depth: int | None = None
+    centaur_deterministic_seed: int | None = None
     imitation_coef: float = 0.3
     imitation_schedule: str = "constant"  # constant | linear | cosine | gaussian_elo
     imitation_coef_min: float = 0.0

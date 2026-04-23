@@ -358,7 +358,7 @@ def test_train_model_caps_active_nn_snapshots(
     mock_sampler = MockSampleSeats.return_value
     mock_updater = MockUpdateElo.return_value
 
-    def _bump_elo(pool, _seat_config_used, _seat_outcomes) -> None:
+    def _bump_elo(pool, _seat_config_used, _seat_outcomes, **_kwargs) -> None:
         pool.learner_elo += 60.0
 
     mock_updater.execute.side_effect = _bump_elo
@@ -470,7 +470,7 @@ def test_train_model_snapshot_admission_uses_configured_elo_delta(
 
     mock_updater = MockUpdateElo.return_value
 
-    def _bump_elo(pool, _seat_config_used, _seat_outcomes) -> None:
+    def _bump_elo(pool, _seat_config_used, _seat_outcomes, **_kwargs) -> None:
         pool.learner_elo += 20.0
 
     mock_updater.execute.side_effect = _bump_elo
@@ -608,7 +608,7 @@ def test_train_model_elo_based_lr_decays_smoothly(
 
     mock_updater = MockUpdateElo.return_value
 
-    def _bump_elo(pool, _seat_config_used, _seat_outcomes) -> None:
+    def _bump_elo(pool, _seat_config_used, _seat_outcomes, **_kwargs) -> None:
         pool.learner_elo += 600.0
 
     mock_updater.execute.side_effect = _bump_elo

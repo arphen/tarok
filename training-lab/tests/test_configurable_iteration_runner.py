@@ -201,12 +201,15 @@ def test_adapter_factory_for_spawn_constructs_duplicate_ports_when_enabled(
         dup_pairing,
         dup_reward,
         dup_shadow,
+        dup_stats,
     ) = runner._adapter_factory_for_spawn(config)
 
     assert isinstance(selfplay, SeededSelfPlayAdapter)
     assert isinstance(dup_pairing, RotationPairingAdapter)
     assert isinstance(dup_reward, ShadowScoreRewardAdapter)
     assert isinstance(dup_shadow, PreviousIterationShadowSource)
+    from training.adapters.duplicate.numpy_iteration_stats import NumpyDuplicateIterationStats
+    assert isinstance(dup_stats, NumpyDuplicateIterationStats)
 
 
 def test_adapter_factory_for_spawn_leaves_duplicate_ports_none_when_disabled(
@@ -225,9 +228,11 @@ def test_adapter_factory_for_spawn_leaves_duplicate_ports_none_when_disabled(
         dup_pairing,
         dup_reward,
         dup_shadow,
+        dup_stats,
     ) = runner._adapter_factory_for_spawn(config)
 
     assert not isinstance(selfplay, SeededSelfPlayAdapter)
     assert dup_pairing is None
     assert dup_reward is None
     assert dup_shadow is None
+    assert dup_stats is None

@@ -29,6 +29,7 @@ class _FakeSelfPlay:
         centaur_pimc_worlds: int | None = None,
         centaur_endgame_solver: str | None = None,
         centaur_alpha_mu_depth: int | None = None,
+        centaur_deterministic_seed: int | None = None,
     ) -> dict[str, list[list[float]]]:
         del model_path
         del n_games
@@ -42,6 +43,7 @@ class _FakeSelfPlay:
         del centaur_pimc_worlds
         del centaur_endgame_solver
         del centaur_alpha_mu_depth
+        del centaur_deterministic_seed
         self.calls.append(seat_config)
         return {"scores": self.scores}
 

@@ -1,0 +1,139 @@
+# ---------------------------------------------------------
+# Duplicate Reinforcement Learning — Centaur (NN + endgame solver) mode
+# See docs/double_rl.md for DRL, docs/dev/duplicate_centaur.md for this
+# variant's rationale.
+#
+# What this config does:
+#   Same duplicate pairing as configs/duplicate.yaml, but the learner
+#   (and its shadow) plays as a **Centaur**: the NN decides bids / king
+#   / talon / early tricks, then hands off to the PIMC endgame solver
+#   at trick >= centaur_handoff_trick. The solver plays optimally given
+#   the sampled worlds, so gradients on early-NN decisions flow back
+#   through solver-optimal terminal rewards instead of a self-played
+#   (and often sloppy) endgame.
+#
+# Usage:
+#   make train-new CONFIG=duplicate-centaur
+#   make train-new CONFIG=duplicate-centaur EXTRA="--iterations 30"
+# ---------------------------------------------------------
+
+seats: "centaur,bot_v5,bot_v5,bot_v5"   # ignored during duplicate pods; pairing picks seatings
+bench_seats: "nn,bot_m6,bot_m6,bot_m6"
+
+iterations: 50
+outplace_session_size: 50
+bench_games: 2000
+benchmark_checkpoints: [0, 5, 10, 20, 30, 40, 50]
+best_model_metric: "elo"
+
+# --- Core RL math (kept from duplicate.yaml) ---
+gamma: 0.995
+gae_lambda: 0.98
+clip_epsilon: 0.2
+value_coef: 0.5
+explore_rate: 0.01
+
+ppo_epochs: 4
+batch_size: 8192
+
+lr: 0.0002
+lr_schedule: elo
+lr_min: 0.00001
+
+entropy_coef: 0.005
+entropy_schedule: linear
+entropy_coef_min: 0.0005
+
+# Duplicate cancels dealing variance — BC is not needed to stabilise gradients.
+imitation_coef: 0.0
+
+# Centaur self-play is CPU-heavy (PIMC worlds per late-game decision), so
+# keep concurrency modest until you've measured throughput.
+concurrency: 256
+device: auto
+
+# Model architecture: v4 is required when oracle critic is enabled.
+model_arch: v4
+oracle_critic: true
+
+iteration_runner_mode: inprocess
+
+# --- Centaur endgame solver knobs (applied to EVERY seat labelled
+# "centaur", including the learner's seat during duplicate pods). ---
+# handoff_trick=8 means tricks 0..7 are decided by the NN and tricks
+# 8..11 (the last four) are decided by the solver. Lower = more solver
+# coverage but much slower.
+centaur_handoff_trick: 9
+# PIMC samples this many worlds per decision. 100 is a good default;
+# 50 halves the cost for early sanity checks, 200 squeezes more quality.
+centaur_pimc_worlds: 500
+# "pimc" (default) or "alpha_mu". Alpha-mu is stronger (enforces
+# strategy fusion) but slower; only switch after baseline runs are
+# healthy.
+centaur_endgame_solver: pimc
+# Only used when centaur_endgame_solver=alpha_mu; ignored otherwise.
+#centaur_alpha_mu_depth: 2
+# Deterministic PIMC/alpha-mu seeding: any nonzero u64 salt enables
+# "same state + same salt → same solver decision". This removes PIMC
+# sampling noise from duplicate-RL variance reduction (active vs
+# shadow cancel perfectly whenever they land in the same endgame
+# state). Set to null or 0 to fall back to per-call RNG.
+centaur_deterministic_seed: 1
+
+# --- League: used to sample the 3 opponents per pod ---
+league:
+  enabled: true
+  min_nn_per_game: 1
+  sampling: matchmaking
+  snapshot_interval: 5
+  snapshot_elo_delta: 50
+  max_active_snapshots: 3
+  elo_outplace_unit_weight: 5
+  initial_calibration_enabled: true
+  initial_calibration_games_per_pair: 3000
+  initial_calibration_anchor: V3
+  initial_calibration_anchor_elo: 1500
+
+  opponents:
+#    - name: V3
+#      type: bot_v3
+    - name: V5
+      type: bot_v5
+    - name: M6
+      type: bot_m6
+    - name: Lustrek
+      type: bot_lustrek
+
+# --- Duplicate RL knobs ---
+duplicate:
+  enabled: true
+  actor_only: false
+  pairing: rotation_8game
+
+  # Centaur rollouts are ~2–4x slower than pure-NN rollouts (PIMC is
+  # expensive in the last four tricks). Start with fewer pods until you
+  # know the per-iter wall time; scale up once you do.
+  pods_per_iteration: 100
+
+  # "trailing" holds a frozen copy of the learner TorchScript file and
+  # only refreshes it every shadow_refresh_interval iterations.
+  # Rationale: with "previous_iteration" the baseline updates every
+  # iteration, so any tiny edge the learner gains is immediately
+  # absorbed — and because the learner still pays the explore_rate
+  # exploration tax that the shadow avoids, the measured duplicate
+  # advantage drifts negative and the policy gradient flattens.
+  # Letting the shadow lag 5 iterations gives the learner room to open
+  # a clear positive advantage before the baseline catches up. Tied
+  # here to league.snapshot_interval=5 so baseline refreshes and
+  # snapshot promotions stay aligned.
+  shadow_source: relative_trailing
+  shadow_refresh_interval: 10
+  apply_shaped_bonuses: true
+  reward_model: shadow_score_diff
+  rng_seed: 0
+
+  # THIS is the switch that makes the learner play as Centaur in each
+  # pod instead of as pure NN. Its shadow plays as Centaur too (same
+  # NN weights + same solver knobs) so R_active − R_shadow still
+  # cancels dealing variance exactly.
+  learner_seat_token: centaur

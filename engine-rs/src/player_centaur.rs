@@ -18,7 +18,7 @@
 //! through the NN's earlier decisions.
 
 use crate::alpha_mu;
-use crate::game_state::Contract;
+use crate::game_state::{Contract, GameState};
 use crate::pimc;
 use crate::player::*;
 use crate::player_nn::NeuralNetPlayer;
@@ -67,6 +67,13 @@ pub struct CentaurBot {
     handoff_trick: usize,
     num_worlds: u32,
     endgame_policy: EndgamePolicy,
+    /// When `Some(salt)`, the endgame solver is seeded deterministically
+    /// from a canonical fingerprint of the visible game state XORed with
+    /// `salt`. Used by duplicate-RL so that active and shadow tables
+    /// reaching the same state sample the same worlds → PIMC noise
+    /// cancels in the reward difference. When `None` (the default),
+    /// the solver uses fresh randomness per decision.
+    deterministic_seed_salt: Option<u64>,
 }
 
 impl CentaurBot {
@@ -83,7 +90,17 @@ impl CentaurBot {
             handoff_trick,
             num_worlds,
             endgame_policy,
+            deterministic_seed_salt: None,
         }
+    }
+
+    /// Enable deterministic seeding of the endgame solver. The salt is
+    /// XORed into the state fingerprint so different training runs can
+    /// still produce independent streams while any single run remains
+    /// reproducible and duplicate-invariant.
+    pub fn with_deterministic_seed(mut self, salt: u64) -> Self {
+        self.deterministic_seed_salt = Some(salt);
+        self
     }
 
     /// Should this card-play decision be handled by PIMC?
@@ -113,16 +130,35 @@ impl BatchPlayer for CentaurBot {
         // Override late-game card plays with the endgame solver.
         for (i, ctx) in contexts.iter().enumerate() {
             if self.use_pimc(ctx) {
-                let card = match self.endgame_policy {
-                    EndgamePolicy::Pimc => {
+                let card = match (self.endgame_policy, self.deterministic_seed_salt) {
+                    (EndgamePolicy::Pimc, None) => {
                         pimc::pimc_choose_card(ctx.gs, ctx.player, self.num_worlds)
                     }
-                    EndgamePolicy::AlphaMu { max_depth } => {
+                    (EndgamePolicy::Pimc, Some(salt)) => {
+                        let seed = state_fingerprint(ctx.gs, ctx.player) ^ salt;
+                        pimc::pimc_choose_card_with_seed(
+                            ctx.gs,
+                            ctx.player,
+                            self.num_worlds,
+                            seed,
+                        )
+                    }
+                    (EndgamePolicy::AlphaMu { max_depth }, None) => {
                         alpha_mu::alpha_mu_choose_card(
                             ctx.gs,
                             ctx.player,
                             self.num_worlds,
                             max_depth,
+                        )
+                    }
+                    (EndgamePolicy::AlphaMu { max_depth }, Some(salt)) => {
+                        let seed = state_fingerprint(ctx.gs, ctx.player) ^ salt;
+                        alpha_mu::alpha_mu_choose_card_with_seed(
+                            ctx.gs,
+                            ctx.player,
+                            self.num_worlds,
+                            max_depth,
+                            seed,
                         )
                     }
                 };
@@ -144,6 +180,90 @@ impl BatchPlayer for CentaurBot {
     fn name(&self) -> &str {
         "centaur"
     }
+}
+
+// -----------------------------------------------------------------------
+// Deterministic state fingerprint (for duplicate-RL PIMC seeding)
+// -----------------------------------------------------------------------
+
+/// SplitMix64 finalizer — stable, deterministic, no external deps.
+#[inline]
+fn splitmix64(mut x: u64) -> u64 {
+    x = x.wrapping_add(0x9E37_79B9_7F4A_7C15);
+    let mut z = x;
+    z = (z ^ (z >> 30)).wrapping_mul(0xBF58_476D_1CE4_E5B9);
+    z = (z ^ (z >> 27)).wrapping_mul(0x94D0_49BB_1331_11EB);
+    z ^ (z >> 31)
+}
+
+#[inline]
+fn mix(acc: u64, x: u64) -> u64 {
+    splitmix64(acc ^ splitmix64(x))
+}
+
+/// Hash every decision-relevant bit of the visible game state into a u64.
+///
+/// Two game states that reach this function with identical values produce
+/// the same fingerprint. Different states — even ones that differ only in
+/// played-card order — produce different fingerprints with overwhelming
+/// probability (SplitMix64 avalanche).
+///
+/// This is the seed source for deterministic PIMC under duplicate-RL: when
+/// active and shadow tables reach identical visible states, they pick the
+/// same worlds and thus the same card, so the PIMC sampling noise
+/// disappears from `R_active − R_shadow`.
+pub fn state_fingerprint(gs: &GameState, viewer: u8) -> u64 {
+    let mut h: u64 = 0xCBF2_9CE4_8422_2325; // FNV offset; arbitrary nonzero start
+
+    h = mix(h, viewer as u64);
+
+    // Contract, declarer, partner — identifies who is maximizing what.
+    let contract_tag: u64 = match gs.contract {
+        None => 0,
+        Some(c) => 1 + c as u64,
+    };
+    h = mix(h, contract_tag);
+    h = mix(h, gs.declarer.map(|p| p as u64 + 1).unwrap_or(0));
+    h = mix(h, gs.partner.map(|p| p as u64 + 1).unwrap_or(0));
+
+    // Roles — declarer/partner/opponent per seat.
+    let mut roles_word: u64 = 0;
+    for (i, &r) in gs.roles.iter().enumerate() {
+        roles_word |= (r as u64 & 0xF) << (i * 4);
+    }
+    h = mix(h, roles_word);
+
+    // All cards played so far (order-independent by construction).
+    h = mix(h, gs.played_cards.0);
+
+    // Viewer's own hand — narrows the world-sampling space.
+    h = mix(h, gs.hands[viewer as usize].0);
+
+    // Current trick: lead + played cards in play order.
+    if let Some(ref t) = gs.current_trick {
+        h = mix(h, t.lead_player as u64);
+        h = mix(h, t.count as u64);
+        for i in 0..t.count as usize {
+            let (p, c) = t.cards[i];
+            h = mix(h, ((p as u64) << 8) | c.0 as u64);
+        }
+    } else {
+        h = mix(h, 0xFFFF_FFFF_FFFF_FFFF); // distinguish "no trick" from trick with count=0
+    }
+
+    // Tricks played: count + who won each (viewer knows this from public play).
+    h = mix(h, gs.tricks_played() as u64);
+    for (i, trick) in gs.tricks.iter().enumerate() {
+        h = mix(h, (i as u64) << 32 | trick.lead_player as u64);
+        for j in 0..trick.count as usize {
+            let (p, c) = trick.cards[j];
+            h = mix(h, ((p as u64) << 16) | ((j as u64) << 8) | c.0 as u64);
+        }
+    }
+
+    // Ensure no zero output (zero ^ salt = salt, which would make salt
+    // trivially recoverable; not a security issue, but mildly untidy).
+    splitmix64(h)
 }
 
 #[cfg(test)]
@@ -205,5 +325,53 @@ mod tests {
             && ctx.gs.contract != Some(Contract::Klop)
             && ctx.gs.tricks_played() >= handoff;
         assert!(!should_pimc);
+    }
+
+    // -------- state_fingerprint --------
+
+    #[test]
+    fn fingerprint_is_stable_for_identical_state() {
+        let mut gs = GameState::new(0);
+        gs.contract = Some(Contract::Three);
+        gs.declarer = Some(1);
+        gs.partner = Some(3);
+        gs.played_cards = crate::card::CardSet(0xDEAD_BEEF_1234_5678);
+        gs.hands[0] = crate::card::CardSet(0xAAAA_5555_AAAA_5555);
+
+        let a = state_fingerprint(&gs, 0);
+        let b = state_fingerprint(&gs, 0);
+        assert_eq!(a, b, "fingerprint must be pure");
+    }
+
+    #[test]
+    fn fingerprint_differs_across_viewers() {
+        let mut gs = GameState::new(0);
+        gs.contract = Some(Contract::Three);
+        gs.played_cards = crate::card::CardSet(0x1111_2222_3333_4444);
+        gs.hands[0] = crate::card::CardSet(0xFF);
+        gs.hands[1] = crate::card::CardSet(0xFF00);
+
+        let a = state_fingerprint(&gs, 0);
+        let b = state_fingerprint(&gs, 1);
+        assert_ne!(a, b, "different viewer → different fingerprint");
+    }
+
+    #[test]
+    fn fingerprint_differs_when_played_cards_differ() {
+        let mut gs = GameState::new(0);
+        gs.contract = Some(Contract::Three);
+        gs.played_cards = crate::card::CardSet(0x1);
+        let a = state_fingerprint(&gs, 0);
+
+        gs.played_cards = crate::card::CardSet(0x2);
+        let b = state_fingerprint(&gs, 0);
+
+        assert_ne!(a, b, "different played cards → different fingerprint");
+    }
+
+    #[test]
+    fn fingerprint_is_nonzero() {
+        let gs = GameState::new(0);
+        assert_ne!(state_fingerprint(&gs, 0), 0);
     }
 }

@@ -3,11 +3,12 @@
 # See docs/double_rl.md for the design.
 #
 # What this config does:
-#   Every iteration, N pods are dealt. Each pod uses the same deck for
-#   both the learner and a frozen "shadow" (previous-iteration snapshot),
-#   with rotated seatings so the learner plays each seat on the same
-#   hand. The per-trajectory reward is R_learner - R_shadow, which
-#   cancels dealing variance exactly.
+#   Every iteration, N pods are dealt. Each pod fixes one deck and runs
+#   8 games with it: 4 active (learner replaces whoever sits at seat 0,
+#   1, 2, 3 in turn) + 4 shadow (same 4 seatings, frozen shadow model
+#   instead of learner). The per-trajectory reward is R_learner -
+#   R_shadow on the matching seating, which cancels dealing variance
+#   exactly because both models saw the same cards from the same seat.
 #
 # Why this mode (actor_only: false):
 #   - Critic + oracle + GAE stay intact.
@@ -27,7 +28,6 @@ iterations: 50
 # 100 pods x 8 games/pod = 800 games/iter — roughly matches self-play's 3000/iter
 # throughput-wise once variance reduction is accounted for. Start small to
 # sanity-check the pipeline, then scale up.
-games: 800                   # informational; duplicate uses pods_per_iteration below
 outplace_session_size: 50
 bench_games: 2000
 benchmark_checkpoints: [0, 5, 10, 20, 30, 40, 50]
@@ -38,8 +38,8 @@ gamma: 0.995
 gae_lambda: 0.98
 clip_epsilon: 0.2
 value_coef: 0.5
-entropy_coef: 0.003
-explore_rate: 0.05
+entropy_coef: 0.0005
+explore_rate: 0.01
 
 ppo_epochs: 4
 batch_size: 8192
@@ -73,7 +73,7 @@ league:
   max_active_snapshots: 3
   elo_outplace_unit_weight: 5
   initial_calibration_enabled: true
-  initial_calibration_games_per_pair: 2000
+  initial_calibration_games_per_pair: 3000
   initial_calibration_anchor: V3
   initial_calibration_anchor_elo: 1500
 
@@ -104,16 +104,25 @@ duplicate:
   # Each pod produces 4 learner trajectories (1 per active game in the
   # 8-game pairing). 100 pods -> 400 trajectories/iter. Scale up once
   # throughput is validated.
-  pods_per_iteration: 100
+  pods_per_iteration: 400
 
   # Shadow snapshot source (wired through DuplicateShadowSourcePort):
   #   previous_iteration  — learner's TorchScript before this iteration's
   #                          export (self-duplicate bootstrap; default).
+  #   trailing            — keep one cached shadow file and refresh it every
+  #                          shadow_refresh_interval iterations (stepwise lag).
+  #   relative_trailing   — fixed lag baseline: always use iteration
+  #                          current - shadow_refresh_interval.
   #   league_pool         — random nn_checkpoint entry from the live league
   #                          pool, Gaussian-weighted around learner Elo.
   #   best_snapshot       — highest-Elo nn_checkpoint entry ("best ghost"
   #                          seen so far). Deterministic tie-break.
   shadow_source: previous_iteration
+
+  # Used by trailing/relative_trailing modes:
+  #   trailing          -> refresh cadence
+  #   relative_trailing -> fixed lag size
+  shadow_refresh_interval: 5
 
   # Shaped trick-point bonuses cancel under duplicate (both tables see the
   # same deck), so they're disabled by default.

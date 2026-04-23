@@ -98,6 +98,23 @@ impl Default for PlayerConstraints {
 ///
 /// Panics (debug) if no legal moves exist.
 pub fn pimc_choose_card(gs: &GameState, viewer: u8, num_worlds: u32) -> Card {
+    pimc_choose_card_with_seed(gs, viewer, num_worlds, rand::rng().random())
+}
+
+/// Deterministic variant of [`pimc_choose_card`].
+///
+/// Identical `base_seed` → identical world samples → identical chosen card
+/// (given identical `gs` and `viewer`). This is the entry point used by the
+/// Centaur player under duplicate-RL, where the seed is derived from a
+/// canonical fingerprint of the visible game state so that two tables that
+/// reach the same state also pick the same worlds — and thus the PIMC noise
+/// cancels in `R_active − R_shadow`.
+pub fn pimc_choose_card_with_seed(
+    gs: &GameState,
+    viewer: u8,
+    num_worlds: u32,
+    base_seed: u64,
+) -> Card {
     // Legal moves for the viewer
     let legal = {
         let ctx = legal_moves::MoveCtx::from_state(gs, viewer);
@@ -120,11 +137,14 @@ pub fn pimc_choose_card(gs: &GameState, viewer: u8, num_worlds: u32) -> Card {
     // Pick the DD objective from the contract.
     let objective = objective_for_contract(gs.contract);
 
-    let base_seed: u64 = rand::rng().random();
-
     // Parallel over worlds, then reduce into per-card aggregates:
     // (total_viewer_utility, sample_count) per legal card.
-    let scores: Vec<(f64, u32)> = (0..num_worlds)
+    //
+    // We collect per-world locals into a Vec and fold serially (in world
+    // index order) so the final aggregates are independent of rayon's
+    // work-stealing schedule. This is what makes the deterministic-seed
+    // variant yield bit-identical decisions across runs.
+    let per_world_locals: Vec<Vec<(f64, u32)>> = (0..num_worlds)
         .into_par_iter()
         .map(|world_i| {
             let mut local = vec![(0.0, 0u32); legal_vec.len()];
@@ -156,16 +176,15 @@ pub fn pimc_choose_card(gs: &GameState, viewer: u8, num_worlds: u32) -> Card {
             }
             local
         })
-        .reduce(
-            || vec![(0.0, 0u32); legal_vec.len()],
-            |mut acc, local| {
-                for i in 0..acc.len() {
-                    acc[i].0 += local[i].0;
-                    acc[i].1 += local[i].1;
-                }
-                acc
-            },
-        );
+        .collect();
+
+    let mut scores: Vec<(f64, u32)> = vec![(0.0, 0u32); legal_vec.len()];
+    for local in &per_world_locals {
+        for i in 0..scores.len() {
+            scores[i].0 += local[i].0;
+            scores[i].1 += local[i].1;
+        }
+    }
 
     // Pick card with best average viewer utility (higher is always better).
     let best_idx = scores

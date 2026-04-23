@@ -53,7 +53,12 @@ class MaintainLeaguePool:
     ) -> float | None:
         prev_elos = {e.opponent.name: e.elo for e in pool.entries}
         prev_learner_elo = pool.learner_elo
-        self._updater.execute(pool, result.seat_config_used, result.seat_outcomes)
+        self._updater.execute(
+            pool,
+            result.seat_config_used,
+            result.seat_outcomes,
+            opponent_outcomes=result.opponent_outcomes,
+        )
         elo_deltas = {
             e.opponent.name: e.elo - prev_elos.get(e.opponent.name, e.elo)
             for e in pool.entries

@@ -68,6 +68,7 @@ class CollectExperiences:
             centaur_pimc_worlds=config.centaur_pimc_worlds,
             centaur_endgame_solver=config.centaur_endgame_solver,
             centaur_alpha_mu_depth=config.centaur_alpha_mu_depth,
+            centaur_deterministic_seed=config.centaur_deterministic_seed,
         )
         seat_labels = [s.strip() for s in effective_seats.split(",")]
         nn_seats = [i for i, s in enumerate(seat_labels) if s in LEARNER_SEAT_LABELS]

@@ -42,9 +42,20 @@ def test_invalid_shadow_source_rejected() -> None:
 
 
 def test_valid_shadow_sources_accepted() -> None:
-    for src in ("previous_iteration", "league_pool", "best_snapshot"):
+    for src in (
+        "previous_iteration",
+        "trailing",
+        "relative_trailing",
+        "league_pool",
+        "best_snapshot",
+    ):
         cfg = DuplicateConfig(shadow_source=src)
         assert cfg.shadow_source == src
+
+
+def test_invalid_shadow_refresh_interval_rejected() -> None:
+    with pytest.raises(ValueError, match="shadow_refresh_interval"):
+        DuplicateConfig(shadow_refresh_interval=0)
 
 
 def test_negative_pods_per_iteration_rejected() -> None:
@@ -56,3 +67,17 @@ def test_games_per_pod_by_pairing() -> None:
     assert DuplicateConfig(pairing="rotation_8game").games_per_pod == 8
     assert DuplicateConfig(pairing="rotation_4game").games_per_pod == 4
     assert DuplicateConfig(pairing="single_seat_2game").games_per_pod == 2
+
+
+def test_learner_seat_token_defaults_to_nn() -> None:
+    assert DuplicateConfig().learner_seat_token == "nn"
+
+
+def test_learner_seat_token_accepts_centaur() -> None:
+    cfg = DuplicateConfig(learner_seat_token="centaur")
+    assert cfg.learner_seat_token == "centaur"
+
+
+def test_invalid_learner_seat_token_rejected() -> None:
+    with pytest.raises(ValueError, match="learner_seat_token"):
+        DuplicateConfig(learner_seat_token="bot_v5")

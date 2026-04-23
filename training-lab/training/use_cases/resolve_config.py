@@ -64,9 +64,11 @@ def _parse_duplicate(raw: dict[str, Any]) -> DuplicateConfig:
         pairing=str(raw.get("pairing", "rotation_8game")),
         pods_per_iteration=int(raw.get("pods_per_iteration", 400)),
         shadow_source=str(raw.get("shadow_source", "previous_iteration")),
+        shadow_refresh_interval=int(raw.get("shadow_refresh_interval", 1)),
         apply_shaped_bonuses=bool(raw.get("apply_shaped_bonuses", False)),
         reward_model=str(raw.get("reward_model", "shadow_score_diff")),
         rng_seed=int(raw.get("rng_seed", 0)),
+        learner_seat_token=str(raw.get("learner_seat_token", "nn")),
     )
 
 
@@ -120,6 +122,31 @@ class ResolveConfig:
             lapajne_mc_sims=(
                 int(merged["lapajne_mc_sims"])
                 if merged.get("lapajne_mc_sims") is not None
+                else None
+            ),
+            centaur_handoff_trick=(
+                int(merged["centaur_handoff_trick"])
+                if merged.get("centaur_handoff_trick") is not None
+                else None
+            ),
+            centaur_pimc_worlds=(
+                int(merged["centaur_pimc_worlds"])
+                if merged.get("centaur_pimc_worlds") is not None
+                else None
+            ),
+            centaur_endgame_solver=(
+                str(merged["centaur_endgame_solver"])
+                if merged.get("centaur_endgame_solver") is not None
+                else None
+            ),
+            centaur_alpha_mu_depth=(
+                int(merged["centaur_alpha_mu_depth"])
+                if merged.get("centaur_alpha_mu_depth") is not None
+                else None
+            ),
+            centaur_deterministic_seed=(
+                int(merged["centaur_deterministic_seed"])
+                if merged.get("centaur_deterministic_seed") is not None
                 else None
             ),
             imitation_coef=merged.get("imitation_coef", 0.3),

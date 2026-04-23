@@ -8,6 +8,8 @@ from training.adapters.duplicate.shadow_sources import (
     BestSnapshotShadowSource,
     LeaguePoolShadowSource,
     PreviousIterationShadowSource,
+    RelativeTrailingShadowSource,
+    TrailingShadowSource,
     create_shadow_source,
 )
 from training.entities.league import (
@@ -192,3 +194,95 @@ def test_factory_creates_best_snapshot():
 def test_factory_rejects_unknown():
     with pytest.raises(ValueError, match="shadow_source"):
         create_shadow_source("does_not_exist")
+
+
+# ---------------------------------------------------------------------------
+# TrailingShadowSource
+# ---------------------------------------------------------------------------
+
+
+def test_trailing_rejects_invalid_interval():
+    with pytest.raises(ValueError, match="refresh_interval"):
+        TrailingShadowSource(refresh_interval=0)
+
+
+def test_trailing_falls_back_when_learner_file_missing(tmp_path):
+    learner = str(tmp_path / "learner.pt")  # does not exist
+    src = TrailingShadowSource(refresh_interval=5)
+    # No file yet → fall back to learner path (iteration 0 bootstrap).
+    assert src.resolve(iteration=0, learner_ts_path=learner, pool=None) == learner
+
+
+def test_trailing_snapshots_and_holds_between_refreshes(tmp_path):
+    learner = tmp_path / "learner.pt"
+    learner.write_bytes(b"v0")
+
+    src = TrailingShadowSource(refresh_interval=5)
+    cached = TrailingShadowSource._cached_path(str(learner))
+
+    # Iter 0: first refresh → snapshots v0.
+    out0 = src.resolve(iteration=0, learner_ts_path=str(learner), pool=None)
+    assert out0 == cached
+    assert open(cached, "rb").read() == b"v0"
+
+    # Mutate learner file; shadow must still reflect v0 for 4 more iterations.
+    learner.write_bytes(b"v1")
+    out1 = src.resolve(iteration=1, learner_ts_path=str(learner), pool=None)
+    out4 = src.resolve(iteration=4, learner_ts_path=str(learner), pool=None)
+    assert out1 == cached and out4 == cached
+    assert open(cached, "rb").read() == b"v0", "shadow must lag during interval"
+
+    # Iter 5: refresh boundary reached → picks up v1.
+    out5 = src.resolve(iteration=5, learner_ts_path=str(learner), pool=None)
+    assert out5 == cached
+    assert open(cached, "rb").read() == b"v1"
+
+    # And holds v1 for the next interval.
+    learner.write_bytes(b"v2")
+    out6 = src.resolve(iteration=6, learner_ts_path=str(learner), pool=None)
+    assert open(cached, "rb").read() == b"v1"
+    assert out6 == cached
+
+
+def test_trailing_refreshes_when_cached_file_deleted(tmp_path):
+    """Defensive: if the cached file disappears mid-run, the next resolve
+    must rebuild it rather than returning a non-existent path."""
+    learner = tmp_path / "learner.pt"
+    learner.write_bytes(b"v0")
+    src = TrailingShadowSource(refresh_interval=100)
+    cached = src.resolve(iteration=0, learner_ts_path=str(learner), pool=None)
+    import os as _os
+    _os.remove(cached)
+    # Still inside the interval, but file is gone → must rebuild.
+    out = src.resolve(iteration=1, learner_ts_path=str(learner), pool=None)
+    assert _os.path.exists(out)
+
+
+def test_factory_creates_trailing(tmp_path):
+    src = create_shadow_source("trailing", refresh_interval=7)
+    assert isinstance(src, TrailingShadowSource)
+    assert src._interval == 7
+
+
+def test_factory_creates_relative_trailing():
+    src = create_shadow_source("relative_trailing", refresh_interval=6)
+    assert isinstance(src, RelativeTrailingShadowSource)
+    assert src._lag == 6
+
+
+def test_relative_trailing_rejects_invalid_lag():
+    with pytest.raises(ValueError, match="lag_iterations"):
+        RelativeTrailingShadowSource(lag_iterations=0)
+
+
+def test_relative_trailing_uses_exact_fixed_lag_each_iteration(tmp_path):
+    learner = tmp_path / "learner.pt"
+    src = RelativeTrailingShadowSource(lag_iterations=3)
+
+    for i in range(1, 8):
+        # At start of iteration i, learner file contains weights from i-1.
+        learner.write_bytes(f"w{i-1}".encode("ascii"))
+        out = src.resolve(iteration=i, learner_ts_path=str(learner), pool=None)
+        expected_iter = max(i - 3, 0)
+        assert open(out, "rb").read() == f"w{expected_iter}".encode("ascii")
+        assert src.last_target_iteration == expected_iter

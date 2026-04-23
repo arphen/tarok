@@ -109,3 +109,41 @@ def test_resolve_config_sets_profile_name_from_config_path_stem() -> None:
 def test_resolve_config_uses_custom_profile_name_without_config_path() -> None:
     cfg = ResolveConfig(_Loader({})).resolve(cli={}, config_path=None)
     assert cfg.profile_name == "custom"
+
+
+def test_resolve_config_parses_centaur_knobs() -> None:
+    payload = {
+        "centaur_handoff_trick": 8,
+        "centaur_pimc_worlds": 100,
+        "centaur_endgame_solver": "pimc",
+        "centaur_alpha_mu_depth": 3,
+        "centaur_deterministic_seed": 42,
+    }
+    cfg = ResolveConfig(_Loader(payload)).resolve(cli={}, config_path="x.yaml")
+    assert cfg.centaur_handoff_trick == 8
+    assert cfg.centaur_pimc_worlds == 100
+    assert cfg.centaur_endgame_solver == "pimc"
+    assert cfg.centaur_alpha_mu_depth == 3
+    assert cfg.centaur_deterministic_seed == 42
+
+
+def test_resolve_config_centaur_knobs_default_to_none() -> None:
+    cfg = ResolveConfig(_Loader({})).resolve(cli={}, config_path="x.yaml")
+    assert cfg.centaur_handoff_trick is None
+    assert cfg.centaur_pimc_worlds is None
+    assert cfg.centaur_endgame_solver is None
+    assert cfg.centaur_alpha_mu_depth is None
+    assert cfg.centaur_deterministic_seed is None
+
+
+def test_resolve_config_parses_duplicate_learner_seat_token() -> None:
+    payload = {
+        "duplicate": {
+            "enabled": True,
+            "learner_seat_token": "centaur",
+        },
+    }
+    cfg = ResolveConfig(_Loader(payload)).resolve(cli={}, config_path="x.yaml")
+    assert cfg.duplicate is not None
+    assert cfg.duplicate.enabled is True
+    assert cfg.duplicate.learner_seat_token == "centaur"

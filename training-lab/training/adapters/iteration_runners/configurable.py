@@ -14,6 +14,7 @@ from training.entities.iteration_result import IterationResult
 from training.entities.model_identity import ModelIdentity
 from training.entities.training_config import TrainingConfig
 from training.ports.benchmark_port import BenchmarkPort
+from training.ports.duplicate_iteration_stats_port import DuplicateIterationStatsPort
 from training.ports.duplicate_pairing_port import DuplicatePairingPort
 from training.ports.duplicate_reward_port import DuplicateRewardPort
 from training.ports.duplicate_shadow_source_port import DuplicateShadowSourcePort
@@ -41,6 +42,7 @@ class ConfigurableIterationRunner(IterationRunnerPort):
         duplicate_pairing: DuplicatePairingPort | None = None,
         duplicate_reward: DuplicateRewardPort | None = None,
         duplicate_shadow_source: DuplicateShadowSourcePort | None = None,
+        duplicate_iteration_stats: DuplicateIterationStatsPort | None = None,
     ):
         self._selfplay = selfplay
         self._ppo = ppo
@@ -50,6 +52,7 @@ class ConfigurableIterationRunner(IterationRunnerPort):
         self._duplicate_pairing = duplicate_pairing
         self._duplicate_reward = duplicate_reward
         self._duplicate_shadow_source = duplicate_shadow_source
+        self._duplicate_iteration_stats = duplicate_iteration_stats
         self._delegate: IterationRunnerPort | None = None
 
     def setup(self, weights: dict, config: TrainingConfig, device: str) -> None:
@@ -75,6 +78,7 @@ class ConfigurableIterationRunner(IterationRunnerPort):
                 duplicate_pairing=self._duplicate_pairing,
                 duplicate_reward=self._duplicate_reward,
                 duplicate_shadow_source=self._duplicate_shadow_source,
+                duplicate_iteration_stats=self._duplicate_iteration_stats,
             )
 
         self._delegate.setup(weights, config, device)
@@ -132,6 +136,7 @@ class ConfigurableIterationRunner(IterationRunnerPort):
         DuplicatePairingPort | None,
         DuplicateRewardPort | None,
         DuplicateShadowSourcePort | None,
+        DuplicateIterationStatsPort | None,
     ]:
         # Worker must own fresh adapters in its own process. Duplicate-RL
         # ports are constructed lazily, mirroring ``_default_iteration_runner``
@@ -145,9 +150,11 @@ class ConfigurableIterationRunner(IterationRunnerPort):
         duplicate_pairing: DuplicatePairingPort | None = None
         duplicate_reward: DuplicateRewardPort | None = None
         duplicate_shadow_source: DuplicateShadowSourcePort | None = None
+        duplicate_iteration_stats: DuplicateIterationStatsPort | None = None
 
         duplicate_cfg = getattr(config, "duplicate", None)
         if duplicate_cfg is not None and duplicate_cfg.enabled:
+            from training.adapters.duplicate.numpy_iteration_stats import NumpyDuplicateIterationStats
             from training.adapters.duplicate.rotation_pairing import RotationPairingAdapter
             from training.adapters.duplicate.seeded_self_play_adapter import SeededSelfPlayAdapter
             from training.adapters.duplicate.shadow_score_reward import ShadowScoreRewardAdapter
@@ -157,8 +164,11 @@ class ConfigurableIterationRunner(IterationRunnerPort):
             duplicate_pairing = RotationPairingAdapter(pairing=duplicate_cfg.pairing)
             duplicate_reward = ShadowScoreRewardAdapter()
             duplicate_shadow_source = create_shadow_source(
-                duplicate_cfg.shadow_source, rng_seed=duplicate_cfg.rng_seed,
+                duplicate_cfg.shadow_source,
+                rng_seed=duplicate_cfg.rng_seed,
+                refresh_interval=duplicate_cfg.shadow_refresh_interval,
             )
+            duplicate_iteration_stats = NumpyDuplicateIterationStats()
 
         return (
             selfplay,
@@ -168,4 +178,5 @@ class ConfigurableIterationRunner(IterationRunnerPort):
             duplicate_pairing,
             duplicate_reward,
             duplicate_shadow_source,
+            duplicate_iteration_stats,
         )

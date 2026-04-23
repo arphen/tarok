@@ -18,7 +18,13 @@ from training.ports import ModelPort
 _SUPPORTED_ARCHES = ("v4", "v5")
 
 
-def _build_model(hidden_size: int, oracle: bool, model_arch: str):
+def build_model(hidden_size: int, oracle: bool, model_arch: str):
+    """Construct a Tarok network for the given architecture.
+
+    Exposed as module-level so other adapters (e.g. ``PPOAdapter``) can
+    receive it via constructor injection, keeping network-class branching
+    in one place.
+    """
     if model_arch == "v4":
         return TarokNetV4(hidden_size=hidden_size, oracle_critic=oracle)
     if model_arch == "v5":
@@ -28,6 +34,10 @@ def _build_model(hidden_size: int, oracle: bool, model_arch: str):
     raise ValueError(
         f"Unsupported model_arch={model_arch}. Supported: {_SUPPORTED_ARCHES}."
     )
+
+
+# Backwards-compat alias for internal callers in this module.
+_build_model = build_model
 
 
 class TorchModelAdapter(ModelPort):

@@ -37,7 +37,7 @@ from training.ports import SelfPlayPort
 log = logging.getLogger(__name__)
 
 
-_LEARNER_TOKEN = "nn"
+_LEARNER_TOKENS = LEARNER_SEAT_LABELS
 
 
 def _render_seat_config(
@@ -48,18 +48,18 @@ def _render_seat_config(
     """Convert a seating tuple to a comma-separated seat_config and the
     path-or-token used in the learner position.
 
-    The learner position is always rendered as ``"nn"`` (the Rust engine's
-    NN slot) so that ``run_self_play`` loads ``actor_path`` exactly once via
-    ``model_path``. Opponents are rendered as-is (bot labels or checkpoint
-    paths); the engine already dedups them.
+    The learner position must already hold a learner-seat token (``"nn"`` or
+    ``"centaur"``); we pass it through unchanged so the Rust engine knows
+    whether to load ``actor_path`` as a pure NN player or as a Centaur
+    hybrid. Opponents are rendered as-is (bot labels or checkpoint paths);
+    the engine already dedups them.
     """
     rendered = list(seating)
-    if rendered[learner_pos] not in LEARNER_SEAT_LABELS:
+    if rendered[learner_pos] not in _LEARNER_TOKENS:
         raise ValueError(
             f"seating[{learner_pos}] = {rendered[learner_pos]!r} is not a learner token; "
             f"learner_positions disagree with seating."
         )
-    rendered[learner_pos] = _LEARNER_TOKEN
     return ",".join(rendered), actor_path
 
 
@@ -99,6 +99,7 @@ class SeededSelfPlayAdapter(SelfPlayPort):
         centaur_pimc_worlds: int | None = None,
         centaur_endgame_solver: str | None = None,
         centaur_alpha_mu_depth: int | None = None,
+        centaur_deterministic_seed: int | None = None,
     ) -> dict[str, Any]:
         return self._inner.run(
             model_path=model_path,
@@ -114,6 +115,7 @@ class SeededSelfPlayAdapter(SelfPlayPort):
             centaur_pimc_worlds=centaur_pimc_worlds,
             centaur_endgame_solver=centaur_endgame_solver,
             centaur_alpha_mu_depth=centaur_alpha_mu_depth,
+            centaur_deterministic_seed=centaur_deterministic_seed,
         )
 
     def compute_run_stats(
@@ -140,6 +142,7 @@ class SeededSelfPlayAdapter(SelfPlayPort):
         centaur_pimc_worlds: int | None = None,
         centaur_endgame_solver: str | None = None,
         centaur_alpha_mu_depth: int | None = None,
+        centaur_deterministic_seed: int | None = None,
     ) -> DuplicateRunResult:
         if not pods:
             raise ValueError("run_seeded_pods requires at least one pod")
@@ -215,6 +218,7 @@ class SeededSelfPlayAdapter(SelfPlayPort):
                     centaur_pimc_worlds=centaur_pimc_worlds,
                     centaur_endgame_solver=centaur_endgame_solver,
                     centaur_alpha_mu_depth=centaur_alpha_mu_depth,
+                    centaur_deterministic_seed=centaur_deterministic_seed,
                     deck_seeds=group_seeds,
                 )
                 # Tag each experience row with (pod_idx, variant_idx) so we
@@ -243,6 +247,7 @@ class SeededSelfPlayAdapter(SelfPlayPort):
                     centaur_pimc_worlds=centaur_pimc_worlds,
                     centaur_endgame_solver=centaur_endgame_solver,
                     centaur_alpha_mu_depth=centaur_alpha_mu_depth,
+                    centaur_deterministic_seed=centaur_deterministic_seed,
                     deck_seeds=group_seeds,
                 )
                 sh_scores = np.asarray(shadow_raw["scores"], dtype=np.int32)

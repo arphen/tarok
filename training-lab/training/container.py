@@ -100,7 +100,9 @@ def _default_iteration_runner(
     duplicate_pairing = None
     duplicate_reward = None
     duplicate_shadow_source = None
+    duplicate_iteration_stats = None
     if config is not None and getattr(config, "duplicate", None) is not None and config.duplicate.enabled:
+        from training.adapters.duplicate.numpy_iteration_stats import NumpyDuplicateIterationStats
         from training.adapters.duplicate.rotation_pairing import RotationPairingAdapter
         from training.adapters.duplicate.seeded_self_play_adapter import SeededSelfPlayAdapter
         from training.adapters.duplicate.shadow_score_reward import ShadowScoreRewardAdapter
@@ -113,14 +115,18 @@ def _default_iteration_runner(
         duplicate_pairing = RotationPairingAdapter(pairing=config.duplicate.pairing)
         duplicate_reward = ShadowScoreRewardAdapter()
         duplicate_shadow_source = create_shadow_source(
-            config.duplicate.shadow_source, rng_seed=config.duplicate.rng_seed,
+            config.duplicate.shadow_source,
+            rng_seed=config.duplicate.rng_seed,
+            refresh_interval=config.duplicate.shadow_refresh_interval,
         )
+        duplicate_iteration_stats = NumpyDuplicateIterationStats()
 
     return ConfigurableIterationRunner(
         selfplay, ppo, benchmark, model, presenter,
         duplicate_pairing=duplicate_pairing,
         duplicate_reward=duplicate_reward,
         duplicate_shadow_source=duplicate_shadow_source,
+        duplicate_iteration_stats=duplicate_iteration_stats,
     )
 
 

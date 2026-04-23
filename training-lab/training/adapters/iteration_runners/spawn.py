@@ -136,6 +136,23 @@ class _QueuePresenter(PresenterPort):
     def on_iteration_done(self, prev_placement, curr_placement, elapsed):
         self._send("on_iteration_done", prev_placement, curr_placement, elapsed)
 
+    def on_duplicate_shadow_selected(
+        self,
+        iteration,
+        source,
+        shadow_path,
+        shadow_iteration=None,
+        refresh_interval=None,
+    ):
+        self._send(
+            "on_duplicate_shadow_selected",
+            iteration,
+            source,
+            shadow_path,
+            shadow_iteration=shadow_iteration,
+            refresh_interval=refresh_interval,
+        )
+
     def on_training_complete(self, run):
         pass
 
@@ -149,9 +166,10 @@ def _worker_main(
     """Worker loop: receive init, then execute iterations until sentinel.
 
     The adapter factory accepts the :class:`TrainingConfig` so it can decide
-    whether to construct duplicate-RL adapters (pairing/reward) for the
-    worker's :class:`RunIteration`. The factory returns a 6-tuple whose last
-    two slots may be ``None`` when duplicate mode is disabled.
+    whether to construct duplicate-RL adapters (pairing/reward/iteration
+    stats) for the worker's :class:`RunIteration`. The factory returns a
+    tuple whose last four slots may be ``None`` when duplicate mode is
+    disabled.
     """
     from training.use_cases.run_iteration import RunIteration
 
@@ -164,13 +182,18 @@ def _worker_main(
         duplicate_pairing,
         duplicate_reward,
         duplicate_shadow_source,
+        *rest,
     ) = adapter_factory(init.config)
+    # Backwards-compatible: older factories (pre-stats) return a 7-tuple; the
+    # new stats port appears in slot 8. Default to None when absent.
+    duplicate_iteration_stats = rest[0] if rest else None
     presenter = _QueuePresenter(event_queue)
     run_iteration = RunIteration(
         selfplay, ppo, benchmark, model, presenter,
         duplicate_pairing=duplicate_pairing,
         duplicate_reward=duplicate_reward,
         duplicate_shadow_source=duplicate_shadow_source,
+        duplicate_iteration_stats=duplicate_iteration_stats,
     )
 
     ppo.setup(init.weights, init.config, init.device)

@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import logging
-from typing import Any
+from typing import Any, Callable
 
 import numpy as np
 import torch
@@ -20,7 +20,6 @@ from tarok_model.encoding import (
     KING_ACTION_SIZE,
     TALON_ACTION_SIZE,
 )
-from tarok_model.network import TarokNetV4
 
 from training.adapters.ppo.expert_replay import load_expert_experiences
 from training.adapters.ppo.jsonl_human_replay import load_human_experiences, merge_experiences
@@ -55,8 +54,15 @@ _MODE_ID_TO_ENUM = {
 
 
 class PPOAdapter(PPOPort):
-    def __init__(self) -> None:
-        self._network: TarokNetV4 | None = None
+    def __init__(
+        self,
+        network_factory: Callable[[int, bool, str], nn.Module] | None = None,
+    ) -> None:
+        if network_factory is None:
+            from training.adapters.modeling.torch_model_adapter import build_model
+            network_factory = build_model
+        self._network_factory = network_factory
+        self._network: nn.Module | None = None
         self._optimizer: optim.Adam | None = None
         self._compute: Any = None
         self._config: TrainingConfig | None = None
@@ -85,10 +91,7 @@ class PPOAdapter(PPOPort):
         hidden_size = weights["shared.0.weight"].shape[0]
         oracle = any(k.startswith("critic_backbone") for k in weights)
 
-        if config.model_arch != "v4":
-            raise ValueError(f"Unsupported model_arch={config.model_arch}. Only 'v4' is supported.")
-
-        self._network = TarokNetV4(hidden_size=hidden_size, oracle_critic=oracle)
+        self._network = self._network_factory(hidden_size, oracle, config.model_arch)
         validate_v4_contract_indices_with_rust()
         self._network.load_state_dict(weights)
         self._network = self._compute.prepare_network(self._network)

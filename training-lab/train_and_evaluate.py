@@ -119,8 +119,8 @@ Examples:
     parser.add_argument("--hidden-size", type=int, default=None,
                         help="Hidden layer size for new models (default: 256)")
     parser.add_argument("--model-arch", type=str, default=None,
-                        choices=["v4"],
-                        help="Model architecture: v4")
+                        choices=["v4", "v5"],
+                        help="Model architecture: v4 or v5")
     oracle_group = parser.add_mutually_exclusive_group()
     oracle_group.add_argument(
         "--oracle-critic",

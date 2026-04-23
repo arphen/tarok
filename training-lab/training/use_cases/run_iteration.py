@@ -11,6 +11,7 @@ Delegates each phase to a single-responsibility use case:
 from __future__ import annotations
 
 import gc
+import re
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -20,6 +21,7 @@ from training.entities.iteration_result import IterationResult
 from training.entities.model_identity import ModelIdentity
 from training.entities.training_config import TrainingConfig
 from training.ports.benchmark_port import BenchmarkPort
+from training.ports.duplicate_iteration_stats_port import DuplicateIterationStatsPort
 from training.ports.duplicate_pairing_port import DuplicatePairingPort
 from training.ports.duplicate_reward_port import DuplicateRewardPort
 from training.ports.duplicate_shadow_source_port import DuplicateShadowSourcePort
@@ -50,7 +52,9 @@ class RunIteration:
         duplicate_pairing: DuplicatePairingPort | None = None,
         duplicate_reward: DuplicateRewardPort | None = None,
         duplicate_shadow_source: DuplicateShadowSourcePort | None = None,
+        duplicate_iteration_stats: DuplicateIterationStatsPort | None = None,
     ):
+        self._presenter = presenter
         self._collect_experiences = CollectExperiences(selfplay, ppo, presenter)
         self._update_policy = UpdatePolicy(ppo, presenter)
         self._export_model = ExportModel(model)
@@ -59,7 +63,13 @@ class RunIteration:
         # Optional duplicate-RL pipeline. Constructed lazily from the
         # injected ports; left as ``None`` when either port is absent.
         self._collect_duplicate_experiences: CollectDuplicateExperiences | None = (
-            CollectDuplicateExperiences(selfplay, duplicate_pairing, duplicate_reward, presenter)
+            CollectDuplicateExperiences(
+                selfplay,
+                duplicate_pairing,
+                duplicate_reward,
+                presenter,
+                iteration_stats=duplicate_iteration_stats,
+            )
             if duplicate_pairing is not None and duplicate_reward is not None
             else None
         )
@@ -104,17 +114,47 @@ class RunIteration:
             shadow_path = self._shadow_source.resolve(
                 iteration=iteration, learner_ts_path=ts_path, pool=pool,
             )
+            shadow_iteration: int | None = None
+            if duplicate_cfg.shadow_source == "previous_iteration":
+                shadow_iteration = max(iteration - 1, 0)
+            elif duplicate_cfg.shadow_source == "trailing":
+                shadow_iteration = getattr(self._shadow_source, "last_refresh_iteration", None)
+            elif duplicate_cfg.shadow_source == "relative_trailing":
+                shadow_iteration = getattr(self._shadow_source, "last_target_iteration", None)
+            elif duplicate_cfg.shadow_source in {"league_pool", "best_snapshot"}:
+                # League snapshots use paths like .../iter_005.pt in this repo.
+                # If the path follows that convention, surface it.
+                m = re.search(r"iter[_-](\d+)", shadow_path)
+                if m is not None:
+                    shadow_iteration = int(m.group(1))
+            refresh_interval = (
+                duplicate_cfg.shadow_refresh_interval
+                if duplicate_cfg.shadow_source in {"trailing", "relative_trailing"}
+                else None
+            )
+            self._presenter.on_duplicate_shadow_selected(
+                iteration=iteration,
+                source=duplicate_cfg.shadow_source,
+                shadow_path=shadow_path,
+                shadow_iteration=shadow_iteration,
+                refresh_interval=refresh_interval,
+            )
             bundle = self._collect_duplicate_experiences.execute(
                 duplicate_config=duplicate_cfg,
                 concurrency=config.concurrency,
                 explore_rate=config.explore_rate,
                 learner_path=ts_path,
                 shadow_path=shadow_path,
-                pool=config.league,
+                pool=pool,
                 outplace_session_size=config.outplace_session_size,
                 include_oracle_states=False,
                 iter_explore_rate=iter_explore_rate,
                 seats_label_for_stats=seats_override,
+                centaur_handoff_trick=config.centaur_handoff_trick,
+                centaur_pimc_worlds=config.centaur_pimc_worlds,
+                centaur_endgame_solver=config.centaur_endgame_solver,
+                centaur_alpha_mu_depth=config.centaur_alpha_mu_depth,
+                centaur_deterministic_seed=config.centaur_deterministic_seed,
             )
         else:
             bundle = self._collect_experiences.execute(

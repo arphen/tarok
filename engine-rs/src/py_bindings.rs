@@ -887,7 +887,7 @@ fn compute_legal_plays(hand: Vec<u8>, trick_cards: Vec<(u8, u8)>, contract: Opti
 ///   initial_talon:  (n_games, 6) uint8, only when `include_replay_data=True`
 ///   traces:         list[dict], only when `include_replay_data=True`
 #[pyfunction]
-#[pyo3(signature = (n_games, concurrency=64, model_path=None, explore_rate=0.05, seat_config="nn,nn,nn,nn", include_replay_data=true, include_oracle_states=false, lapajne_mc_worlds=None, lapajne_mc_sims=None, centaur_handoff_trick=None, centaur_pimc_worlds=None, centaur_endgame_solver=None, centaur_alpha_mu_depth=None, deck_seeds=None))]
+#[pyo3(signature = (n_games, concurrency=64, model_path=None, explore_rate=0.05, seat_config="nn,nn,nn,nn", include_replay_data=true, include_oracle_states=false, lapajne_mc_worlds=None, lapajne_mc_sims=None, centaur_handoff_trick=None, centaur_pimc_worlds=None, centaur_endgame_solver=None, centaur_alpha_mu_depth=None, centaur_deterministic_seed=None, deck_seeds=None))]
 fn run_self_play(
     py: Python<'_>,
     n_games: u32,
@@ -903,6 +903,7 @@ fn run_self_play(
     centaur_pimc_worlds: Option<u32>,
     centaur_endgame_solver: Option<&str>,
     centaur_alpha_mu_depth: Option<usize>,
+    centaur_deterministic_seed: Option<u64>,
     deck_seeds: Option<Vec<u64>>,
 ) -> PyResult<PyObject> {
     use std::collections::HashMap;
@@ -952,14 +953,19 @@ fn run_self_play(
             centaur_endgame_solver.unwrap_or("pimc"),
             centaur_alpha_mu_depth.unwrap_or(DEFAULT_ALPHA_MU_DEPTH),
         );
-        Some(Arc::new(CentaurBot::new(
+        let bot = CentaurBot::new(
             model_path.unwrap(),
             tch::Device::Cpu,
             explore_rate,
             centaur_handoff_trick.unwrap_or(DEFAULT_HANDOFF_TRICK),
             centaur_pimc_worlds.unwrap_or(DEFAULT_NUM_WORLDS),
             policy,
-        )))
+        );
+        let bot = match centaur_deterministic_seed {
+            Some(salt) => bot.with_deterministic_seed(salt),
+            None => bot,
+        };
+        Some(Arc::new(bot))
     } else {
         None
     };

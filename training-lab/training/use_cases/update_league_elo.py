@@ -56,16 +56,13 @@ class UpdateLeagueElo:
         pool: LeaguePool,
         seat_config_used: str,
         seat_outcomes: dict[int, tuple[int, int, int]],
+        opponent_outcomes: dict[str, tuple[int, int, int]] | None = None,
     ) -> None:
         for entry in pool.entries:
             entry.recent_outplace_rate = None
             entry.recent_outplace_samples = 0
 
-        labels = [s.strip() for s in seat_config_used.split(",")]
-        if len(labels) != 4:
-            return
-
-        # Build a token→entry map for fast lookup
+        # Build a token→entry map for fast lookup (used by both paths).
         token_to_entry: dict[str, list] = {}
         for entry in pool.entries:
             tok = entry.opponent.seat_token()
@@ -75,6 +72,28 @@ class UpdateLeagueElo:
         # this weight scales K so one unit can carry more Elo impact.
         k_weight = max(1.0, float(pool.config.elo_outplace_unit_weight))
         k_factor = _K * k_weight
+
+        # Duplicate-mode path: outcomes are already bucketed by opponent
+        # league token (learner rotates through all 4 seats pod-by-pod, so
+        # seat-index-keyed ``seat_outcomes`` cannot represent them). When
+        # this dict is non-empty we prefer it and skip the seat-indexed
+        # fallback so the same comparison is never counted twice.
+        if opponent_outcomes:
+            for token, outcomes in opponent_outcomes.items():
+                entries_for_token = token_to_entry.get(token)
+                if not entries_for_token:
+                    continue
+                self._apply_outcomes(
+                    pool=pool,
+                    entries_for_token=entries_for_token,
+                    outcomes=outcomes,
+                    k_factor=k_factor,
+                )
+            return
+
+        labels = [s.strip() for s in seat_config_used.split(",")]
+        if len(labels) != 4:
+            return
 
         for seat_idx in range(1, 4):
             token = labels[seat_idx]
@@ -86,26 +105,39 @@ class UpdateLeagueElo:
             outcomes = seat_outcomes.get(seat_idx)
             if outcomes is None:
                 continue
+            self._apply_outcomes(
+                pool=pool,
+                entries_for_token=entries_for_token,
+                outcomes=outcomes,
+                k_factor=k_factor,
+            )
 
-            learner_outplaces, opp_outplaces, draws = outcomes
-            n_games = learner_outplaces + opp_outplaces + draws
-            if n_games == 0:
-                continue
+    @staticmethod
+    def _apply_outcomes(
+        *,
+        pool: LeaguePool,
+        entries_for_token: list,
+        outcomes: tuple[int, int, int],
+        k_factor: float,
+    ) -> None:
+        learner_outplaces, opp_outplaces, draws = outcomes
+        n_games = learner_outplaces + opp_outplaces + draws
+        if n_games == 0:
+            return
 
-            recent_outplace_rate = learner_outplaces / n_games
+        recent_outplace_rate = learner_outplaces / n_games
 
-            # Aggregate outcome as a fraction: 1.0 = opponent won all,
-            # 0.0 = learner won all, draws count as 0.5 each.
-            opp_outcome = (opp_outplaces + 0.5 * draws) / n_games
+        # Aggregate outcome as a fraction: 1.0 = opponent won all,
+        # 0.0 = learner won all, draws count as 0.5 each.
+        opp_outcome = (opp_outplaces + 0.5 * draws) / n_games
+        learner_outcome = 1.0 - opp_outcome
 
-            learner_outcome = 1.0 - opp_outcome
+        for entry in entries_for_token:
+            entry.games_played += n_games
+            entry.learner_outplaces += learner_outplaces
+            entry.recent_outplace_rate = recent_outplace_rate
+            entry.recent_outplace_samples = n_games
 
-            for entry in entries_for_token:
-                entry.games_played += n_games
-                entry.learner_outplaces += learner_outplaces
-                entry.recent_outplace_rate = recent_outplace_rate
-                entry.recent_outplace_samples = n_games
-
-                opp_elo = entry.elo
-                e_learner = _elo_expected(pool.learner_elo, opp_elo)
-                pool.learner_elo += k_factor * (learner_outcome - e_learner)
+            opp_elo = entry.elo
+            e_learner = _elo_expected(pool.learner_elo, opp_elo)
+            pool.learner_elo += k_factor * (learner_outcome - e_learner)

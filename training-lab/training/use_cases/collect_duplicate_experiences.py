@@ -13,18 +13,18 @@ this use case and the legacy ``CollectExperiences`` based on
 from __future__ import annotations
 
 import time
+from typing import TYPE_CHECKING
 
 from training.entities.duplicate_config import DuplicateConfig
 from training.entities.experience_bundle import ExperienceBundle
-from training.entities.league import LeagueConfig
-from training.entities.training_config import LEARNER_SEAT_LABELS
+from training.ports.duplicate_iteration_stats_port import DuplicateIterationStatsPort
 from training.ports.duplicate_pairing_port import DuplicatePairingPort
 from training.ports.duplicate_reward_port import DuplicateRewardPort
 from training.ports.presenter_port import PresenterPort
 from training.ports.selfplay_port import SelfPlayPort
 
-
-_LEARNER_TOKEN = "nn"
+if TYPE_CHECKING:
+    from training.entities.league import LeagueConfig, LeaguePool
 
 
 class CollectDuplicateExperiences:
@@ -43,11 +43,13 @@ class CollectDuplicateExperiences:
         pairing: DuplicatePairingPort,
         reward: DuplicateRewardPort,
         presenter: PresenterPort,
+        iteration_stats: DuplicateIterationStatsPort | None = None,
     ) -> None:
         self._selfplay = selfplay
         self._pairing = pairing
         self._reward = reward
         self._presenter = presenter
+        self._iteration_stats = iteration_stats
 
     def execute(
         self,
@@ -56,11 +58,16 @@ class CollectDuplicateExperiences:
         explore_rate: float,
         learner_path: str,
         shadow_path: str,
-        pool: LeagueConfig | None,
+        pool: "LeaguePool | LeagueConfig | None",
         outplace_session_size: int,
         include_oracle_states: bool = False,
         iter_explore_rate: float | None = None,
         seats_label_for_stats: str | None = None,
+        centaur_handoff_trick: int | None = None,
+        centaur_pimc_worlds: int | None = None,
+        centaur_endgame_solver: str | None = None,
+        centaur_alpha_mu_depth: int | None = None,
+        centaur_deterministic_seed: int | None = None,
     ) -> ExperienceBundle:
         if not duplicate_config.enabled:
             raise ValueError(
@@ -77,12 +84,27 @@ class CollectDuplicateExperiences:
         )
 
         # 1. Build pods.
+        learner_token = duplicate_config.learner_seat_token
         pods = self._pairing.build_pods(
             pool=pool,
-            learner_seat_token=_LEARNER_TOKEN,
-            shadow_seat_token=_LEARNER_TOKEN,  # engine loads shadow via model_path
+            learner_seat_token=learner_token,
+            shadow_seat_token=learner_token,  # engine loads shadow via model_path
             n_pods=duplicate_config.pods_per_iteration,
             rng_seed=int(duplicate_config.rng_seed),
+        )
+
+        # Announce the self-play phase. In duplicate mode the learner
+        # rotates across all four seats, so we render the opponent-token
+        # set the league sampled into this iteration's pods (dedup'd,
+        # sorted) — the single best "who's at the table this iter?"
+        # diagnostic.
+        unique_opponents = tuple(sorted({tok for pod in pods for tok in pod.opponents}))
+        n_games_per_pod = pods[0].n_games_per_group if pods else 0
+        self._presenter.on_duplicate_selfplay_start(
+            n_pods=len(pods),
+            n_games_per_pod=n_games_per_pod,
+            unique_opponents=unique_opponents,
+            explore_rate=effective_explore_rate,
         )
 
         # 2. Seeded self-play.
@@ -94,6 +116,11 @@ class CollectDuplicateExperiences:
             explore_rate=effective_explore_rate,
             concurrency=concurrency,
             include_oracle_states=include_oracle_states,
+            centaur_handoff_trick=centaur_handoff_trick,
+            centaur_pimc_worlds=centaur_pimc_worlds,
+            centaur_endgame_solver=centaur_endgame_solver,
+            centaur_alpha_mu_depth=centaur_alpha_mu_depth,
+            centaur_deterministic_seed=centaur_deterministic_seed,
         )
         sp_time = time.time() - t0
 
@@ -132,11 +159,12 @@ class CollectDuplicateExperiences:
         n_learner = n_total
 
         # seat_labels is only used downstream for presenter/outplace stats. In
-        # duplicate mode the learner rotates across all four seats, so we
-        # synthesize a homogeneous "nn,nn,nn,nn" label.
-        effective_seats = seats_label_for_stats or "nn,nn,nn,nn"
+        # duplicate mode the learner rotates across all four seats, so every
+        # seat qualifies as a learner seat from the PPO guard's perspective —
+        # regardless of what the stats label looks like.
+        effective_seats = seats_label_for_stats or ",".join([learner_token] * 4)
         seat_labels = [s.strip() for s in effective_seats.split(",")]
-        nn_seats = [i for i, s in enumerate(seat_labels) if s in LEARNER_SEAT_LABELS]
+        nn_seats = [0, 1, 2, 3]
 
         # Per-seat mean scores from the active runs. Outplace outcomes are
         # not meaningful in duplicate mode (the learner rotates across all
@@ -159,7 +187,24 @@ class CollectDuplicateExperiences:
         seat_outcomes: dict = {}
         _ = outplace_session_size  # reserved for future duplicate-aware stats
 
+        # Compute per-iteration duplicate stats (per-opponent outplaces +
+        # duplicate advantage) when the stats port is injected. This is
+        # what powers presenter visibility and the league Elo update for
+        # opponents the learner actually faced in this iteration's pods.
+        duplicate_stats = None
+        if self._iteration_stats is not None:
+            duplicate_stats = self._iteration_stats.compute(
+                active_raw=raw,
+                shadow_scores=result.shadow_scores,
+                pods=pods,
+                pod_ids=result.pod_ids,
+                learner_positions=result.learner_positions,
+                active_game_ids=result.active_game_ids,
+            )
+
         self._presenter.on_selfplay_done(n_total, n_learner, sp_time)
+        if duplicate_stats is not None:
+            self._presenter.on_duplicate_iteration_stats(duplicate_stats)
 
         return ExperienceBundle(
             raw=raw,
@@ -171,6 +216,7 @@ class CollectDuplicateExperiences:
             mean_scores=mean_scores,
             seat_outcomes=seat_outcomes,
             sp_time=sp_time,
+            duplicate_stats=duplicate_stats,
         )
 
 

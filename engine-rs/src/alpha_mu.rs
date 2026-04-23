@@ -202,6 +202,21 @@ pub fn alpha_mu_choose_card(
     num_worlds: u32,
     max_depth: usize,
 ) -> Card {
+    alpha_mu_choose_card_with_seed(gs, viewer, num_worlds, max_depth, rand::rng().random())
+}
+
+/// Deterministic variant of [`alpha_mu_choose_card`].
+///
+/// See [`crate::pimc::pimc_choose_card_with_seed`] for the rationale
+/// (duplicate-RL noise cancellation via a seed derived from the visible
+/// game-state fingerprint).
+pub fn alpha_mu_choose_card_with_seed(
+    gs: &GameState,
+    viewer: u8,
+    num_worlds: u32,
+    max_depth: usize,
+    base_seed: u64,
+) -> Card {
     let viewer_team = gs.get_team(viewer);
     let maximizing = viewer_team == Team::DeclarerTeam;
 
@@ -219,7 +234,6 @@ pub fn alpha_mu_choose_card(
 
     // Sample worlds
     let constraints = detect_constraints(gs);
-    let base_seed: u64 = rand::rng().random();
     let worlds: Vec<[CardSet; NUM_PLAYERS]> = (0..num_worlds)
         .into_par_iter()
         .filter_map(|i| {

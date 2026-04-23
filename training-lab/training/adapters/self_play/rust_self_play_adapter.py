@@ -56,6 +56,7 @@ class RustSelfPlay(SelfPlayPort):
         centaur_pimc_worlds: int | None = None,
         centaur_endgame_solver: str | None = None,
         centaur_alpha_mu_depth: int | None = None,
+        centaur_deterministic_seed: int | None = None,
     ) -> dict[str, Any]:
         raw = te.run_self_play(
             n_games=n_games,
@@ -71,6 +72,7 @@ class RustSelfPlay(SelfPlayPort):
             centaur_pimc_worlds=centaur_pimc_worlds,
             centaur_endgame_solver=centaur_endgame_solver,
             centaur_alpha_mu_depth=centaur_alpha_mu_depth,
+            centaur_deterministic_seed=centaur_deterministic_seed,
         )
 
         # Compatibility shim for older engine builds that don't expose game_modes.

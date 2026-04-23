@@ -6,6 +6,7 @@ import pytest
 
 from training.adapters.duplicate.rotation_pairing import RotationPairingAdapter
 from training.entities.duplicate_pod import DuplicatePod
+from training.entities.league import LeagueConfig, LeagueOpponent, LeaguePool, LeaguePoolEntry
 
 
 def test_build_pods_yields_requested_count() -> None:
@@ -102,3 +103,33 @@ def test_single_seat_2game_has_one_active_game() -> None:
 def test_unknown_pairing_rejected() -> None:
     with pytest.raises(ValueError, match="pairing"):
         RotationPairingAdapter("rotation_16game")
+
+
+def test_build_pods_uses_live_league_pool_entries_including_ghosts() -> None:
+    adapter = RotationPairingAdapter("rotation_8game")
+    pool = LeaguePool(config=LeagueConfig(enabled=True))
+    pool.entries = [
+        LeaguePoolEntry(LeagueOpponent(name="V5", type="bot_v5"), elo=1500.0),
+        LeaguePoolEntry(LeagueOpponent(name="M6", type="bot_m6"), elo=1500.0),
+        LeaguePoolEntry(
+            LeagueOpponent(
+                name="ghost@70",
+                type="nn_checkpoint",
+                path="/tmp/league_pool/iter_070.pt",
+            ),
+            elo=1600.0,
+        ),
+    ]
+
+    # With exactly 3 entries, each pod samples all three without replacement,
+    # so the checkpoint token must appear deterministically.
+    pods = adapter.build_pods(
+        pool=pool,
+        learner_seat_token="nn",
+        shadow_seat_token="shadow",
+        n_pods=3,
+        rng_seed=7,
+    )
+
+    sampled = {tok for pod in pods for tok in pod.opponents}
+    assert "/tmp/league_pool/iter_070.pt" in sampled

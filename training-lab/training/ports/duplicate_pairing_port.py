@@ -14,7 +14,7 @@ from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
     from training.entities.duplicate_pod import DuplicatePod
-    from training.entities.league import LeagueConfig
+    from training.entities.league import LeagueConfig, LeaguePool
 
 
 class DuplicatePairingPort(ABC):
@@ -23,7 +23,7 @@ class DuplicatePairingPort(ABC):
     @abstractmethod
     def build_pods(
         self,
-        pool: "LeagueConfig | None",
+        pool: "LeaguePool | LeagueConfig | None",
         learner_seat_token: str,
         shadow_seat_token: str,
         n_pods: int,
@@ -31,9 +31,10 @@ class DuplicatePairingPort(ABC):
     ) -> list["DuplicatePod"]:
         """Return ``n_pods`` pods for the requested iteration.
 
-        ``pool`` is the league configuration used to sample opponent identities
-        (one triple of opponents per pod). When ``pool`` is ``None`` or has no
-        opponents, adapters may fall back to a fixed heuristic bot roster.
+        ``pool`` is the live league pool (preferred) or static league config
+        used to sample opponent identities (one triple per pod). When ``pool``
+        is ``None`` or has no usable opponents, adapters may fall back to a
+        fixed heuristic bot roster.
 
         ``learner_seat_token`` is the seat token that identifies the learner
         (typically ``"nn"``) — it must appear exactly once in every

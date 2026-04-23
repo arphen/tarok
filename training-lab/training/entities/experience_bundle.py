@@ -5,6 +5,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any
 
+from training.entities.duplicate_iteration_stats import DuplicateIterationStats
+
 
 @dataclass
 class ExperienceBundle:
@@ -25,3 +27,6 @@ class ExperienceBundle:
     mean_scores: tuple  # (p0, p1, p2, p3) floats
     seat_outcomes: dict  # seat_idx -> (learner_outplaces, opponent_outplaces, draws)
     sp_time: float
+    # Populated only in duplicate-RL mode (see CollectDuplicateExperiences).
+    # ``None`` for regular self-play iterations.
+    duplicate_stats: DuplicateIterationStats | None = None

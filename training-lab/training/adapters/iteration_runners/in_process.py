@@ -13,6 +13,7 @@ from training.entities.iteration_result import IterationResult
 from training.entities.model_identity import ModelIdentity
 from training.entities.training_config import TrainingConfig
 from training.ports.benchmark_port import BenchmarkPort
+from training.ports.duplicate_iteration_stats_port import DuplicateIterationStatsPort
 from training.ports.duplicate_pairing_port import DuplicatePairingPort
 from training.ports.duplicate_reward_port import DuplicateRewardPort
 from training.ports.duplicate_shadow_source_port import DuplicateShadowSourcePort
@@ -39,6 +40,7 @@ class InProcessIterationRunner(IterationRunnerPort):
         duplicate_pairing: DuplicatePairingPort | None = None,
         duplicate_reward: DuplicateRewardPort | None = None,
         duplicate_shadow_source: DuplicateShadowSourcePort | None = None,
+        duplicate_iteration_stats: DuplicateIterationStatsPort | None = None,
     ):
         self._ppo = ppo
         self._run_iteration = RunIteration(
@@ -46,6 +48,7 @@ class InProcessIterationRunner(IterationRunnerPort):
             duplicate_pairing=duplicate_pairing,
             duplicate_reward=duplicate_reward,
             duplicate_shadow_source=duplicate_shadow_source,
+            duplicate_iteration_stats=duplicate_iteration_stats,
         )
 
     def setup(self, weights: dict, config: TrainingConfig, device: str) -> None:

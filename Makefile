@@ -316,7 +316,6 @@ train-new: ensure-engine
 		PYTHONPATH=backend/src:model/src python training-lab/train_and_evaluate.py \
 		--config training-lab/configs/$(CONFIG).yaml \
 		--new \
-		--model-arch v4 \
 		$(EXTRA)
 
 # CartPole sanity check for validating custom optimization loops via Gymnasium.

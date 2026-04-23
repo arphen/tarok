@@ -25,26 +25,49 @@ from training.entities.duplicate_pod import DuplicatePod
 from training.ports.duplicate_pairing_port import DuplicatePairingPort
 
 if TYPE_CHECKING:
-    from training.entities.league import LeagueConfig
+    from training.entities.league import LeagueConfig, LeaguePool
 
 
 _DEFAULT_OPPONENT_ROSTER: tuple[str, ...] = ("bot_v5", "bot_v6", "bot_m6")
 
 
-def _pool_opponent_tokens(pool: "LeagueConfig | None") -> tuple[str, ...]:
-    """Extract opponent seat tokens from a league pool, or fall back."""
-    if pool is None or not getattr(pool, "opponents", ()):
+def _pool_opponent_tokens(pool: "LeaguePool | LeagueConfig | None") -> tuple[str, ...]:
+    """Extract opponent seat tokens from live LeaguePool/config, or fall back.
+
+    Prefer runtime ``LeaguePool.entries`` (which includes dynamic snapshot
+    ghosts) when available; otherwise fall back to static config opponents.
+    """
+    if pool is None:
         return _DEFAULT_OPPONENT_ROSTER
-    tokens: list[str] = []
-    for opp in pool.opponents:
-        # LeagueOpponent stores `type` (e.g. "bot_v5") and an optional `path`.
-        # For path-backed NN opponents the seat token is the path; for heuristic
-        # bots it is the `type` field. This mirrors RustSelfPlay seat parsing.
-        path = getattr(opp, "path", None)
-        token = path if path else getattr(opp, "type", None)
-        if token:
-            tokens.append(str(token))
-    return tuple(tokens) if tokens else _DEFAULT_OPPONENT_ROSTER
+
+    # Runtime league pool path: entries include heuristic anchors and
+    # nn_checkpoint snapshots added during training.
+    entries = getattr(pool, "entries", None)
+    if entries:
+        tokens: list[str] = []
+        for entry in entries:
+            opp = getattr(entry, "opponent", None)
+            if opp is None:
+                continue
+            token = opp.seat_token() if hasattr(opp, "seat_token") else None
+            if token:
+                tokens.append(str(token))
+        if tokens:
+            return tuple(tokens)
+
+    # Static config path.
+    opponents = getattr(pool, "opponents", ())
+    if opponents:
+        tokens = []
+        for opp in opponents:
+            path = getattr(opp, "path", None)
+            token = path if path else getattr(opp, "type", None)
+            if token:
+                tokens.append(str(token))
+        if tokens:
+            return tuple(tokens)
+
+    return _DEFAULT_OPPONENT_ROSTER
 
 
 class RotationPairingAdapter(DuplicatePairingPort):
@@ -57,7 +80,7 @@ class RotationPairingAdapter(DuplicatePairingPort):
 
     def build_pods(
         self,
-        pool: "LeagueConfig | None",
+        pool: "LeaguePool | LeagueConfig | None",
         learner_seat_token: str,
         shadow_seat_token: str,
         n_pods: int,

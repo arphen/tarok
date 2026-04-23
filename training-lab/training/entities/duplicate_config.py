@@ -19,6 +19,8 @@ _VALID_PAIRINGS: frozenset[str] = frozenset({
 
 _VALID_SHADOW_SOURCES: frozenset[str] = frozenset({
     "previous_iteration",
+    "trailing",
+    "relative_trailing",
     "league_pool",
     "best_snapshot",
 })
@@ -27,6 +29,11 @@ _VALID_REWARD_MODELS: frozenset[str] = frozenset({
     "shadow_score_diff",
     "imps",
     "ranking",
+})
+
+_VALID_LEARNER_SEAT_TOKENS: frozenset[str] = frozenset({
+    "nn",
+    "centaur",
 })
 
 
@@ -46,9 +53,19 @@ class DuplicateConfig:
     pairing: str = "rotation_8game"
     pods_per_iteration: int = 400
     shadow_source: str = "previous_iteration"
+    # Only used when ``shadow_source == "trailing"``: the shadow TorchScript
+    # file is refreshed every ``shadow_refresh_interval`` iterations, so
+    # the baseline lags the learner by up to N-1 iterations. Must be >= 1.
+    # Typical values: 5 (matches snapshot_interval) or 10.
+    shadow_refresh_interval: int = 1
     apply_shaped_bonuses: bool = False
     reward_model: str = "shadow_score_diff"
     rng_seed: int = 0
+    # Which engine-side player type sits at the learner position in each pod.
+    # "nn" (default) keeps the existing pure-NN learner; "centaur" routes the
+    # learner through the NN+endgame-solver hybrid so tricks >= handoff_trick
+    # are decided by PIMC/alpha-mu. Opponent tokens come from the league.
+    learner_seat_token: str = "nn"
 
     def __post_init__(self) -> None:
         if self.actor_only and not self.enabled:
@@ -65,6 +82,11 @@ class DuplicateConfig:
                 f"duplicate.shadow_source must be one of {sorted(_VALID_SHADOW_SOURCES)}, "
                 f"got {self.shadow_source!r}"
             )
+        if self.shadow_refresh_interval < 1:
+            raise ValueError(
+                f"duplicate.shadow_refresh_interval must be >= 1, "
+                f"got {self.shadow_refresh_interval}"
+            )
         if self.reward_model not in _VALID_REWARD_MODELS:
             raise ValueError(
                 f"duplicate.reward_model must be one of {sorted(_VALID_REWARD_MODELS)}, "
@@ -73,6 +95,11 @@ class DuplicateConfig:
         if self.pods_per_iteration < 0:
             raise ValueError(
                 f"duplicate.pods_per_iteration must be >= 0, got {self.pods_per_iteration}"
+            )
+        if self.learner_seat_token not in _VALID_LEARNER_SEAT_TOKENS:
+            raise ValueError(
+                f"duplicate.learner_seat_token must be one of "
+                f"{sorted(_VALID_LEARNER_SEAT_TOKENS)}, got {self.learner_seat_token!r}"
             )
 
     @property

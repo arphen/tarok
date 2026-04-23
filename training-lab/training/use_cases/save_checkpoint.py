@@ -57,4 +57,24 @@ class SaveCheckpoint:
             seat_config_used=bundle.effective_seats,
             mean_scores=bundle.mean_scores,
             seat_outcomes=bundle.seat_outcomes,
+            opponent_outcomes=(
+                dict(bundle.duplicate_stats.opponent_outcomes)
+                if bundle.duplicate_stats is not None
+                else {}
+            ),
+            mean_duplicate_advantage=(
+                bundle.duplicate_stats.mean_advantage
+                if bundle.duplicate_stats is not None
+                else None
+            ),
+            duplicate_advantage_std=(
+                bundle.duplicate_stats.advantage_std
+                if bundle.duplicate_stats is not None
+                else None
+            ),
+            n_duplicate_games=(
+                bundle.duplicate_stats.n_active_games
+                if bundle.duplicate_stats is not None
+                else 0
+            ),
         )

@@ -193,6 +193,82 @@ class TerminalPresenter(PresenterPort):
         else:
             print(f"{n_total:,} exp  [{_format_time(elapsed)}]")
 
+    def on_duplicate_selfplay_start(
+        self,
+        n_pods: int,
+        n_games_per_pod: int,
+        unique_opponents: tuple[str, ...],
+        explore_rate: float,
+    ) -> None:
+        total_games = n_pods * n_games_per_pod
+        print(
+            f"  ① Self-play   {n_pods:,} pods × {n_games_per_pod} games "
+            f"= {total_games:,} active games  (ε={explore_rate:.3f})"
+        )
+        if unique_opponents:
+            # Keep the rendered list tidy — truncate if the league is huge.
+            shown = list(unique_opponents)
+            suffix = ""
+            if len(shown) > 10:
+                suffix = f"  (+{len(shown) - 10} more)"
+                shown = shown[:10]
+            print(f"      seats: nn rotates all 4 seats")
+            print(f"      vs   : {', '.join(shown)}{suffix}")
+        else:
+            print(f"      seats: nn rotates all 4 seats  (no league opponents)")
+        print("      stats: ", end="", flush=True)
+
+    def on_duplicate_iteration_stats(self, stats) -> None:  # DuplicateIterationStats
+        adv = stats.mean_advantage
+        std = stats.advantage_std
+        n = stats.n_active_games
+        color = _ANSI_GREEN if adv > 0 else (_ANSI_RED if adv < 0 else "")
+        reset = _ANSI_RESET if color else ""
+        print(
+            f"      dup_adv: {color}{adv:+.3f}{reset} ± {std:.3f}  "
+            f"(n={n:,} games, learner − shadow, /100)"
+        )
+        if stats.opponent_outcomes:
+            # Show one line per opponent: "  vs <token>: <outplace rate>% (N games)"
+            print(f"      vs-opponent outplace rate:")
+            # Sort by games desc for readability
+            items = sorted(
+                stats.opponent_outcomes.items(),
+                key=lambda kv: stats.opponent_games.get(kv[0], 0),
+                reverse=True,
+            )
+            for token, (lo, oo, d) in items:
+                n_games = lo + oo + d
+                if n_games == 0:
+                    continue
+                rate = 100.0 * lo / n_games
+                draw_tag = f"  ({d} draws)" if d > 0 else ""
+                print(
+                    f"        {token:<24} {rate:5.1f}%  "
+                    f"({lo:>5}W / {oo:>5}L{draw_tag})   n={n_games:,}"
+                )
+
+    def on_duplicate_shadow_selected(
+        self,
+        iteration: int,
+        source: str,
+        shadow_path: str,
+        shadow_iteration: int | None = None,
+        refresh_interval: int | None = None,
+    ) -> None:
+        del iteration
+        if source == "trailing" and refresh_interval is not None:
+            print(f"      shadow: {source} (refresh every {refresh_interval} iters)")
+        elif source == "relative_trailing" and refresh_interval is not None:
+            print(f"      shadow: {source} (fixed lag={refresh_interval} iters)")
+        else:
+            print(f"      shadow: {source}")
+        if shadow_iteration is not None:
+            print(f"      iter  : {shadow_iteration}")
+        else:
+            print("      iter  : unknown")
+        print(f"      path  : {shadow_path}")
+
     def on_ppo_start(
         self,
         config: TrainingConfig,
