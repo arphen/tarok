@@ -138,6 +138,8 @@ def test_prepare_batched_actor_only_broadcasts_advantage():
     assert torch.all(out["vad"][:, 0] == 0.0)  # old_values zero
     # col 1 = advantages, col 2 = returns; both equal (no bootstrap).
     assert torch.allclose(out["vad"][:, 1], out["vad"][:, 2])
+    # Flag is propagated so _ppo_update_batched can drop value/il losses.
+    assert out["actor_only"] is True
 
 
 def test_prepare_batched_actor_only_requires_precomputed_rewards():

@@ -282,6 +282,7 @@ def prepare_batched(raw: dict[str, Any], gamma: float = 0.99, gae_lambda: float 
             ),
             "game_modes": game_modes_np,
             "behavioral_clone_mask": torch.from_numpy(behavioral_clone_mask_np),
+            "actor_only": True,
         }
 
     if precomputed_rewards is not None:
@@ -357,6 +358,7 @@ def prepare_batched(raw: dict[str, Any], gamma: float = 0.99, gae_lambda: float 
         ),
         "game_modes": game_modes_np,
         "behavioral_clone_mask": torch.from_numpy(behavioral_clone_mask_np),
+        "actor_only": False,
     }
 
 

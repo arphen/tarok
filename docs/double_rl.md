@@ -11,13 +11,13 @@ Completed:
 - `CollectDuplicateExperiences` use case + orchestrator branching on `config.duplicate.enabled`.
 - Composition root auto-wires `RotationPairingAdapter` + `SeededSelfPlayAdapter` + `ShadowScoreRewardAdapter` when duplicate is enabled.
 - End-to-end smoke test of the full pipeline (pairing → seeded self-play → reward → `prepare_batched`).
-- **Phase 3 (PPO side):** `_broadcast_terminal_advantage` helper + `actor_only` branch in `ppo_batch_preparation.py`. When `raw["actor_only"]=True`, GAE is replaced by the discounted terminal-advantage broadcast (§4.2); the `vad` matrix's `old_values` column is forced to zero so the downstream PPO loss is critic-free in this regime. `CollectDuplicateExperiences` propagates `duplicate_config.actor_only` onto the raw dict automatically.
-- Tests: full training-lab suite **237 passed** (added 8 actor-only tests); `make lint-architecture` green.
+- **Phase 3 (PPO side):** `_broadcast_terminal_advantage` helper + `actor_only` branch in `ppo_batch_preparation.py`. When `raw["actor_only"]=True`, GAE is replaced by the discounted terminal-advantage broadcast (§4.2); the `vad` matrix's `old_values` column is forced to zero so the downstream PPO loss is critic-free in this regime. `CollectDuplicateExperiences` propagates `duplicate_config.actor_only` onto the raw dict automatically. `PPOAdapter._ppo_update_batched` accepts an `actor_only` kwarg threaded through `prepare_batched` and zeroes the `value_loss` + `il_loss` terms when set.
+- **Config preset:** `training-lab/configs/duplicate.yaml` exposes every `duplicate:` knob with sane first-run defaults; drive a full iteration via `make train-new CONFIG=duplicate`.
+- Tests: full training-lab suite **237 passed**; `make lint-architecture` green.
 
 Still pending:
 
 - Actor-only `TarokNet` variant in the model package (skip the value head; checkpoints still load via `strict=False`).
-- PPO loss adjustment to drop the value-loss term when `actor_only=True` is detected on the batch.
 - `SpawnIterationRunner` support for duplicate (currently raises `NotImplementedError` if combined).
 - Shadow-source `"league_pool"` option wiring.
 - Phase 4: Arena duplicate CLI + UI panel.

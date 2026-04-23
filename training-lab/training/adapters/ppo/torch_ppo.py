@@ -156,6 +156,7 @@ class PPOAdapter(PPOPort):
         game_modes: np.ndarray,
         behavioral_clone_mask: torch.Tensor,
         oracle_valid_mask: torch.Tensor | None = None,
+        actor_only: bool = False,
     ) -> dict[str, float]:
         old_log_probs = log_probs
 
@@ -192,6 +193,7 @@ class PPOAdapter(PPOPort):
             network.oracle_critic_enabled
             and oracle_states is not None
             and self._imitation_coef > 0.0
+            and not actor_only
         )
 
         for (dt, gm), idx in groups.items():
@@ -273,6 +275,10 @@ class PPOAdapter(PPOPort):
                     v_loss_unclipped = nn.functional.mse_loss(norm_values, norm_returns, reduction="none")
                     v_loss_clipped = nn.functional.mse_loss(norm_v_pred_clipped, norm_returns, reduction="none")
                     value_loss = 0.5 * torch.max(v_loss_unclipped, v_loss_clipped).mean()
+                    if actor_only:
+                        # Duplicate-RL actor-only: no critic bootstrap. Zero the
+                        # critic contribution so only the policy gradient flows.
+                        value_loss = torch.zeros((), device=b_states.device, dtype=b_states.dtype)
                     il_loss = torch.zeros((), device=b_states.device, dtype=b_states.dtype)
                     if use_oracle_distill and b_oracle_states is not None:
                         if b_oracle_valid is not None:
