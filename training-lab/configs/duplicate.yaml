@@ -1,0 +1,122 @@
+# ---------------------------------------------------------
+# Duplicate Reinforcement Learning (DRL) — conservative mode
+# See docs/double_rl.md for the design.
+#
+# What this config does:
+#   Every iteration, N pods are dealt. Each pod uses the same deck for
+#   both the learner and a frozen "shadow" (previous-iteration snapshot),
+#   with rotated seatings so the learner plays each seat on the same
+#   hand. The per-trajectory reward is R_learner - R_shadow, which
+#   cancels dealing variance exactly.
+#
+# Why this mode (actor_only: false):
+#   - Critic + oracle + GAE stay intact.
+#   - Duplicate only changes the *reward source* fed into GAE.
+#   - Safest first step; gradients should become visibly less noisy
+#     within ~5 iterations.
+#
+# Usage:
+#   make train-new CONFIG=duplicate
+#   make train-new CONFIG=duplicate EXTRA="--iterations 30"
+# ---------------------------------------------------------
+
+seats: "nn,bot_v5,bot_v5,bot_v5"   # ignored during duplicate pods; pairing picks seatings
+bench_seats: "nn,bot_v1,bot_v3,bot_m6"
+
+iterations: 50
+# 100 pods x 8 games/pod = 800 games/iter — roughly matches self-play's 3000/iter
+# throughput-wise once variance reduction is accounted for. Start small to
+# sanity-check the pipeline, then scale up.
+games: 800                   # informational; duplicate uses pods_per_iteration below
+outplace_session_size: 50
+bench_games: 2000
+benchmark_checkpoints: [0, 5, 10, 20, 30, 40, 50]
+best_model_metric: "elo"
+
+# --- Core RL math (kept from self-play defaults; conservative mode keeps GAE) ---
+gamma: 0.995
+gae_lambda: 0.98
+clip_epsilon: 0.2
+value_coef: 0.5
+entropy_coef: 0.003
+explore_rate: 0.05
+
+ppo_epochs: 4
+batch_size: 8192
+
+lr: 0.0002
+lr_schedule: elo
+lr_min: 0.00001
+
+entropy_schedule: linear
+entropy_coef_min: 0.0005
+
+# Duplicate cancels dealing variance — BC is not needed to stabilise gradients.
+# Set to a small value if you want a mild BC anchor; 0 disables.
+imitation_coef: 0.0
+
+concurrency: 64
+device: auto
+
+# IMPORTANT: duplicate currently requires in-process iteration (spawn mode
+# raises NotImplementedError — see docs/double_rl.md "Still pending").
+iteration_runner_mode: inprocess
+
+# --- League: used to sample the 3 opponents per pod ---
+league:
+  enabled: true
+  min_nn_per_game: 1           # duplicate invariant: at most 1 learner seat per game
+  sampling: matchmaking
+  snapshot_interval: 5
+  snapshot_elo_delta: 50
+  max_active_snapshots: 3
+  elo_outplace_unit_weight: 5
+  initial_calibration_enabled: true
+  initial_calibration_games_per_pair: 2000
+  initial_calibration_anchor: V3
+  initial_calibration_anchor_elo: 1500
+
+  opponents:
+    - name: V3
+      type: bot_v3
+    - name: V5
+      type: bot_v5
+    - name: M6
+      type: bot_m6
+    - name: Lustrek
+      type: bot_lustrek
+
+# --- Duplicate RL knobs ---
+duplicate:
+  enabled: true
+
+  # Phase 3 (actor-only) drops critic/oracle/GAE and replaces it with
+  # REINFORCE + broadcast terminal advantage. Leave false for now; flip
+  # on once you've got a stable conservative run.
+  actor_only: false
+
+  # rotation_8game: 4 active + 4 shadow games per deck, learner in each seat.
+  # rotation_4game: 1 active + 1 shadow per seat (cheaper, less coverage).
+  # single_seat_2game: 1 active + 1 shadow, learner in seat 0 only (fastest).
+  pairing: rotation_8game
+
+  # Each pod produces 4 learner trajectories (1 per active game in the
+  # 8-game pairing). 100 pods -> 400 trajectories/iter. Scale up once
+  # throughput is validated.
+  pods_per_iteration: 100
+
+  # Shadow snapshot source:
+  #   previous_iteration  — frozen copy of learner at iteration start (default)
+  #   league_pool_role    — (pending wiring) pick a league entry flagged as shadow
+  shadow_source: previous_iteration
+
+  # Shaped trick-point bonuses cancel under duplicate (both tables see the
+  # same deck), so they're disabled by default.
+  apply_shaped_bonuses: false
+
+  # shadow_score_diff: (R_learner - R_shadow) / 100
+  # imps / ranking     — alternative reward models (not wired yet).
+  reward_model: shadow_score_diff
+
+  # Deterministic pod schedule for reproducibility.
+  rng_seed: 0
