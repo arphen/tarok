@@ -582,3 +582,114 @@ class TarokNetV4(TarokNet):
         stacked = torch.stack([solo_logits, klop_logits, partner_logits, color_logits], dim=1)
         gather_idx = mode_ids.view(-1, 1, 1).expand(-1, 1, CARD_ACTION_SIZE)
         return stacked.gather(1, gather_idx).squeeze(1)
+
+
+class TarokNetV5(TarokNetV4):
+    """v5 actor-only: v4 minus the critic head and the oracle backbone.
+
+    Designed for Duplicate-RL (``duplicate.actor_only=True``). The shadow
+    baseline makes the critic mathematically redundant — see
+    ``docs/double_rl.md`` §2.7. This variant physically drops:
+
+    * the shared ``critic`` value head (``Linear(hidden → half → 1)``);
+    * the ``critic_backbone`` / ``critic_res_blocks`` oracle tower (never
+      constructed — ``oracle_critic`` is forced to False).
+
+    Checkpoints produced by v5 are backwards-compatible with any loader
+    that calls ``load_state_dict(strict=False)`` — the missing ``critic.*``
+    and ``critic_backbone.*`` keys are simply skipped.
+
+    For TorchScript export and the PPO update path, ``forward`` still
+    returns a 2-tuple ``(logits, value)``; ``value`` is a **zero placeholder**
+    of shape ``(B, 1)`` so downstream code that indexes the value tensor
+    (Rust inference, PPO loss) stays shape-compatible without any branching.
+    """
+
+    def __init__(self, hidden_size: int = 256, oracle_critic: bool = False):
+        if oracle_critic:
+            raise ValueError(
+                "TarokNetV5 is actor-only: oracle_critic=True is not supported."
+            )
+        super().__init__(hidden_size=hidden_size, oracle_critic=False)
+        # Drop the critic head. The oracle backbone was never constructed
+        # (oracle_critic=False in the super().__init__ above).
+        del self.critic
+
+    # ------------------------------------------------------------------
+    # Value-side shims: return a zero placeholder so callers that expect a
+    # value tensor keep working (Rust TorchScript export, PPO update path
+    # with ``actor_only=True`` zeroing the value loss anyway).
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def _zero_value(batch: int, ref: torch.Tensor) -> torch.Tensor:
+        return torch.zeros((batch, 1), dtype=ref.dtype, device=ref.device)
+
+    def forward(  # type: ignore[override]
+        self,
+        state: torch.Tensor,
+        decision_type: DecisionType = DecisionType.CARD_PLAY,
+        oracle_state: torch.Tensor | None = None,
+        game_mode: GameMode | None = None,
+    ) -> tuple[torch.Tensor, torch.Tensor]:
+        shared = self.shared(state)
+        shared = self.res_blocks(shared)
+        card_feats = self._extract_card_features(state)
+        attn_out = self.card_attention(card_feats)
+        fused = self.fuse(torch.cat([shared, attn_out], dim=-1))
+
+        if decision_type == DecisionType.CARD_PLAY:
+            logits = self._card_logits_for_mode(fused, state, game_mode)
+        else:
+            logits = self._heads[decision_type](fused)
+
+        batch = fused.shape[0] if fused.dim() > 1 else 1
+        value = self._zero_value(batch, fused)
+        return logits, value
+
+    def get_critic_features(  # type: ignore[override]
+        self, oracle_state: torch.Tensor
+    ) -> torch.Tensor:
+        raise RuntimeError(
+            "TarokNetV5 has no critic backbone (actor-only model). "
+            "Oracle distillation is disabled in actor-only mode; "
+            "see docs/double_rl.md §2.7."
+        )
+
+    def forward_batch(  # type: ignore[override]
+        self,
+        states: torch.Tensor,
+        decision_types: list[DecisionType],
+        oracle_states: torch.Tensor | None = None,
+        game_modes: list[GameMode] | None = None,
+    ) -> tuple[torch.Tensor, torch.Tensor]:
+        B = states.shape[0]
+        shared = self.shared(states)
+        shared = self.res_blocks(shared)
+        card_feats = self._extract_card_features(states)
+        attn_out = self.card_attention(card_feats)
+        fused = self.fuse(torch.cat([shared, attn_out], dim=-1))
+
+        values = torch.zeros(B, dtype=states.dtype, device=states.device)
+
+        max_action_size = CARD_ACTION_SIZE
+        all_logits = torch.full(
+            (B, max_action_size), float("-inf"),
+            device=states.device, dtype=states.dtype,
+        )
+        type_indices: dict[DecisionType, list[int]] = {}
+        for i, dt in enumerate(decision_types):
+            type_indices.setdefault(dt, []).append(i)
+
+        for dt, idxs in type_indices.items():
+            idx_t = torch.tensor(idxs, device=states.device)
+            head_input = fused[idx_t]
+            if dt == DecisionType.CARD_PLAY:
+                mode_subset = [game_modes[i] for i in idxs] if game_modes is not None else None
+                head_logits = self._card_logits_for_mode(head_input, states[idx_t], mode_subset)
+            else:
+                head_logits = self._heads[dt](head_input)
+            all_logits[idx_t, :head_logits.shape[1]] = head_logits
+
+        return all_logits, values
+

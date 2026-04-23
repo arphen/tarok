@@ -26,7 +26,7 @@ from tarok_model.encoding import (
     encode_state,
     encode_talon_mask,
 )
-from tarok_model.network import TarokNet, TarokNetV4
+from tarok_model.network import TarokNet, TarokNetV4, TarokNetV5
 from tarok_model.compute import ComputeBackend, create_backend
 
 __all__ = [

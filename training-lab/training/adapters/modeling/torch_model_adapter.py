@@ -10,9 +10,24 @@ from typing import Any
 
 import torch
 
-from tarok_model.network import TarokNetV4
+from tarok_model.network import TarokNetV4, TarokNetV5
 
 from training.ports import ModelPort
+
+
+_SUPPORTED_ARCHES = ("v4", "v5")
+
+
+def _build_model(hidden_size: int, oracle: bool, model_arch: str):
+    if model_arch == "v4":
+        return TarokNetV4(hidden_size=hidden_size, oracle_critic=oracle)
+    if model_arch == "v5":
+        if oracle:
+            raise ValueError("TarokNetV5 is actor-only; oracle_critic is not supported.")
+        return TarokNetV5(hidden_size=hidden_size, oracle_critic=False)
+    raise ValueError(
+        f"Unsupported model_arch={model_arch}. Supported: {_SUPPORTED_ARCHES}."
+    )
 
 
 class TorchModelAdapter(ModelPort):
@@ -27,26 +42,23 @@ class TorchModelAdapter(ModelPort):
 
         hidden_size = sd["shared.0.weight"].shape[0]
         oracle = any(k.startswith("critic_backbone") for k in sd)
-        if model_arch != "v4":
+        if model_arch not in _SUPPORTED_ARCHES:
             raise ValueError(
-                f"Unsupported checkpoint architecture '{model_arch}'. Only 'v4' checkpoints are supported."
+                f"Unsupported checkpoint architecture '{model_arch}'. "
+                f"Supported: {_SUPPORTED_ARCHES}."
             )
         return sd, hidden_size, oracle, model_arch
 
     def create_new(self, hidden_size: int, oracle: bool, model_arch: str) -> dict:
-        if model_arch != "v4":
-            raise ValueError(f"Unsupported model_arch={model_arch}. Only 'v4' is supported.")
-        model = TarokNetV4(hidden_size=hidden_size, oracle_critic=oracle)
+        model = _build_model(hidden_size, oracle, model_arch)
         state = model.state_dict()
         del model
         _cleanup_torch_native_memory()
         return state
 
     def export_for_inference(self, weights: dict, hidden_size: int, oracle: bool, model_arch: str, path: str) -> None:
-        if model_arch != "v4":
-            raise ValueError(f"Unsupported model_arch={model_arch}. Only 'v4' is supported.")
-        model = TarokNetV4(hidden_size=hidden_size, oracle_critic=oracle)
-        model.load_state_dict(weights)
+        model = _build_model(hidden_size, oracle, model_arch)
+        model.load_state_dict(weights, strict=False)
         model.eval()
         try:
             _export_torchscript(model, path)
@@ -80,6 +92,9 @@ def _export_torchscript(model: TarokNetV4, path: str) -> None:
         def __init__(self, base: TarokNetV4):
             super().__init__()
             self.base = base
+            # Actor-only variants (v5) have no critic head — the exported
+            # tuple still needs a value slot, so we emit zeros.
+            self.has_critic = hasattr(base, "critic")
 
         def forward(self, x: torch.Tensor):
             s = self.base.shared(x)
@@ -87,12 +102,16 @@ def _export_torchscript(model: TarokNetV4, path: str) -> None:
             cf = self.base._extract_card_features(x)
             a = self.base.card_attention(cf)
             f = self.base.fuse(torch.cat([s, a], dim=-1))
+            if self.has_critic:
+                value = self.base.critic(f).squeeze(-1)
+            else:
+                value = torch.zeros(f.shape[0], dtype=f.dtype, device=f.device)
             return (
                 self.base.bid_head(f),
                 self.base.king_head(f),
                 self.base.talon_head(f),
                 self.base.card_logits_for_export(f, x),
-                self.base.critic(f).squeeze(-1),
+                value,
             )
 
     from tarok_model.encoding import STATE_SIZE

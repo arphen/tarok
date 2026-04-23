@@ -1,6 +1,6 @@
 # Duplicate Reinforcement Learning (DRL) for Tarok
 
-> Status: **Phases 1, 2 + Phase 3 (PPO side)** complete. Actor-only mode is now reachable from config; the actor-only `TarokNet` checkpoint pruning is the remaining work for Phase 3. Phase 4 (arena UI) still pending.
+> Status: **Phases 1, 2 + Phase 3 (PPO + network)** complete. Actor-only mode is now reachable from config and `model_arch: v5` physically drops the value side of the network. Phase 4 (arena UI) still pending.
 > Guiding principle: **strictly additive on top of the existing PPO + Fictitious Self-Play + Arena stack.** Nothing about current training, arena leaderboard, or ELO league changes unless the Duplicate feature flag is explicitly enabled.
 
 ## Implementation status (as of last commit)
@@ -13,11 +13,11 @@ Completed:
 - End-to-end smoke test of the full pipeline (pairing → seeded self-play → reward → `prepare_batched`).
 - **Phase 3 (PPO side):** `_broadcast_terminal_advantage` helper + `actor_only` branch in `ppo_batch_preparation.py`. When `raw["actor_only"]=True`, GAE is replaced by the discounted terminal-advantage broadcast (§4.2); the `vad` matrix's `old_values` column is forced to zero so the downstream PPO loss is critic-free in this regime. `CollectDuplicateExperiences` propagates `duplicate_config.actor_only` onto the raw dict automatically. `PPOAdapter._ppo_update_batched` accepts an `actor_only` kwarg threaded through `prepare_batched` and zeroes the `value_loss` + `il_loss` terms when set.
 - **Config preset:** `training-lab/configs/duplicate.yaml` exposes every `duplicate:` knob with sane first-run defaults; drive a full iteration via `make train-new CONFIG=duplicate`.
-- Tests: full training-lab suite **237 passed**; `make lint-architecture` green.
+- **Actor-only network (`TarokNetV5`):** `model_arch: v5` instantiates a subclass of `TarokNetV4` with the `critic` head and oracle backbone physically deleted; `state_dict` is a strict subset of v4's, so v4 checkpoints load via `strict=False`. `forward` / `forward_batch` return a zero-valued placeholder for the `values` tensor to keep TorchScript export and the PPO data path shape-compatible. Plumbed through `TorchModelAdapter.create_new` / `export_for_inference` / `save_checkpoint`.
+- Tests: full training-lab suite **247 passed**; `make lint-architecture` green.
 
 Still pending:
 
-- Actor-only `TarokNet` variant in the model package (skip the value head; checkpoints still load via `strict=False`).
 - `SpawnIterationRunner` support for duplicate (currently raises `NotImplementedError` if combined).
 - Shadow-source `"league_pool"` option wiring.
 - Phase 4: Arena duplicate CLI + UI panel.
