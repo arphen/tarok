@@ -228,6 +228,7 @@ class TrainModel:
                     iter_explore_rate=iter_explore_rate,
                     seats_override=seats_override,
                     run_benchmark=should_bench,
+                    pool=pool,
                 )
                 run.results.append(result)
                 self._presenter.on_iteration_done(prev, result.placement, result.total_time)

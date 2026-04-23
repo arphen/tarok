@@ -15,12 +15,12 @@ Completed:
 - **Config preset:** `training-lab/configs/duplicate.yaml` exposes every `duplicate:` knob with sane first-run defaults; drive a full iteration via `make train-new CONFIG=duplicate`.
 - **Actor-only network (`TarokNetV5`):** `model_arch: v5` instantiates a subclass of `TarokNetV4` with the `critic` head and oracle backbone physically deleted; `state_dict` is a strict subset of v4's, so v4 checkpoints load via `strict=False`. `forward` / `forward_batch` return a zero-valued placeholder for the `values` tensor to keep TorchScript export and the PPO data path shape-compatible. Plumbed through `TorchModelAdapter.create_new` / `export_for_inference` / `save_checkpoint`.
 - **Spawn runner duplicate support:** `ConfigurableIterationRunner._adapter_factory_for_spawn` now takes the `TrainingConfig` and constructs `SeededSelfPlayAdapter` + `RotationPairingAdapter` + `ShadowScoreRewardAdapter` inside the worker process when `duplicate.enabled=True`. The previous `NotImplementedError` guard is removed; `iteration_runner_mode: spawn` now works with duplicate configs.
+- **Shadow-source port:** `DuplicateShadowSourcePort` has three adapters behind `duplicate.shadow_source`: `previous_iteration` (default; reads the learner's TorchScript path, which still holds prior weights at the start of each iteration), `league_pool` (Gaussian-weighted random sample over `nn_checkpoint` entries near the learner's Elo), and `best_snapshot` (highest-Elo snapshot — "best ghost ever"). Wired through `IterationRunnerPort.run_iteration(pool=...)`, across both in-process and spawn runners; constructed from config in `training.container` via `create_shadow_source(...)`.
 - Tests: full training-lab suite passes; `make lint-architecture` green.
 
 Still pending:
 
 - Rust-side actor-only buffer suppression (optimisation; current v5 path is already correct, just wastes the values slot).
-- Shadow-source `"league_pool"` option wiring.
 - Phase 4: Arena duplicate CLI + UI panel.
 
 ---

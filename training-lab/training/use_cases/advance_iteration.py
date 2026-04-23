@@ -102,6 +102,7 @@ class AdvanceIteration:
             iter_explore_rate=iter_explore_rate,
             seats_override=seats_override,
             run_benchmark=config.should_benchmark_iteration(iteration),
+            pool=ctx.pool,
         )
         ctx.run.results.append(result)
         self._presenter.on_iteration_done(prev_placement, result.placement, result.total_time)

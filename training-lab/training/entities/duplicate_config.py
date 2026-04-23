@@ -19,7 +19,8 @@ _VALID_PAIRINGS: frozenset[str] = frozenset({
 
 _VALID_SHADOW_SOURCES: frozenset[str] = frozenset({
     "previous_iteration",
-    "league_pool_role",
+    "league_pool",
+    "best_snapshot",
 })
 
 _VALID_REWARD_MODELS: frozenset[str] = frozenset({

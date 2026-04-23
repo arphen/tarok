@@ -106,9 +106,13 @@ duplicate:
   # throughput is validated.
   pods_per_iteration: 100
 
-  # Shadow snapshot source:
-  #   previous_iteration  — frozen copy of learner at iteration start (default)
-  #   league_pool_role    — (pending wiring) pick a league entry flagged as shadow
+  # Shadow snapshot source (wired through DuplicateShadowSourcePort):
+  #   previous_iteration  — learner's TorchScript before this iteration's
+  #                          export (self-duplicate bootstrap; default).
+  #   league_pool         — random nn_checkpoint entry from the live league
+  #                          pool, Gaussian-weighted around learner Elo.
+  #   best_snapshot       — highest-Elo nn_checkpoint entry ("best ghost"
+  #                          seen so far). Deterministic tie-break.
   shadow_source: previous_iteration
 
   # Shaped trick-point bonuses cancel under duplicate (both tables see the

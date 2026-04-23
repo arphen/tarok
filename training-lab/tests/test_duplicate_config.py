@@ -38,7 +38,13 @@ def test_invalid_reward_model_rejected() -> None:
 
 def test_invalid_shadow_source_rejected() -> None:
     with pytest.raises(ValueError, match="shadow_source"):
-        DuplicateConfig(shadow_source="best_snapshot")
+        DuplicateConfig(shadow_source="best_ghost_ever")
+
+
+def test_valid_shadow_sources_accepted() -> None:
+    for src in ("previous_iteration", "league_pool", "best_snapshot"):
+        cfg = DuplicateConfig(shadow_source=src)
+        assert cfg.shadow_source == src
 
 
 def test_negative_pods_per_iteration_rejected() -> None:

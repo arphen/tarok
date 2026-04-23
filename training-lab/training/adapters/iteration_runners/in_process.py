@@ -7,6 +7,7 @@ PyTorch memory accumulation over long runs.
 from __future__ import annotations
 
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 from training.entities.iteration_result import IterationResult
 from training.entities.model_identity import ModelIdentity
@@ -14,12 +15,16 @@ from training.entities.training_config import TrainingConfig
 from training.ports.benchmark_port import BenchmarkPort
 from training.ports.duplicate_pairing_port import DuplicatePairingPort
 from training.ports.duplicate_reward_port import DuplicateRewardPort
+from training.ports.duplicate_shadow_source_port import DuplicateShadowSourcePort
 from training.ports.iteration_runner_port import IterationRunnerPort
 from training.ports.model_port import ModelPort
 from training.ports.ppo_port import PPOPort
 from training.ports.presenter_port import PresenterPort
 from training.ports.selfplay_port import SelfPlayPort
 from training.use_cases.run_iteration import RunIteration
+
+if TYPE_CHECKING:
+    from training.entities.league import LeaguePool
 
 
 class InProcessIterationRunner(IterationRunnerPort):
@@ -33,12 +38,14 @@ class InProcessIterationRunner(IterationRunnerPort):
         *,
         duplicate_pairing: DuplicatePairingPort | None = None,
         duplicate_reward: DuplicateRewardPort | None = None,
+        duplicate_shadow_source: DuplicateShadowSourcePort | None = None,
     ):
         self._ppo = ppo
         self._run_iteration = RunIteration(
             selfplay, ppo, benchmark, model, presenter,
             duplicate_pairing=duplicate_pairing,
             duplicate_reward=duplicate_reward,
+            duplicate_shadow_source=duplicate_shadow_source,
         )
 
     def setup(self, weights: dict, config: TrainingConfig, device: str) -> None:
@@ -60,6 +67,7 @@ class InProcessIterationRunner(IterationRunnerPort):
         iter_explore_rate: float | None = None,
         seats_override: str | None,
         run_benchmark: bool,
+        pool: "LeaguePool | None" = None,
     ) -> IterationResult:
         result, _ = self._run_iteration.execute(
             i, config, identity, ts_path, save_dir,
@@ -71,5 +79,6 @@ class InProcessIterationRunner(IterationRunnerPort):
             iter_explore_rate=iter_explore_rate,
             seats_override=seats_override,
             run_benchmark=run_benchmark,
+            pool=pool,
         )
         return result

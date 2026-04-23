@@ -4,10 +4,14 @@ from __future__ import annotations
 
 from abc import ABC, abstractmethod
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 from training.entities.iteration_result import IterationResult
 from training.entities.model_identity import ModelIdentity
 from training.entities.training_config import TrainingConfig
+
+if TYPE_CHECKING:
+    from training.entities.league import LeaguePool
 
 
 class IterationRunnerPort(ABC):
@@ -32,8 +36,15 @@ class IterationRunnerPort(ABC):
         iter_explore_rate: float | None = None,
         seats_override: str | None,
         run_benchmark: bool,
+        pool: "LeaguePool | None" = None,
     ) -> IterationResult:
-        """Run a single training iteration and return the result."""
+        """Run a single training iteration and return the result.
+
+        ``pool`` is the live :class:`LeaguePool` — needed by duplicate-RL
+        shadow-source adapters that pick a frozen policy from the league
+        (``league_pool``, ``best_snapshot``). Leave ``None`` when league
+        play or duplicate RL is disabled.
+        """
 
     def teardown(self) -> None:
         """Optional cleanup after the training loop finishes."""

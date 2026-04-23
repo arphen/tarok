@@ -186,17 +186,27 @@ def test_adapter_factory_for_spawn_constructs_duplicate_ports_when_enabled(
     from training.adapters.duplicate.rotation_pairing import RotationPairingAdapter
     from training.adapters.duplicate.seeded_self_play_adapter import SeededSelfPlayAdapter
     from training.adapters.duplicate.shadow_score_reward import ShadowScoreRewardAdapter
+    from training.adapters.duplicate.shadow_sources import (
+        PreviousIterationShadowSource,
+    )
 
     runner = _runner()
     config = _duplicate_config(tmp_path, enabled=True)
 
-    (selfplay, _ppo, _bench, _model, dup_pairing, dup_reward) = (
-        runner._adapter_factory_for_spawn(config)
-    )
+    (
+        selfplay,
+        _ppo,
+        _bench,
+        _model,
+        dup_pairing,
+        dup_reward,
+        dup_shadow,
+    ) = runner._adapter_factory_for_spawn(config)
 
     assert isinstance(selfplay, SeededSelfPlayAdapter)
     assert isinstance(dup_pairing, RotationPairingAdapter)
     assert isinstance(dup_reward, ShadowScoreRewardAdapter)
+    assert isinstance(dup_shadow, PreviousIterationShadowSource)
 
 
 def test_adapter_factory_for_spawn_leaves_duplicate_ports_none_when_disabled(
@@ -207,10 +217,17 @@ def test_adapter_factory_for_spawn_leaves_duplicate_ports_none_when_disabled(
     runner = _runner()
     config = _duplicate_config(tmp_path, enabled=False)
 
-    (selfplay, _ppo, _bench, _model, dup_pairing, dup_reward) = (
-        runner._adapter_factory_for_spawn(config)
-    )
+    (
+        selfplay,
+        _ppo,
+        _bench,
+        _model,
+        dup_pairing,
+        dup_reward,
+        dup_shadow,
+    ) = runner._adapter_factory_for_spawn(config)
 
     assert not isinstance(selfplay, SeededSelfPlayAdapter)
     assert dup_pairing is None
     assert dup_reward is None
+    assert dup_shadow is None

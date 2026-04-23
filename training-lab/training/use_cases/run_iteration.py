@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import gc
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 import torch
 
@@ -21,6 +22,7 @@ from training.entities.training_config import TrainingConfig
 from training.ports.benchmark_port import BenchmarkPort
 from training.ports.duplicate_pairing_port import DuplicatePairingPort
 from training.ports.duplicate_reward_port import DuplicateRewardPort
+from training.ports.duplicate_shadow_source_port import DuplicateShadowSourcePort
 from training.ports.model_port import ModelPort
 from training.ports.ppo_port import PPOPort
 from training.ports.presenter_port import PresenterPort
@@ -31,6 +33,9 @@ from training.use_cases.export_model import ExportModel
 from training.use_cases.measure_placement import MeasurePlacement
 from training.use_cases.save_checkpoint import SaveCheckpoint
 from training.use_cases.update_policy import UpdatePolicy
+
+if TYPE_CHECKING:
+    from training.entities.league import LeaguePool
 
 
 class RunIteration:
@@ -44,6 +49,7 @@ class RunIteration:
         *,
         duplicate_pairing: DuplicatePairingPort | None = None,
         duplicate_reward: DuplicateRewardPort | None = None,
+        duplicate_shadow_source: DuplicateShadowSourcePort | None = None,
     ):
         self._collect_experiences = CollectExperiences(selfplay, ppo, presenter)
         self._update_policy = UpdatePolicy(ppo, presenter)
@@ -57,11 +63,13 @@ class RunIteration:
             if duplicate_pairing is not None and duplicate_reward is not None
             else None
         )
-        # Track the previous iteration's exported TorchScript so the
-        # shadow table can reuse it when ``duplicate.shadow_source ==
-        # "previous_iteration"``. Falls back to the current learner path on
-        # the very first iteration (self-duplicate bootstrap).
-        self._prev_ts_path: str | None = None
+        # Shadow-source adapter: resolves the frozen policy path for each
+        # duplicate iteration. Injected by the composition root (see
+        # ``training.container._default_iteration_runner``) via
+        # ``training.adapters.duplicate.shadow_sources.create_shadow_source``.
+        # Left as ``None`` outside duplicate mode; the duplicate branch
+        # below asserts presence before dereferencing.
+        self._shadow_source = duplicate_shadow_source
 
     def execute(
         self,
@@ -78,6 +86,7 @@ class RunIteration:
         iter_explore_rate: float | None = None,
         seats_override: str | None = None,
         run_benchmark: bool = True,
+        pool: "LeaguePool | None" = None,
     ) -> tuple[IterationResult, dict]:
         duplicate_cfg = getattr(config, "duplicate", None)
         use_duplicate = (
@@ -86,7 +95,15 @@ class RunIteration:
             and self._collect_duplicate_experiences is not None
         )
         if use_duplicate:
-            shadow_path = self._prev_ts_path or ts_path  # bootstrap on first iter
+            if self._shadow_source is None:
+                raise RuntimeError(
+                    "duplicate.enabled=True but no DuplicateShadowSourcePort was "
+                    "injected into RunIteration. The composition root must provide "
+                    "one via create_shadow_source(...)."
+                )
+            shadow_path = self._shadow_source.resolve(
+                iteration=iteration, learner_ts_path=ts_path, pool=pool,
+            )
             bundle = self._collect_duplicate_experiences.execute(
                 duplicate_config=duplicate_cfg,
                 concurrency=config.concurrency,
@@ -128,9 +145,6 @@ class RunIteration:
         result = self._save_checkpoint.execute(
             iteration, bundle, update, identity, save_dir, placement, bench_time
         )
-        # Remember this iteration's artefact so the next duplicate rollout
-        # can use it as the shadow when ``shadow_source="previous_iteration"``.
-        self._prev_ts_path = ts_path
         return result, update.new_weights
 
 

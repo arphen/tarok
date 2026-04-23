@@ -99,10 +99,12 @@ def _default_iteration_runner(
 
     duplicate_pairing = None
     duplicate_reward = None
+    duplicate_shadow_source = None
     if config is not None and getattr(config, "duplicate", None) is not None and config.duplicate.enabled:
         from training.adapters.duplicate.rotation_pairing import RotationPairingAdapter
         from training.adapters.duplicate.seeded_self_play_adapter import SeededSelfPlayAdapter
         from training.adapters.duplicate.shadow_score_reward import ShadowScoreRewardAdapter
+        from training.adapters.duplicate.shadow_sources import create_shadow_source
 
         # Wrap the default self-play adapter so ``run_seeded_pods`` is
         # available; legacy ``run``/``compute_run_stats`` still delegate to
@@ -110,11 +112,15 @@ def _default_iteration_runner(
         selfplay = SeededSelfPlayAdapter(inner=selfplay)
         duplicate_pairing = RotationPairingAdapter(pairing=config.duplicate.pairing)
         duplicate_reward = ShadowScoreRewardAdapter()
+        duplicate_shadow_source = create_shadow_source(
+            config.duplicate.shadow_source, rng_seed=config.duplicate.rng_seed,
+        )
 
     return ConfigurableIterationRunner(
         selfplay, ppo, benchmark, model, presenter,
         duplicate_pairing=duplicate_pairing,
         duplicate_reward=duplicate_reward,
+        duplicate_shadow_source=duplicate_shadow_source,
     )
 
 

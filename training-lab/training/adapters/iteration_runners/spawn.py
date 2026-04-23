@@ -56,6 +56,7 @@ class _IterationTask:
     seats_override: str | None
     run_benchmark: bool
     iter_explore_rate: float | None = None
+    pool: Any = None  # training.entities.league.LeaguePool | None
 
 
 @dataclass
@@ -155,14 +156,21 @@ def _worker_main(
     from training.use_cases.run_iteration import RunIteration
 
     init: _WorkerInit = task_queue.get()
-    selfplay, ppo, benchmark, model, duplicate_pairing, duplicate_reward = adapter_factory(
-        init.config
-    )
+    (
+        selfplay,
+        ppo,
+        benchmark,
+        model,
+        duplicate_pairing,
+        duplicate_reward,
+        duplicate_shadow_source,
+    ) = adapter_factory(init.config)
     presenter = _QueuePresenter(event_queue)
     run_iteration = RunIteration(
         selfplay, ppo, benchmark, model, presenter,
         duplicate_pairing=duplicate_pairing,
         duplicate_reward=duplicate_reward,
+        duplicate_shadow_source=duplicate_shadow_source,
     )
 
     ppo.setup(init.weights, init.config, init.device)
@@ -188,6 +196,7 @@ def _worker_main(
                 iter_explore_rate=getattr(task, "iter_explore_rate", None),
                 seats_override=task.seats_override,
                 run_benchmark=task.run_benchmark,
+                pool=getattr(task, "pool", None),
             )
             result_queue.put(_IterationResult(result=result, new_weights=new_weights, error=None))
         except Exception:
@@ -242,6 +251,7 @@ class SpawnIterationRunner(IterationRunnerPort):
         iter_explore_rate: float | None = None,
         seats_override: str | None,
         run_benchmark: bool,
+        pool: Any = None,  # training.entities.league.LeaguePool | None
     ) -> IterationResult:
         if self._worker is None or not self._worker.is_alive():
             self._spawn_worker()
@@ -264,6 +274,7 @@ class SpawnIterationRunner(IterationRunnerPort):
                 iter_explore_rate=iter_explore_rate,
                 seats_override=seats_override,
                 run_benchmark=run_benchmark,
+                pool=pool,
             )
         )
 

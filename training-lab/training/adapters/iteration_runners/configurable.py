@@ -8,6 +8,7 @@ Selects and owns one concrete runner strategy after `setup(config=...)`:
 from __future__ import annotations
 
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 from training.entities.iteration_result import IterationResult
 from training.entities.model_identity import ModelIdentity
@@ -15,11 +16,15 @@ from training.entities.training_config import TrainingConfig
 from training.ports.benchmark_port import BenchmarkPort
 from training.ports.duplicate_pairing_port import DuplicatePairingPort
 from training.ports.duplicate_reward_port import DuplicateRewardPort
+from training.ports.duplicate_shadow_source_port import DuplicateShadowSourcePort
 from training.ports.iteration_runner_port import IterationRunnerPort
 from training.ports.model_port import ModelPort
 from training.ports.ppo_port import PPOPort
 from training.ports.presenter_port import PresenterPort
 from training.ports.selfplay_port import SelfPlayPort
+
+if TYPE_CHECKING:
+    from training.entities.league import LeaguePool
 
 
 class ConfigurableIterationRunner(IterationRunnerPort):
@@ -35,6 +40,7 @@ class ConfigurableIterationRunner(IterationRunnerPort):
         *,
         duplicate_pairing: DuplicatePairingPort | None = None,
         duplicate_reward: DuplicateRewardPort | None = None,
+        duplicate_shadow_source: DuplicateShadowSourcePort | None = None,
     ):
         self._selfplay = selfplay
         self._ppo = ppo
@@ -43,6 +49,7 @@ class ConfigurableIterationRunner(IterationRunnerPort):
         self._presenter = presenter
         self._duplicate_pairing = duplicate_pairing
         self._duplicate_reward = duplicate_reward
+        self._duplicate_shadow_source = duplicate_shadow_source
         self._delegate: IterationRunnerPort | None = None
 
     def setup(self, weights: dict, config: TrainingConfig, device: str) -> None:
@@ -67,6 +74,7 @@ class ConfigurableIterationRunner(IterationRunnerPort):
                 self._presenter,
                 duplicate_pairing=self._duplicate_pairing,
                 duplicate_reward=self._duplicate_reward,
+                duplicate_shadow_source=self._duplicate_shadow_source,
             )
 
         self._delegate.setup(weights, config, device)
@@ -87,6 +95,7 @@ class ConfigurableIterationRunner(IterationRunnerPort):
         iter_explore_rate: float | None = None,
         seats_override: str | None,
         run_benchmark: bool,
+        pool: "LeaguePool | None" = None,
     ) -> IterationResult:
         if self._delegate is None:
             raise RuntimeError("ConfigurableIterationRunner.setup() must be called first.")
@@ -105,6 +114,7 @@ class ConfigurableIterationRunner(IterationRunnerPort):
             iter_explore_rate=iter_explore_rate,
             seats_override=seats_override,
             run_benchmark=run_benchmark,
+            pool=pool,
         )
 
     def teardown(self) -> None:
@@ -121,6 +131,7 @@ class ConfigurableIterationRunner(IterationRunnerPort):
         ModelPort,
         DuplicatePairingPort | None,
         DuplicateRewardPort | None,
+        DuplicateShadowSourcePort | None,
     ]:
         # Worker must own fresh adapters in its own process. Duplicate-RL
         # ports are constructed lazily, mirroring ``_default_iteration_runner``
@@ -133,16 +144,21 @@ class ConfigurableIterationRunner(IterationRunnerPort):
         selfplay: SelfPlayPort = RustSelfPlay()
         duplicate_pairing: DuplicatePairingPort | None = None
         duplicate_reward: DuplicateRewardPort | None = None
+        duplicate_shadow_source: DuplicateShadowSourcePort | None = None
 
         duplicate_cfg = getattr(config, "duplicate", None)
         if duplicate_cfg is not None and duplicate_cfg.enabled:
             from training.adapters.duplicate.rotation_pairing import RotationPairingAdapter
             from training.adapters.duplicate.seeded_self_play_adapter import SeededSelfPlayAdapter
             from training.adapters.duplicate.shadow_score_reward import ShadowScoreRewardAdapter
+            from training.adapters.duplicate.shadow_sources import create_shadow_source
 
             selfplay = SeededSelfPlayAdapter(inner=selfplay)
             duplicate_pairing = RotationPairingAdapter(pairing=duplicate_cfg.pairing)
             duplicate_reward = ShadowScoreRewardAdapter()
+            duplicate_shadow_source = create_shadow_source(
+                duplicate_cfg.shadow_source, rng_seed=duplicate_cfg.rng_seed,
+            )
 
         return (
             selfplay,
@@ -151,4 +167,5 @@ class ConfigurableIterationRunner(IterationRunnerPort):
             TorchModelAdapter(),
             duplicate_pairing,
             duplicate_reward,
+            duplicate_shadow_source,
         )

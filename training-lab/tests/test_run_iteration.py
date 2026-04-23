@@ -330,9 +330,14 @@ def test_run_iteration_routes_to_duplicate_when_enabled(
     benchmark.measure_placement.return_value = 2.0
     model = MagicMock()
 
+    from training.adapters.duplicate.shadow_sources import (
+        PreviousIterationShadowSource,
+    )
+
     RunIteration(
         selfplay, ppo, benchmark, model, MagicMock(),
         duplicate_pairing=pairing, duplicate_reward=reward,
+        duplicate_shadow_source=PreviousIterationShadowSource(),
     ).execute(
         iteration=1,
         config=config,
