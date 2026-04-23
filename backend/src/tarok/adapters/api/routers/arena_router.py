@@ -12,6 +12,7 @@ from fastapi import APIRouter
 from pydantic import BaseModel
 
 from tarok.adapters import arena_history
+from tarok.adapters import duplicate_arena_history
 from tarok.adapters.api.checkpoint_utils import resolve_checkpoint
 from tarok.use_cases.arena import (
     VALAT_CONTRACT_IDX,
@@ -611,3 +612,208 @@ def _empty_player_stats(name: str, agent_type: str) -> dict:
         "taroks_per_contract": {},
         "contract_stats": {},
     }
+
+
+# ---- Duplicate arena (head-to-head between two checkpoints) ----
+
+
+_duplicate_arena_task: asyncio.Task | None = None
+_duplicate_arena_progress: dict | None = None
+
+
+class DuplicateArenaRequest(BaseModel):
+    challenger: str  # checkpoint token (e.g. "Eva_Golob/_current.pt" or a filename)
+    defender: str
+    boards: int = 1000
+    seed: int = 0
+    pairing: str = "rotation_8game"  # rotation_8game | rotation_4game | single_seat_2game
+    explore_rate: float = 0.0
+    concurrency: int = 1
+    bootstrap_samples: int = 1000
+
+
+@router.get("/duplicate/history")
+async def duplicate_arena_history_endpoint():
+    history = duplicate_arena_history.load()
+    return {"runs": history.get("runs", [])}
+
+
+@router.get("/duplicate/progress")
+async def duplicate_arena_progress_endpoint():
+    if _duplicate_arena_progress:
+        return _duplicate_arena_progress
+    history = duplicate_arena_history.load()
+    runs = history.get("runs", [])
+    if runs:
+        last = runs[-1]
+        return {
+            "status": last.get("status", "done"),
+            "challenger": last.get("challenger"),
+            "defender": last.get("defender"),
+            "boards": last.get("boards"),
+            "result": last.get("result"),
+            "error": last.get("error"),
+        }
+    return {"status": "idle", "result": None}
+
+
+@router.post("/duplicate/stop")
+async def stop_duplicate_arena():
+    global _duplicate_arena_task
+    if _duplicate_arena_task and not _duplicate_arena_task.done():
+        _duplicate_arena_task.cancel()
+    return {"status": "stopped"}
+
+
+@router.post("/duplicate/start")
+async def start_duplicate_arena(req: DuplicateArenaRequest):
+    """Run a head-to-head duplicate match between two checkpoints."""
+    global _duplicate_arena_task, _duplicate_arena_progress
+
+    if _duplicate_arena_task and not _duplicate_arena_task.done():
+        return {"status": "already_running"}
+
+    if req.boards <= 0:
+        return {"status": "error", "message": "boards must be > 0"}
+    if req.pairing not in ("rotation_8game", "rotation_4game", "single_seat_2game"):
+        return {"status": "error", "message": f"unsupported pairing: {req.pairing}"}
+
+    challenger_path = resolve_checkpoint(req.challenger)
+    defender_path = resolve_checkpoint(req.defender)
+    if challenger_path is None:
+        return {"status": "error", "message": f"challenger checkpoint not found: {req.challenger}"}
+    if defender_path is None:
+        return {"status": "error", "message": f"defender checkpoint not found: {req.defender}"}
+
+    try:
+        challenger_ts = export_checkpoint_to_torchscript(str(challenger_path))
+        defender_ts = export_checkpoint_to_torchscript(str(defender_path))
+    except Exception as e:
+        return {"status": "error", "message": f"failed to export checkpoint: {e}"}
+
+    _duplicate_arena_progress = {
+        "status": "running",
+        "challenger": req.challenger,
+        "defender": req.defender,
+        "boards": req.boards,
+        "seed": req.seed,
+        "pairing": req.pairing,
+        "result": None,
+        "error": None,
+    }
+
+    _duplicate_arena_task = asyncio.create_task(
+        _run_duplicate_arena(
+            req=req,
+            challenger_ts=challenger_ts,
+            defender_ts=defender_ts,
+        )
+    )
+    return {"status": "started", "boards": req.boards}
+
+
+async def _run_duplicate_arena(
+    *,
+    req: DuplicateArenaRequest,
+    challenger_ts: str,
+    defender_ts: str,
+) -> None:
+    """Background task: run the duplicate-arena use case and persist the result."""
+    global _duplicate_arena_progress
+
+    # Make training-lab importable (the use case + adapters live there).
+    import sys
+
+    lab_path = str(Path(__file__).resolve().parents[5] / "training-lab")
+    if lab_path not in sys.path:
+        sys.path.insert(0, lab_path)
+
+    def _run_sync() -> dict:
+        from training.adapters.duplicate.numpy_arena_stats import (
+            NumpyDuplicateArenaStats,
+        )
+        from training.adapters.duplicate.rotation_pairing import (
+            RotationPairingAdapter,
+        )
+        from training.adapters.duplicate.seeded_self_play_adapter import (
+            SeededSelfPlayAdapter,
+        )
+        from training.adapters.self_play import RustSelfPlay
+        from training.use_cases.run_duplicate_arena import RunDuplicateArena
+
+        use_case = RunDuplicateArena(
+            selfplay=SeededSelfPlayAdapter(inner=RustSelfPlay()),
+            pairing=RotationPairingAdapter(pairing=req.pairing),
+            stats=NumpyDuplicateArenaStats(),
+        )
+        result = use_case.execute(
+            challenger_path=challenger_ts,
+            defender_path=defender_ts,
+            n_boards=req.boards,
+            rng_seed=req.seed,
+            explore_rate=req.explore_rate,
+            concurrency=req.concurrency,
+            bootstrap_samples=req.bootstrap_samples,
+        )
+        return {
+            "boards_played": int(result.boards_played),
+            "challenger_mean_score": float(result.challenger_mean_score),
+            "defender_mean_score": float(result.defender_mean_score),
+            "mean_duplicate_advantage": float(result.mean_duplicate_advantage),
+            "duplicate_advantage_std": float(result.duplicate_advantage_std),
+            "ci_low_95": float(result.ci_low_95),
+            "ci_high_95": float(result.ci_high_95),
+            "imps_per_board": float(result.imps_per_board),
+        }
+
+    try:
+        result = await asyncio.to_thread(_run_sync)
+        _duplicate_arena_progress = {
+            "status": "done",
+            "challenger": req.challenger,
+            "defender": req.defender,
+            "boards": req.boards,
+            "seed": req.seed,
+            "pairing": req.pairing,
+            "result": result,
+            "error": None,
+        }
+        duplicate_arena_history.persist_run(
+            challenger=req.challenger,
+            defender=req.defender,
+            boards=req.boards,
+            seed=req.seed,
+            pairing=req.pairing,
+            status="done",
+            result=result,
+        )
+    except asyncio.CancelledError:
+        _duplicate_arena_progress = {
+            **(_duplicate_arena_progress or {}),
+            "status": "cancelled",
+        }
+        raise
+    except Exception as e:  # noqa: BLE001
+        log.exception("duplicate arena failed")
+        err = str(e)
+        _duplicate_arena_progress = {
+            **(_duplicate_arena_progress or {}),
+            "status": "error",
+            "error": err,
+        }
+        duplicate_arena_history.persist_run(
+            challenger=req.challenger,
+            defender=req.defender,
+            boards=req.boards,
+            seed=req.seed,
+            pairing=req.pairing,
+            status="error",
+            result=None,
+            error=err,
+        )
+    finally:
+        for ts in (challenger_ts, defender_ts):
+            try:
+                os.unlink(ts)
+            except OSError:
+                pass

@@ -382,6 +382,8 @@ export default function BotArena({ onBack, checkpoints, onReplayGame }: BotArena
           </div>
         </div>
       )}
+
+      <DuplicateMatchPanel checkpoints={checkpoints} />
     </div>
   );
 }
@@ -1055,6 +1057,256 @@ function HistoryTab({ runs }: { runs: ArenaHistoryRun[] }) {
                 </tr>
               );
             })}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  );
+}
+
+/* ============ Duplicate Match Panel ============ */
+interface DuplicateResult {
+  boards_played: number;
+  challenger_mean_score: number;
+  defender_mean_score: number;
+  mean_duplicate_advantage: number;
+  duplicate_advantage_std: number;
+  ci_low_95: number;
+  ci_high_95: number;
+  imps_per_board: number;
+}
+
+interface DuplicateRun {
+  run_id: string;
+  created_at: string;
+  status: string;
+  challenger: string;
+  defender: string;
+  boards: number;
+  seed: number;
+  pairing: string;
+  result: DuplicateResult | null;
+  error: string | null;
+}
+
+interface DuplicateProgress {
+  status: string;
+  challenger?: string;
+  defender?: string;
+  boards?: number;
+  seed?: number;
+  pairing?: string;
+  result: DuplicateResult | null;
+  error?: string | null;
+}
+
+function DuplicateMatchPanel({ checkpoints }: { checkpoints: BotArenaProps['checkpoints'] }) {
+  const [challenger, setChallenger] = useState<string>('');
+  const [defender, setDefender] = useState<string>('');
+  const [boards, setBoards] = useState<number>(1000);
+  const [seed, setSeed] = useState<number>(0);
+  const [pairing, setPairing] = useState<string>('rotation_8game');
+  const [progress, setProgress] = useState<DuplicateProgress | null>(null);
+  const [runs, setRuns] = useState<DuplicateRun[]>([]);
+  const [error, setError] = useState<string | null>(null);
+  const [running, setRunning] = useState<boolean>(false);
+  const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
+
+  const loadHistory = useCallback(() => {
+    fetch('/api/arena/duplicate/history')
+      .then(r => r.json())
+      .then(d => setRuns(d.runs ?? []))
+      .catch(() => {});
+  }, []);
+
+  const pollProgress = useCallback(() => {
+    fetch('/api/arena/duplicate/progress')
+      .then(r => r.json())
+      .then((data: DuplicateProgress) => {
+        setProgress(data);
+        if (data.status !== 'running') {
+          setRunning(false);
+          if (pollRef.current) {
+            clearInterval(pollRef.current);
+            pollRef.current = null;
+          }
+          loadHistory();
+        } else {
+          setRunning(true);
+        }
+      })
+      .catch(() => {});
+  }, [loadHistory]);
+
+  useEffect(() => {
+    pollProgress();
+    loadHistory();
+    return () => {
+      if (pollRef.current) clearInterval(pollRef.current);
+    };
+  }, [pollProgress, loadHistory]);
+
+  const startMatch = async () => {
+    setError(null);
+    if (!challenger || !defender) {
+      setError('Pick both challenger and defender checkpoints.');
+      return;
+    }
+    if (boards <= 0) {
+      setError('Boards must be > 0.');
+      return;
+    }
+    try {
+      const resp = await fetch('/api/arena/duplicate/start', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          challenger,
+          defender,
+          boards,
+          seed,
+          pairing,
+        }),
+      });
+      const data = await resp.json();
+      if (data.status === 'started' || data.status === 'already_running') {
+        setRunning(true);
+        pollProgress();
+        if (!pollRef.current) pollRef.current = setInterval(pollProgress, 2000);
+        return;
+      }
+      setError(data?.message ?? `Failed to start (${data?.status ?? 'unknown'}).`);
+    } catch (e) {
+      setError(`Network error: ${e instanceof Error ? e.message : 'unknown'}`);
+    }
+  };
+
+  const stopMatch = async () => {
+    await fetch('/api/arena/duplicate/stop', { method: 'POST' });
+    setRunning(false);
+    if (pollRef.current) {
+      clearInterval(pollRef.current);
+      pollRef.current = null;
+    }
+    pollProgress();
+  };
+
+  const currentResult = progress?.result ?? null;
+
+  return (
+    <div className="arena-duplicate" style={{ marginTop: 32 }}>
+      <h2>Duplicate Match</h2>
+      <p className="arena-subtitle">
+        Head-to-head duplicate match: both checkpoints play the same deals in rotated seats.
+        Reports mean duplicate advantage with 95% bootstrap CI and IMPs/board.
+      </p>
+
+      <div className="arena-duplicate-config" style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))', gap: 12, margin: '12px 0' }}>
+        <label>
+          <div>Challenger</div>
+          <select value={challenger} onChange={e => setChallenger(e.target.value)}>
+            <option value="">— pick a checkpoint —</option>
+            {checkpoints.map(c => (
+              <option key={c.filename} value={c.filename}>{c.model_name ? `${c.model_name} · ${c.filename}` : c.filename}</option>
+            ))}
+          </select>
+        </label>
+        <label>
+          <div>Defender</div>
+          <select value={defender} onChange={e => setDefender(e.target.value)}>
+            <option value="">— pick a checkpoint —</option>
+            {checkpoints.map(c => (
+              <option key={c.filename} value={c.filename}>{c.model_name ? `${c.model_name} · ${c.filename}` : c.filename}</option>
+            ))}
+          </select>
+        </label>
+        <label>
+          <div>Boards</div>
+          <input type="number" min={1} max={50000} value={boards} onChange={e => setBoards(parseInt(e.target.value || '0', 10))} />
+        </label>
+        <label>
+          <div>Seed</div>
+          <input type="number" value={seed} onChange={e => setSeed(parseInt(e.target.value || '0', 10))} />
+        </label>
+        <label>
+          <div>Pairing</div>
+          <select value={pairing} onChange={e => setPairing(e.target.value)}>
+            <option value="rotation_8game">rotation_8game</option>
+            <option value="rotation_4game">rotation_4game</option>
+            <option value="single_seat_2game">single_seat_2game</option>
+          </select>
+        </label>
+      </div>
+
+      <div style={{ display: 'flex', gap: 8, marginBottom: 12 }}>
+        <button className="btn-primary" onClick={startMatch} disabled={running}>
+          {running ? 'Running…' : 'Run Duplicate Match'}
+        </button>
+        {running && <button className="btn-secondary" onClick={stopMatch}>Stop</button>}
+      </div>
+
+      {error && <div className="arena-error-banner">{error}</div>}
+
+      {progress && progress.status !== 'idle' && (
+        <div className="arena-duplicate-status" style={{ margin: '8px 0' }}>
+          <strong>Status:</strong> {progress.status}
+          {progress.challenger && progress.defender && (
+            <span> — {progress.challenger} vs {progress.defender} ({progress.boards} boards, seed={progress.seed}, {progress.pairing})</span>
+          )}
+          {progress.error && <div className="negative">Error: {progress.error}</div>}
+        </div>
+      )}
+
+      {currentResult && (
+        <div className="arena-duplicate-result" style={{ marginTop: 12, padding: 12, border: '1px solid #ccc', borderRadius: 6 }}>
+          <h3>Latest Result</h3>
+          <table className="arena-table">
+            <tbody>
+              <tr><td>Boards played</td><td>{currentResult.boards_played.toLocaleString()}</td></tr>
+              <tr><td>Challenger mean score</td><td className={currentResult.challenger_mean_score >= 0 ? 'positive' : 'negative'}>{currentResult.challenger_mean_score.toFixed(3)}</td></tr>
+              <tr><td>Defender mean score</td><td className={currentResult.defender_mean_score >= 0 ? 'positive' : 'negative'}>{currentResult.defender_mean_score.toFixed(3)}</td></tr>
+              <tr><td>Mean duplicate advantage</td><td className={currentResult.mean_duplicate_advantage >= 0 ? 'positive' : 'negative'}>{currentResult.mean_duplicate_advantage.toFixed(3)} ± {currentResult.duplicate_advantage_std.toFixed(3)}</td></tr>
+              <tr><td>95% CI</td><td>[{currentResult.ci_low_95.toFixed(3)}, {currentResult.ci_high_95.toFixed(3)}]</td></tr>
+              <tr><td>IMPs / board</td><td>{currentResult.imps_per_board.toFixed(4)}</td></tr>
+            </tbody>
+          </table>
+        </div>
+      )}
+
+      <h3 style={{ marginTop: 24 }}>History</h3>
+      <div className="arena-table-wrapper">
+        <table className="arena-table">
+          <thead>
+            <tr>
+              <th>When</th>
+              <th>Status</th>
+              <th>Challenger</th>
+              <th>Defender</th>
+              <th>Boards</th>
+              <th>Seed</th>
+              <th>Pairing</th>
+              <th>Adv (mean ± std)</th>
+              <th>95% CI</th>
+              <th>IMPs/board</th>
+            </tr>
+          </thead>
+          <tbody>
+            {[...runs].reverse().map(run => (
+              <tr key={run.run_id}>
+                <td>{new Date(run.created_at).toLocaleString()}</td>
+                <td>{run.status}</td>
+                <td>{run.challenger}</td>
+                <td>{run.defender}</td>
+                <td>{run.boards.toLocaleString()}</td>
+                <td>{run.seed}</td>
+                <td>{run.pairing}</td>
+                <td className={run.result && run.result.mean_duplicate_advantage >= 0 ? 'positive' : run.result ? 'negative' : ''}>
+                  {run.result ? `${run.result.mean_duplicate_advantage.toFixed(3)} ± ${run.result.duplicate_advantage_std.toFixed(3)}` : (run.error ?? '—')}
+                </td>
+                <td>{run.result ? `[${run.result.ci_low_95.toFixed(3)}, ${run.result.ci_high_95.toFixed(3)}]` : '—'}</td>
+                <td>{run.result ? run.result.imps_per_board.toFixed(4) : '—'}</td>
+              </tr>
+            ))}
           </tbody>
         </table>
       </div>

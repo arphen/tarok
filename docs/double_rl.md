@@ -1,6 +1,6 @@
 # Duplicate Reinforcement Learning (DRL) for Tarok
 
-> Status: **Phases 1, 2 + Phase 3 (PPO + network)** complete. Actor-only mode is now reachable from config and `model_arch: v5` physically drops the value side of the network. Phase 4 (arena UI) still pending.
+> Status: **Phases 1–4 complete.** Actor-only mode is reachable from config, `model_arch: v5` drops the value side of the network, and the duplicate arena is exposed as both a CLI (`arena-duplicate`) and a BotArena UI panel.
 > Guiding principle: **strictly additive on top of the existing PPO + Fictitious Self-Play + Arena stack.** Nothing about current training, arena leaderboard, or ELO league changes unless the Duplicate feature flag is explicitly enabled.
 
 ## Implementation status (as of last commit)
@@ -17,12 +17,13 @@ Completed:
 - **Spawn runner duplicate support:** `ConfigurableIterationRunner._adapter_factory_for_spawn` now takes the `TrainingConfig` and constructs `SeededSelfPlayAdapter` + `RotationPairingAdapter` + `ShadowScoreRewardAdapter` inside the worker process when `duplicate.enabled=True`. The previous `NotImplementedError` guard is removed; `iteration_runner_mode: spawn` now works with duplicate configs.
 - **Shadow-source port:** `DuplicateShadowSourcePort` has three adapters behind `duplicate.shadow_source`: `previous_iteration` (default; reads the learner's TorchScript path, which still holds prior weights at the start of each iteration), `league_pool` (Gaussian-weighted random sample over `nn_checkpoint` entries near the learner's Elo), and `best_snapshot` (highest-Elo snapshot — "best ghost ever"). Wired through `IterationRunnerPort.run_iteration(pool=...)`, across both in-process and spawn runners; constructed from config in `training.container` via `create_shadow_source(...)`.
 - **Arena duplicate CLI (phase 4a):** `python -m tarok arena-duplicate --challenger A.ts --defender B.ts --boards 1000 --seed 42` drives a head-to-head duplicate match. New clean-arch slice: entity `DuplicateArenaResult`, port `DuplicateArenaStatsPort`, adapter `NumpyDuplicateArenaStats` (per-board challenger/defender extraction, bootstrap 95% CI), use case `RunDuplicateArena` orchestrating `DuplicatePairingPort` + `SelfPlayPort.run_seeded_pods` + stats port. Reuses the same seeded-pods ports that drive training — one engine path, two call sites. Optional `--output out.json` for JSON summary.
+- **Arena duplicate HTTP + UI (phase 4b):** `arena_router.py` gains `POST /api/arena/duplicate/start`, `GET /api/arena/duplicate/progress`, `GET /api/arena/duplicate/history`, `POST /api/arena/duplicate/stop`. Runs the same `RunDuplicateArena` use case in a background task via `asyncio.to_thread`; persists results to `data/duplicate_arena_results.json` through a new `duplicate_arena_history` adapter (mirrors the existing `arena_history` persistence pattern). Frontend `BotArena.tsx` adds a `DuplicateMatchPanel` below the existing arena analytics: challenger/defender dropdowns populated from `/api/checkpoints`, boards / seed / pairing inputs, live status poll, latest-result card (boards, per-side means, mean duplicate advantage ± std, 95% CI, IMPs/board), and history table.
 - Tests: full training-lab suite passes; `make lint-architecture` green.
 
 Still pending:
 
 - Rust-side actor-only buffer suppression (optimisation; current v5 path is already correct, just wastes the values slot).
-- Phase 4b: HTTP endpoint + Arena frontend "Duplicate Match" card (TrainingDashboard panel blocked — dashboard component currently removed).
+- TrainingDashboard "Duplicate RL" panel (blocked — dashboard component currently removed).
 
 ---
 
