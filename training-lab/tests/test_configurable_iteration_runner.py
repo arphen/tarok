@@ -13,6 +13,7 @@ import pytest
 from training.adapters.iteration_runners.configurable import ConfigurableIterationRunner
 from training.adapters.iteration_runners.in_process import InProcessIterationRunner
 from training.adapters.iteration_runners.spawn import SpawnIterationRunner
+from training.entities.duplicate_config import DuplicateConfig
 from training.entities.iteration_result import IterationResult
 from training.entities.model_identity import ModelIdentity
 from training.entities.training_config import TrainingConfig
@@ -151,3 +152,65 @@ def test_teardown_releases_delegate_and_is_idempotent(tmp_path: Path) -> None:
     # Second teardown is a no-op — no delegate, no crash.
     runner.teardown()
     assert runner._delegate is None
+
+
+# ----------------------------------------------------------------------
+# Duplicate-RL spawn support (docs/double_rl.md Phase 3)
+# ----------------------------------------------------------------------
+
+
+def _duplicate_config(tmp_path: Path, *, enabled: bool) -> TrainingConfig:
+    return TrainingConfig(
+        model_arch="v4",
+        save_dir=str(tmp_path / "run"),
+        iterations=1,
+        bench_games=8,
+        iteration_runner_mode="spawn",
+        iteration_runner_restart_every=5,
+        duplicate=DuplicateConfig(enabled=enabled, pods_per_iteration=2),
+    )
+
+
+def test_spawn_mode_supports_duplicate_without_raising(tmp_path: Path) -> None:
+    """Regression: duplicate + spawn used to raise NotImplementedError."""
+    runner = _runner()
+
+    runner.setup({"w": 1.0}, _duplicate_config(tmp_path, enabled=True), "cpu")
+
+    assert isinstance(runner._delegate, SpawnIterationRunner)
+
+
+def test_adapter_factory_for_spawn_constructs_duplicate_ports_when_enabled(
+    tmp_path: Path,
+) -> None:
+    from training.adapters.duplicate.rotation_pairing import RotationPairingAdapter
+    from training.adapters.duplicate.seeded_self_play_adapter import SeededSelfPlayAdapter
+    from training.adapters.duplicate.shadow_score_reward import ShadowScoreRewardAdapter
+
+    runner = _runner()
+    config = _duplicate_config(tmp_path, enabled=True)
+
+    (selfplay, _ppo, _bench, _model, dup_pairing, dup_reward) = (
+        runner._adapter_factory_for_spawn(config)
+    )
+
+    assert isinstance(selfplay, SeededSelfPlayAdapter)
+    assert isinstance(dup_pairing, RotationPairingAdapter)
+    assert isinstance(dup_reward, ShadowScoreRewardAdapter)
+
+
+def test_adapter_factory_for_spawn_leaves_duplicate_ports_none_when_disabled(
+    tmp_path: Path,
+) -> None:
+    from training.adapters.duplicate.seeded_self_play_adapter import SeededSelfPlayAdapter
+
+    runner = _runner()
+    config = _duplicate_config(tmp_path, enabled=False)
+
+    (selfplay, _ppo, _bench, _model, dup_pairing, dup_reward) = (
+        runner._adapter_factory_for_spawn(config)
+    )
+
+    assert not isinstance(selfplay, SeededSelfPlayAdapter)
+    assert dup_pairing is None
+    assert dup_reward is None

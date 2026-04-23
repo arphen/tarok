@@ -14,11 +14,12 @@ Completed:
 - **Phase 3 (PPO side):** `_broadcast_terminal_advantage` helper + `actor_only` branch in `ppo_batch_preparation.py`. When `raw["actor_only"]=True`, GAE is replaced by the discounted terminal-advantage broadcast (§4.2); the `vad` matrix's `old_values` column is forced to zero so the downstream PPO loss is critic-free in this regime. `CollectDuplicateExperiences` propagates `duplicate_config.actor_only` onto the raw dict automatically. `PPOAdapter._ppo_update_batched` accepts an `actor_only` kwarg threaded through `prepare_batched` and zeroes the `value_loss` + `il_loss` terms when set.
 - **Config preset:** `training-lab/configs/duplicate.yaml` exposes every `duplicate:` knob with sane first-run defaults; drive a full iteration via `make train-new CONFIG=duplicate`.
 - **Actor-only network (`TarokNetV5`):** `model_arch: v5` instantiates a subclass of `TarokNetV4` with the `critic` head and oracle backbone physically deleted; `state_dict` is a strict subset of v4's, so v4 checkpoints load via `strict=False`. `forward` / `forward_batch` return a zero-valued placeholder for the `values` tensor to keep TorchScript export and the PPO data path shape-compatible. Plumbed through `TorchModelAdapter.create_new` / `export_for_inference` / `save_checkpoint`.
-- Tests: full training-lab suite **247 passed**; `make lint-architecture` green.
+- **Spawn runner duplicate support:** `ConfigurableIterationRunner._adapter_factory_for_spawn` now takes the `TrainingConfig` and constructs `SeededSelfPlayAdapter` + `RotationPairingAdapter` + `ShadowScoreRewardAdapter` inside the worker process when `duplicate.enabled=True`. The previous `NotImplementedError` guard is removed; `iteration_runner_mode: spawn` now works with duplicate configs.
+- Tests: full training-lab suite passes; `make lint-architecture` green.
 
 Still pending:
 
-- `SpawnIterationRunner` support for duplicate (currently raises `NotImplementedError` if combined).
+- Rust-side actor-only buffer suppression (optimisation; current v5 path is already correct, just wastes the values slot).
 - Shadow-source `"league_pool"` option wiring.
 - Phase 4: Arena duplicate CLI + UI panel.
 

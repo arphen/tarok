@@ -51,13 +51,6 @@ class ConfigurableIterationRunner(IterationRunnerPort):
         if mode in {"spawn", "process", "subprocess"}:
             from training.adapters.iteration_runners.spawn import SpawnIterationRunner
 
-            if getattr(config, "duplicate", None) is not None and config.duplicate.enabled:
-                # Spawn runner does not yet thread duplicate ports through the
-                # worker boundary; require in-process for duplicate runs.
-                raise NotImplementedError(
-                    "duplicate.enabled=True is currently only supported with "
-                    "iteration_runner_mode='in-process'."
-                )
             self._delegate = SpawnIterationRunner(
                 adapter_factory=self._adapter_factory_for_spawn,
                 presenter=self._presenter,
@@ -119,11 +112,43 @@ class ConfigurableIterationRunner(IterationRunnerPort):
             self._delegate.teardown()
             self._delegate = None
 
-    def _adapter_factory_for_spawn(self) -> tuple[SelfPlayPort, PPOPort, BenchmarkPort, ModelPort]:
-        # Worker must own fresh adapters in its own process.
+    def _adapter_factory_for_spawn(
+        self, config: TrainingConfig
+    ) -> tuple[
+        SelfPlayPort,
+        PPOPort,
+        BenchmarkPort,
+        ModelPort,
+        DuplicatePairingPort | None,
+        DuplicateRewardPort | None,
+    ]:
+        # Worker must own fresh adapters in its own process. Duplicate-RL
+        # ports are constructed lazily, mirroring ``_default_iteration_runner``
+        # in the composition root so spawn runs match in-process behaviour.
         from training.adapters.evaluation import SessionBenchmark
         from training.adapters.modeling import TorchModelAdapter
         from training.adapters.ppo import PPOAdapter
         from training.adapters.self_play import RustSelfPlay
 
-        return RustSelfPlay(), PPOAdapter(), SessionBenchmark(), TorchModelAdapter()
+        selfplay: SelfPlayPort = RustSelfPlay()
+        duplicate_pairing: DuplicatePairingPort | None = None
+        duplicate_reward: DuplicateRewardPort | None = None
+
+        duplicate_cfg = getattr(config, "duplicate", None)
+        if duplicate_cfg is not None and duplicate_cfg.enabled:
+            from training.adapters.duplicate.rotation_pairing import RotationPairingAdapter
+            from training.adapters.duplicate.seeded_self_play_adapter import SeededSelfPlayAdapter
+            from training.adapters.duplicate.shadow_score_reward import ShadowScoreRewardAdapter
+
+            selfplay = SeededSelfPlayAdapter(inner=selfplay)
+            duplicate_pairing = RotationPairingAdapter(pairing=duplicate_cfg.pairing)
+            duplicate_reward = ShadowScoreRewardAdapter()
+
+        return (
+            selfplay,
+            PPOAdapter(),
+            SessionBenchmark(),
+            TorchModelAdapter(),
+            duplicate_pairing,
+            duplicate_reward,
+        )

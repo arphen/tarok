@@ -145,14 +145,26 @@ def _worker_main(
     event_queue: mp.Queue,
     adapter_factory: Callable,
 ) -> None:
-    """Worker loop: receive init, then execute iterations until sentinel."""
+    """Worker loop: receive init, then execute iterations until sentinel.
+
+    The adapter factory accepts the :class:`TrainingConfig` so it can decide
+    whether to construct duplicate-RL adapters (pairing/reward) for the
+    worker's :class:`RunIteration`. The factory returns a 6-tuple whose last
+    two slots may be ``None`` when duplicate mode is disabled.
+    """
     from training.use_cases.run_iteration import RunIteration
 
-    selfplay, ppo, benchmark, model = adapter_factory()
-    presenter = _QueuePresenter(event_queue)
-    run_iteration = RunIteration(selfplay, ppo, benchmark, model, presenter)
-
     init: _WorkerInit = task_queue.get()
+    selfplay, ppo, benchmark, model, duplicate_pairing, duplicate_reward = adapter_factory(
+        init.config
+    )
+    presenter = _QueuePresenter(event_queue)
+    run_iteration = RunIteration(
+        selfplay, ppo, benchmark, model, presenter,
+        duplicate_pairing=duplicate_pairing,
+        duplicate_reward=duplicate_reward,
+    )
+
     ppo.setup(init.weights, init.config, init.device)
 
     while True:

@@ -58,8 +58,9 @@ imitation_coef: 0.0
 concurrency: 64
 device: auto
 
-# IMPORTANT: duplicate currently requires in-process iteration (spawn mode
-# raises NotImplementedError — see docs/double_rl.md "Still pending").
+# Duplicate-RL supports both in-process and spawn iteration runners.
+# In-process is the recommended default for first-run smoke tests; switch to
+# "spawn" for long runs to reclaim PyTorch memory every restart_every iters.
 iteration_runner_mode: inprocess
 
 # --- League: used to sample the 3 opponents per pod ---
