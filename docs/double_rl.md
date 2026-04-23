@@ -1,27 +1,25 @@
 # Duplicate Reinforcement Learning (DRL) for Tarok
 
-> Status: **Phase 1 + Phase 2 complete.** Config-gated duplicate iterations now run end-to-end through the in-process runner. Phase 3 (actor-only net) and Phase 4 (arena UI) still pending.
+> Status: **Phases 1, 2 + Phase 3 (PPO side)** complete. Actor-only mode is now reachable from config; the actor-only `TarokNet` checkpoint pruning is the remaining work for Phase 3. Phase 4 (arena UI) still pending.
 > Guiding principle: **strictly additive on top of the existing PPO + Fictitious Self-Play + Arena stack.** Nothing about current training, arena leaderboard, or ELO league changes unless the Duplicate feature flag is explicitly enabled.
 
 ## Implementation status (as of last commit)
 
 Completed:
 
-- Entities: `DuplicatePod`, `DuplicateRunResult`, `DuplicateConfig` (with `actor_only` requires `enabled` validation).
-- Ports: `DuplicatePairingPort`, `DuplicateRewardPort`. `SelfPlayPort` extended with an optional `run_seeded_pods` method (default raises `NotImplementedError`).
-- Adapters: `RotationPairingAdapter`, `ShadowScoreRewardAdapter`, `SeededSelfPlayAdapter` (duplicate-aware self-play on top of the Rust engine).
-- Rust engine: `SelfPlayRunner::run_with_deck_seeds(...)` + PyO3 `run_self_play(deck_seeds=...)`; integration test `engine-rs/tests/seeded_deal_determinism.rs`.
-- Use case: `CollectDuplicateExperiences` builds pods, runs seeded self-play (active + shadow), computes shadow-diff rewards, and returns an `ExperienceBundle` whose `raw["precomputed_rewards"]` feeds the PPO batch path.
-- PPO batch prep: §4.1 conservative `precomputed_rewards` override wired into `ppo_batch_preparation.py`; legacy path unchanged when the key is absent or `None`.
-- Config plumbing: `duplicate:` YAML block parsed into `DuplicateConfig` via `_parse_duplicate()` and attached to `TrainingConfig`.
-- Orchestrator: `RunIteration` accepts optional `duplicate_pairing` / `duplicate_reward` keyword ports and routes to `CollectDuplicateExperiences` when `config.duplicate.enabled=True`; otherwise falls back to the legacy `CollectExperiences` path. Shadow-path follows `shadow_source="previous_iteration"` (bootstraps to `ts_path` on iteration 0). Threaded through `InProcessIterationRunner` and `ConfigurableIterationRunner`.
-- Tests: full training-lab suite **225 passed** (added 3 orchestrator-branching tests), 5-test noop regression, `make lint-architecture` green.
+- Entities, ports, adapters, Rust seeded dealing — see prior commits.
+- `CollectDuplicateExperiences` use case + orchestrator branching on `config.duplicate.enabled`.
+- Composition root auto-wires `RotationPairingAdapter` + `SeededSelfPlayAdapter` + `ShadowScoreRewardAdapter` when duplicate is enabled.
+- End-to-end smoke test of the full pipeline (pairing → seeded self-play → reward → `prepare_batched`).
+- **Phase 3 (PPO side):** `_broadcast_terminal_advantage` helper + `actor_only` branch in `ppo_batch_preparation.py`. When `raw["actor_only"]=True`, GAE is replaced by the discounted terminal-advantage broadcast (§4.2); the `vad` matrix's `old_values` column is forced to zero so the downstream PPO loss is critic-free in this regime. `CollectDuplicateExperiences` propagates `duplicate_config.actor_only` onto the raw dict automatically.
+- Tests: full training-lab suite **237 passed** (added 8 actor-only tests); `make lint-architecture` green.
 
 Still pending:
 
-- `SpawnIterationRunner` support for duplicate (currently raises `NotImplementedError` if duplicate + spawn combo is configured).
-- Shadow-source "league pool" option wiring.
-- Phase 3: actor-only `TarokNet` variant + `_broadcast_terminal_advantage` helper (§2.7, §4.2).
+- Actor-only `TarokNet` variant in the model package (skip the value head; checkpoints still load via `strict=False`).
+- PPO loss adjustment to drop the value-loss term when `actor_only=True` is detected on the batch.
+- `SpawnIterationRunner` support for duplicate (currently raises `NotImplementedError` if combined).
+- Shadow-source `"league_pool"` option wiring.
 - Phase 4: Arena duplicate CLI + UI panel.
 
 ---

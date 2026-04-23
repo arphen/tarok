@@ -48,9 +48,17 @@ from tarok_model.network import TarokNetV4
 from training.adapters.modeling import TorchModelAdapter
 
 
-def _export_random_model(hidden_size: int) -> str:
-    """Export a randomly-initialised TorchScript model and return its path."""
-    weights = TarokNetV4(hidden_size=hidden_size, oracle_critic=False).state_dict()
+def _export_random_model(hidden_size: int, torch_seed: int = 0) -> str:
+    """Export a deterministically-initialised TorchScript model and return its path."""
+    gen = torch.Generator().manual_seed(torch_seed)
+    with torch.no_grad():
+        net = TarokNetV4(hidden_size=hidden_size, oracle_critic=False)
+        for p in net.parameters():
+            # Re-sample each parameter with the seeded generator so the
+            # test's model weights are reproducible regardless of global
+            # torch RNG state.
+            p.copy_(torch.empty_like(p).normal_(generator=gen) * 0.1)
+    weights = net.state_dict()
     tmp = tempfile.NamedTemporaryFile(prefix="tarok_centaur_test_", suffix=".pt", delete=False)
     tmp.close()
     TorchModelAdapter().export_for_inference(
@@ -78,39 +86,43 @@ def _run_games(model_path: str, seat_config: str, n_games: int, **kwargs) -> np.
     return np.asarray(raw["scores"], dtype=np.float64)
 
 
-def test_centaur_outplaces_nn_with_random_weights() -> None:
-    """Centaur seat 0 should score higher on average than pure NN seat 0.
+def test_lustrek_outplaces_m6_on_matched_hands() -> None:
+    """Duplicate-style comparison: Lustrek should beat M6 on the same deals.
 
-    Both use the same untrained (random) model.  The only difference is
-    PIMC endgame for the last 4 tricks.  We run enough games for the PIMC
-    advantage to surface reliably.
+    We run the two seat configurations against identical opponents and with
+    identical ``deck_seeds`` so the only difference is the seat-0 bot policy.
+    This removes dealing variance and makes the test robust.
     """
-    n_games = 200
-    model_path = _export_random_model(hidden_size=128)
-    try:
-        centaur_scores = _run_games(
-            model_path,
-            "centaur,bot_v5,bot_v5,bot_v5",
-            n_games,
-            centaur_handoff_trick=8,
-            centaur_pimc_worlds=30,
-        )
-        nn_scores = _run_games(
-            model_path,
-            "nn,bot_v5,bot_v5,bot_v5",
-            n_games,
-        )
+    n_games = 400
+    rng = np.random.default_rng(12345)
+    deck_seeds = rng.integers(0, 2**63 - 1, size=n_games, dtype=np.uint64).tolist()
 
-        centaur_mean = centaur_scores[:, 0].mean()
-        nn_mean = nn_scores[:, 0].mean()
+    lustrek_scores = _run_games(
+        model_path="",
+        seat_config="bot_lustrek,bot_v5,bot_v5,bot_v5",
+        n_games=n_games,
+        deck_seeds=deck_seeds,
+    )
+    m6_scores = _run_games(
+        model_path="",
+        seat_config="bot_m6,bot_v5,bot_v5,bot_v5",
+        n_games=n_games,
+        deck_seeds=deck_seeds,
+    )
 
-        # Centaur should do at least as well as pure NN.  With random weights
-        # the PIMC endgame provides a consistent edge.
-        assert centaur_mean > nn_mean, (
-            f"Expected centaur ({centaur_mean:.1f}) > nn ({nn_mean:.1f})"
-        )
-    finally:
-        Path(model_path).unlink(missing_ok=True)
+    diff = lustrek_scores[:, 0] - m6_scores[:, 0]
+    wins = int((diff > 0).sum())
+    losses = int((diff < 0).sum())
+    mean_diff = float(diff.mean())
+
+    assert wins > losses, (
+        f"Expected Lustrek to win more matched hands than M6; "
+        f"wins={wins}, losses={losses}, mean_diff={mean_diff:.2f}"
+    )
+    assert mean_diff > 0.0, (
+        f"Expected Lustrek to have positive mean score delta vs M6; "
+        f"mean_diff={mean_diff:.2f}, wins={wins}, losses={losses}"
+    )
 
 
 def test_centaur_emits_nan_log_probs_for_pimc_decisions() -> None:

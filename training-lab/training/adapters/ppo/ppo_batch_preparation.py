@@ -124,6 +124,72 @@ def _compute_special_shaped_bonus_by_game(raw: dict[str, Any], n_games: int) -> 
     return bonuses
 
 
+def _broadcast_terminal_advantage(
+    terminal_adv: np.ndarray,
+    game_ids: np.ndarray,
+    players: np.ndarray,
+    gamma: float,
+) -> np.ndarray:
+    """Broadcast one terminal advantage per trajectory to every step.
+
+    For a trajectory of T steps ending with advantage A, step t (0-indexed
+    within the trajectory) gets ``gamma ** (T - 1 - t) * A``. The terminal
+    step itself gets exactly ``A``. See docs/double_rl.md §4.2.
+
+    The input ``terminal_adv`` carries the per-step reward dict already
+    constructed by the duplicate-RL reward adapter: nonzero at the terminal
+    step of each (game_id, player) trajectory, zero elsewhere. We pick up
+    the single nonzero entry per trajectory (or fall back to the last
+    entry's value if the adapter chose to broadcast) and discount it back.
+
+    Pure numpy — no torch, no Rust dependency.
+    """
+    n = terminal_adv.shape[0]
+    if n == 0:
+        return np.zeros(0, dtype=np.float32)
+    gids = np.asarray(game_ids, dtype=np.int64)
+    plrs = np.asarray(players, dtype=np.int64)
+    traj_keys = gids * 4 + plrs
+    # Stable sort by (traj_key, original_index) so within each trajectory the
+    # rows stay in the original engine-emitted order (= chronological).
+    sort_idx = np.lexsort((np.arange(n), traj_keys))
+    sorted_keys = traj_keys[sort_idx]
+    sorted_adv = np.asarray(terminal_adv, dtype=np.float32)[sort_idx]
+
+    out_sorted = np.zeros(n, dtype=np.float32)
+    # Find trajectory boundaries.
+    # ``is_terminal`` is true at the last step of each (game, player) run.
+    is_terminal = np.ones(n, dtype=bool)
+    is_terminal[:-1] = sorted_keys[:-1] != sorted_keys[1:]
+    # Per-trajectory terminal advantage = value at the terminal row.
+    # (The reward adapter sets zero for non-terminal rows.)
+    terminal_values = sorted_adv[is_terminal]
+
+    # Trajectory lengths and segment ids.
+    term_pos = np.flatnonzero(is_terminal)
+    # Segment id for each row: how many terminals have occurred at or before
+    # this row? Equivalently, cumulative terminals minus the one at this row.
+    seg_id = np.cumsum(is_terminal) - is_terminal.astype(np.int64)
+    # Clip: all rows belong to seg 0..n_segments-1.
+    n_segments = term_pos.shape[0]
+    if n_segments == 0:
+        return np.zeros(n, dtype=np.float32)
+    seg_id = np.clip(seg_id, 0, n_segments - 1)
+
+    # Within-trajectory step index (0 at first step, T-1 at terminal).
+    seg_start = np.concatenate([[0], term_pos[:-1] + 1])
+    step_idx = np.arange(n) - seg_start[seg_id]
+    # Distance to terminal = (T - 1 - step_idx).
+    traj_len = (term_pos - seg_start + 1)[seg_id]
+    dist_to_terminal = traj_len - 1 - step_idx
+    discount = np.power(np.float32(gamma), dist_to_terminal.astype(np.float32))
+    out_sorted = terminal_values[seg_id] * discount
+
+    out = np.empty(n, dtype=np.float32)
+    out[sort_idx] = out_sorted
+    return out
+
+
 def prepare_batched(raw: dict[str, Any], gamma: float = 0.99, gae_lambda: float = 0.95) -> dict[str, Any]:
     """Convert raw Rust arrays into batched tensors and vectorized GAE inputs."""
 
@@ -170,6 +236,54 @@ def prepare_batched(raw: dict[str, Any], gamma: float = 0.99, gae_lambda: float 
             raise ValueError("game_ids must be non-negative")
     gids = game_ids_np % scores_np.shape[0] if scores_np.shape[0] > 0 else game_ids_np
     precomputed_rewards = raw.get("precomputed_rewards")
+    actor_only = bool(raw.get("actor_only", False))
+    if actor_only:
+        # Actor-only mode (docs/double_rl.md §4.2): GAE + critic are gone.
+        # Advantage for every step in a trajectory is the discounted terminal
+        # advantage; returns equal advantages (no critic bootstrap).
+        if precomputed_rewards is None:
+            raise ValueError(
+                "actor_only=True requires precomputed_rewards in raw "
+                "(duplicate-RL reward adapter must be wired)."
+            )
+        terminal_adv_np = np.asarray(precomputed_rewards, dtype=np.float32)
+        if terminal_adv_np.shape != (n_total,):
+            raise ValueError(
+                f"precomputed_rewards shape {terminal_adv_np.shape} does not match "
+                f"experience count {n_total}"
+            )
+        advantages_np = _broadcast_terminal_advantage(
+            terminal_adv_np, game_ids_np, players_np, gamma=gamma
+        )
+        if advantages_np.size > 1:
+            adv_mean = float(advantages_np.mean())
+            adv_std = float(advantages_np.std())
+            advantages_np = (advantages_np - adv_mean) / (adv_std + 1e-8)
+        returns_np = advantages_np.copy()
+        # No critic ⇒ values column is zero; keep (N,3) layout for the
+        # downstream PPO loss which indexes column 0 for old_values.
+        vad_np = np.stack(
+            [np.zeros(n_total, dtype=np.float32), advantages_np, returns_np], axis=1
+        )
+        return {
+            "states": torch.from_numpy(states_np),
+            "actions": torch.from_numpy(actions_np.astype(np.int64)),
+            "log_probs": torch.from_numpy(log_probs_np),
+            "vad": torch.from_numpy(vad_np),
+            "decision_types": decision_types_np,
+            "legal_masks": torch.from_numpy(legal_masks_np),
+            "oracle_states": (
+                torch.from_numpy(oracle_states_np) if oracle_states_np is not None else None
+            ),
+            "oracle_valid_mask": (
+                torch.from_numpy(oracle_valid_mask_np)
+                if oracle_valid_mask_np is not None
+                else None
+            ),
+            "game_modes": game_modes_np,
+            "behavioral_clone_mask": torch.from_numpy(behavioral_clone_mask_np),
+        }
+
     if precomputed_rewards is not None:
         # Duplicate-RL conservative mode: the reward source has been replaced by
         # an adapter that supplies the per-step terminal reward directly. Skip

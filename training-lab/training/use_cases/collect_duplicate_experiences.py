@@ -118,6 +118,12 @@ class CollectDuplicateExperiences:
             pods=pods,
         )
         raw["precomputed_rewards"] = precomputed
+        # Phase 3: actor-only mode drops the critic and switches PPO batch
+        # prep to the terminal-advantage broadcast path (§4.2). Propagate
+        # the flag on the raw dict so adapters/ppo_batch_preparation picks
+        # it up without needing a config reference.
+        if duplicate_config.actor_only:
+            raw["actor_only"] = True
 
         # 4. Build ExperienceBundle in the shape the PPO update expects.
         #    Duplicate training treats every active game as a learner game; all
