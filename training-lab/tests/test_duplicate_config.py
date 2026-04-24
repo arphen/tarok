@@ -48,6 +48,7 @@ def test_valid_shadow_sources_accepted() -> None:
         "relative_trailing",
         "league_pool",
         "best_snapshot",
+        "weakest_snapshot",
     ):
         cfg = DuplicateConfig(shadow_source=src)
         assert cfg.shadow_source == src

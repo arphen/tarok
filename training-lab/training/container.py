@@ -13,6 +13,7 @@ from training.ports import (
     ExploreRatePolicyPort,
     ImitationCoefPolicyPort,
     IterationRunnerPort,
+    LeagueCalibrationPort,
     LeagueStatePersistencePort,
     LearningRatePolicyPort,
     ModelPort,
@@ -74,6 +75,31 @@ def _default_league_persistence() -> LeagueStatePersistencePort:
     return JsonLeagueStatePersistence()
 
 
+def _default_league_calibration(
+    selfplay: SelfPlayPort,
+    config: TrainingConfig | None = None,
+) -> LeagueCalibrationPort:
+    strategy = "self_play"
+    if (
+        config is not None
+        and config.league is not None
+        and getattr(config.league, "calibration_strategy", None)
+    ):
+        strategy = config.league.calibration_strategy
+
+    if strategy == "duplicate_tournament":
+        from training.adapters.league_calibration import (
+            DuplicateTournamentLeagueCalibrationAdapter,
+        )
+        rng_seed = 0
+        if config is not None and getattr(config, "duplicate", None) is not None:
+            rng_seed = int(getattr(config.duplicate, "rng_seed", 0))
+        return DuplicateTournamentLeagueCalibrationAdapter(rng_seed=rng_seed)
+
+    from training.adapters.league_calibration import SelfPlayLeagueCalibrationAdapter
+    return SelfPlayLeagueCalibrationAdapter(selfplay)
+
+
 def _default_imitation_policy(config: TrainingConfig | None = None) -> ImitationCoefPolicyPort:
     if config is not None and config.imitation_schedule == "gaussian_elo":
         from training.use_cases.train_model.policies import EloGaussianILPolicy
@@ -112,7 +138,10 @@ def _default_iteration_runner(
         # available; legacy ``run``/``compute_run_stats`` still delegate to
         # the inner Rust adapter.
         selfplay = SeededSelfPlayAdapter(inner=selfplay)
-        duplicate_pairing = RotationPairingAdapter(pairing=config.duplicate.pairing)
+        duplicate_pairing = RotationPairingAdapter(
+            pairing=config.duplicate.pairing,
+            max_opponent_triplets=config.duplicate.max_opponent_triplets,
+        )
         duplicate_reward = ShadowScoreRewardAdapter()
         duplicate_shadow_source = create_shadow_source(
             config.duplicate.shadow_source,
@@ -150,6 +179,7 @@ class Container:
         config_loader: ConfigPort | None = None,
         presenter: PresenterPort | None = None,
         league_persistence: LeagueStatePersistencePort | None = None,
+        league_calibration: LeagueCalibrationPort | None = None,
     ):
         self._selfplay = selfplay
         self._benchmark = benchmark
@@ -161,6 +191,7 @@ class Container:
         self._config_loader = config_loader
         self._presenter = presenter
         self._league_persistence = league_persistence
+        self._league_calibration = league_calibration
 
     @property
     def selfplay(self) -> SelfPlayPort:
@@ -249,6 +280,9 @@ class Container:
         return ResolveConfig(self.config_loader)
 
     def train_model(self, config: TrainingConfig | None = None) -> TrainModel:
+        league_calibration = self._league_calibration
+        if league_calibration is None:
+            league_calibration = _default_league_calibration(self.selfplay, config)
         return TrainModel(
             iteration_runner=self._iteration_runner_for(config),
             benchmark=self.benchmark,
@@ -260,4 +294,5 @@ class Container:
             entropy_policy=_default_entropy_policy(config),
             explore_rate_policy=_default_explore_rate_policy(config),
             league_persistence=self.league_persistence,
+            league_calibration=league_calibration,
         )

@@ -38,16 +38,18 @@ gamma: 0.995
 gae_lambda: 0.98
 clip_epsilon: 0.2
 value_coef: 0.5
-entropy_coef: 0.0005
-explore_rate: 0.01
+explore_rate_schedule: linear
+explore_rate: 0.1
+explore_rate_min: 0.01
 
 ppo_epochs: 4
 batch_size: 8192
 
-lr: 0.0002
-lr_schedule: elo
+lr: 0.0003
+lr_schedule: linear
 lr_min: 0.00001
 
+entropy_coef: 0.01
 entropy_schedule: linear
 entropy_coef_min: 0.0005
 
@@ -55,7 +57,7 @@ entropy_coef_min: 0.0005
 # Set to a small value if you want a mild BC anchor; 0 disables.
 imitation_coef: 0.0
 
-concurrency: 64
+concurrency: 256
 device: auto
 
 # Duplicate-RL supports both in-process and spawn iteration runners.
@@ -105,6 +107,14 @@ duplicate:
   # 8-game pairing). 100 pods -> 400 trajectories/iter. Scale up once
   # throughput is validated.
   pods_per_iteration: 400
+
+  # Perf knob: cap on distinct ordered opponent triplets per iteration.
+  # Pods round-robin over a pre-sampled pool of this size. Smaller values
+  # mean fewer unique seatings → fewer Rust `run_self_play` invocations →
+  # fewer TorchScript model reloads → much higher games/sec. Duplicate
+  # semantics (deck seed drives dealing) are unaffected. Set to null to
+  # restore legacy per-pod independent sampling.
+  max_opponent_triplets: 4
 
   # Shadow snapshot source (wired through DuplicateShadowSourcePort):
   #   previous_iteration  — learner's TorchScript before this iteration's

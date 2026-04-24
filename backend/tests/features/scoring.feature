@@ -57,9 +57,10 @@ Feature: Scoring
     And the opponents kontra trula
     Then the trula bonus should be 40
 
-  Scenario: 2v2 declarer and partner receive identical scores
+  Scenario: 2v2 partner receives only the point-diff portion, not contract base
     Given the declarer scored 36 card points playing "three"
-    Then the declarer and partner should have the same score
+    Then the declarer score should be 11
+    And the partner score should be 1
 
   Scenario: 2v2 opponents receive zero scores
     Given the declarer scored 36 card points playing "three"
@@ -67,4 +68,4 @@ Feature: Scoring
 
   Scenario: 2v2 opponents score zero
     Given the declarer scored 36 card points playing "three"
-    Then the declarer score should equal the negated opponent score
+    Then the opponent score should be 0

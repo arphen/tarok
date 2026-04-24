@@ -22,6 +22,7 @@ from training.ports.duplicate_pairing_port import DuplicatePairingPort
 from training.ports.duplicate_reward_port import DuplicateRewardPort
 from training.ports.presenter_port import PresenterPort
 from training.ports.selfplay_port import SelfPlayPort
+from training.use_cases.learner_contract_stats import compute_learner_contract_stats
 
 if TYPE_CHECKING:
     from training.entities.league import LeagueConfig, LeaguePool
@@ -203,6 +204,9 @@ class CollectDuplicateExperiences:
             )
 
         self._presenter.on_selfplay_done(n_total, n_learner, sp_time)
+        learner_contract_stats = compute_learner_contract_stats(raw, nn_seats)
+        if learner_contract_stats:
+            self._presenter.on_learner_contract_stats(learner_contract_stats)
         if duplicate_stats is not None:
             self._presenter.on_duplicate_iteration_stats(duplicate_stats)
 
@@ -216,6 +220,7 @@ class CollectDuplicateExperiences:
             mean_scores=mean_scores,
             seat_outcomes=seat_outcomes,
             sp_time=sp_time,
+            learner_contract_stats=learner_contract_stats,
             duplicate_stats=duplicate_stats,
         )
 

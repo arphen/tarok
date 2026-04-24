@@ -8,9 +8,16 @@ The scoring model is final. Do not suggest, discuss, or implement:
 - Any "real Tarok" scoring variant
 
 Current rules:
-- Normal games: declarer team gets +X or -X, opponents get 0
-- Klop: each player scores individually
-- This is intentional and correct
+- Normal games (solo or 2v2):
+  - Declarer receives: `sign × (contract_base + point_diff) × kontra + bonuses`
+  - Partner (2v2 only) receives: `sign × point_diff × kontra + bonuses`
+    → Partner does **not** get the contract-base component (one/two/three/…).
+    → This is intentional: the contract base rewards bidding (declarer only);
+      point-diff and bonuses (trula, kings, pagat, valat) reward play and are shared.
+  - Valat (when achieved): replaces all scoring; both declarer and partner get the full valat.
+  - Opponents: 0.
+- Klop: each player scores individually.
+- This is intentional and correct.
 
 ## Metrics
 

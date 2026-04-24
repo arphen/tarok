@@ -20,10 +20,10 @@
 seats: "centaur,bot_v5,bot_v5,bot_v5"   # ignored during duplicate pods; pairing picks seatings
 bench_seats: "nn,bot_m6,bot_m6,bot_m6"
 
-iterations: 50
+iterations: 250
 outplace_session_size: 50
 bench_games: 2000
-benchmark_checkpoints: [0, 5, 10, 20, 30, 40, 50]
+benchmark_checkpoints: [0, 5, 10, 20, 30, 40, 50, 55, 60, 70, 80, 90, 100, 150, 200, 210, 220, 230, 240, 250]
 best_model_metric: "elo"
 
 # --- Core RL math (kept from duplicate.yaml) ---
@@ -31,18 +31,22 @@ gamma: 0.995
 gae_lambda: 0.98
 clip_epsilon: 0.2
 value_coef: 0.5
-explore_rate: 0.01
+
+explore_rate_schedule: linear
+explore_rate: 0.1
+explore_rate_min: 0.01
 
 ppo_epochs: 4
 batch_size: 8192
 
-lr: 0.0002
-lr_schedule: elo
+lr: 0.0003
+lr_schedule: linear
 lr_min: 0.00001
 
-entropy_coef: 0.005
+entropy_coef: 0.01
 entropy_schedule: linear
 entropy_coef_min: 0.0005
+bid_entropy_coef: 0.01
 
 # Duplicate cancels dealing variance — BC is not needed to stabilise gradients.
 imitation_coef: 0.0
@@ -66,7 +70,7 @@ iteration_runner_mode: inprocess
 centaur_handoff_trick: 9
 # PIMC samples this many worlds per decision. 100 is a good default;
 # 50 halves the cost for early sanity checks, 200 squeezes more quality.
-centaur_pimc_worlds: 500
+centaur_pimc_worlds: 250
 # "pimc" (default) or "alpha_mu". Alpha-mu is stronger (enforces
 # strategy fusion) but slower; only switch after baseline runs are
 # healthy.
@@ -93,10 +97,11 @@ league:
   initial_calibration_games_per_pair: 3000
   initial_calibration_anchor: V3
   initial_calibration_anchor_elo: 1500
+  calibration_strategy: duplicate_tournament
 
   opponents:
-#    - name: V3
-#      type: bot_v3
+    - name: V3
+      type: bot_v3
     - name: V5
       type: bot_v5
     - name: M6
@@ -113,22 +118,23 @@ duplicate:
   # Centaur rollouts are ~2–4x slower than pure-NN rollouts (PIMC is
   # expensive in the last four tricks). Start with fewer pods until you
   # know the per-iter wall time; scale up once you do.
-  pods_per_iteration: 100
+  pods_per_iteration: 400
 
-  # "trailing" holds a frozen copy of the learner TorchScript file and
-  # only refreshes it every shadow_refresh_interval iterations.
-  # Rationale: with "previous_iteration" the baseline updates every
-  # iteration, so any tiny edge the learner gains is immediately
-  # absorbed — and because the learner still pays the explore_rate
-  # exploration tax that the shadow avoids, the measured duplicate
-  # advantage drifts negative and the policy gradient flattens.
-  # Letting the shadow lag 5 iterations gives the learner room to open
-  # a clear positive advantage before the baseline catches up. Tied
-  # here to league.snapshot_interval=5 so baseline refreshes and
-  # snapshot promotions stay aligned.
-  shadow_source: relative_trailing
-  shadow_refresh_interval: 10
-  apply_shaped_bonuses: true
+  # Perf knob: see docs/double_rl.md. Caps distinct opponent triplets per
+  # iteration so the Rust engine can batch pods into fewer run_self_play
+  # calls (avoids repeated TorchScript reloads). Set to null for the
+  # legacy per-pod independent sampling.
+  max_opponent_triplets: 4
+
+  # "league_pool" samples a random nn_checkpoint ghost from the live
+  # league pool each iteration, Gaussian-weighted around the learner's
+  # current Elo (window=200). Snapshots are promoted every
+  # league.snapshot_interval iterations, so the set of candidate shadows
+  # is exactly the ghosts currently in the league with the learner.
+  # Falls back to the learner's own TorchScript path while the pool
+  # still has zero nn_checkpoint entries (i.e. before the first snapshot).
+  shadow_source: weakest_snapshot
+  apply_shaped_bonuses: false
   reward_model: shadow_score_diff
   rng_seed: 0
 

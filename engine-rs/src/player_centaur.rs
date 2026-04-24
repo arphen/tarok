@@ -22,6 +22,7 @@ use crate::game_state::{Contract, GameState};
 use crate::pimc;
 use crate::player::*;
 use crate::player_nn::NeuralNetPlayer;
+use rayon::prelude::*;
 use tch::Device;
 
 /// Default trick number at which the endgame solver takes over card play
@@ -128,8 +129,19 @@ impl BatchPlayer for CentaurBot {
         let mut results = self.nn.batch_decide(contexts);
 
         // Override late-game card plays with the endgame solver.
-        for (i, ctx) in contexts.iter().enumerate() {
-            if self.use_pimc(ctx) {
+        //
+        // Each PIMC/alpha-mu call is independent and, under deterministic
+        // seeding, a pure function of (state, viewer, salt). Running the
+        // per-context overrides in parallel preserves determinism and lets
+        // endgame-heavy batches saturate all cores instead of serialising
+        // behind a single dispatch thread.
+        let overrides: Vec<Option<(usize, usize)>> = contexts
+            .par_iter()
+            .enumerate()
+            .map(|(i, ctx)| {
+                if !self.use_pimc(ctx) {
+                    return None;
+                }
                 let card = match (self.endgame_policy, self.deterministic_seed_salt) {
                     (EndgamePolicy::Pimc, None) => {
                         pimc::pimc_choose_card(ctx.gs, ctx.player, self.num_worlds)
@@ -143,14 +155,12 @@ impl BatchPlayer for CentaurBot {
                             seed,
                         )
                     }
-                    (EndgamePolicy::AlphaMu { max_depth }, None) => {
-                        alpha_mu::alpha_mu_choose_card(
-                            ctx.gs,
-                            ctx.player,
-                            self.num_worlds,
-                            max_depth,
-                        )
-                    }
+                    (EndgamePolicy::AlphaMu { max_depth }, None) => alpha_mu::alpha_mu_choose_card(
+                        ctx.gs,
+                        ctx.player,
+                        self.num_worlds,
+                        max_depth,
+                    ),
                     (EndgamePolicy::AlphaMu { max_depth }, Some(salt)) => {
                         let seed = state_fingerprint(ctx.gs, ctx.player) ^ salt;
                         alpha_mu::alpha_mu_choose_card_with_seed(
@@ -162,16 +172,21 @@ impl BatchPlayer for CentaurBot {
                         )
                     }
                 };
-                results[i] = DecisionResult {
-                    action: card.0 as usize,
-                    // NaN sentinel: PPO should skip this experience's policy
-                    // loss while still using the game's terminal reward.
-                    log_prob: f32::NAN,
-                    // Keep the NN's value estimate — useful for GAE on the
-                    // preceding (NN-decided) time steps.
-                    value: results[i].value,
-                };
-            }
+                Some((i, card.0 as usize))
+            })
+            .collect();
+
+        for entry in overrides.into_iter().flatten() {
+            let (i, action) = entry;
+            results[i] = DecisionResult {
+                action,
+                // NaN sentinel: PPO should skip this experience's policy
+                // loss while still using the game's terminal reward.
+                log_prob: f32::NAN,
+                // Keep the NN's value estimate — useful for GAE on the
+                // preceding (NN-decided) time steps.
+                value: results[i].value,
+            };
         }
 
         results

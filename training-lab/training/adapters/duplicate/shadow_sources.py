@@ -11,7 +11,9 @@ for duplicate-RL:
 * :class:`LeaguePoolShadowSource` — a random ``nn_checkpoint`` entry from
   the live league pool (Gaussian-matchmaking-weighted).
 * :class:`BestSnapshotShadowSource` — the highest-Elo ``nn_checkpoint``
-  entry in the league pool (the "best ghost" seen so far).
+    entry in the league pool (the "best ghost" seen so far).
+* :class:`WeakestSnapshotShadowSource` — the lowest-Elo ``nn_checkpoint``
+    entry in the league pool (the "weakest ghost" seen so far).
 
 All gracefully fall back to the current learner's TorchScript path when
 they have no better option (iteration 0, empty pool, pool with only bot
@@ -281,6 +283,30 @@ class BestSnapshotShadowSource(DuplicateShadowSourcePort):
         return chosen.opponent.path
 
 
+class WeakestSnapshotShadowSource(DuplicateShadowSourcePort):
+    """Lowest-Elo ``nn_checkpoint`` entry in the league pool.
+
+    Picks the "weakest ghost" currently available. Ties on Elo are broken
+    by most games played (older/stabler snapshot wins), keeping selection
+    deterministic.
+    """
+
+    def resolve(
+        self,
+        *,
+        iteration: int,
+        learner_ts_path: str,
+        pool: "LeaguePool | None",
+    ) -> str:
+        del iteration
+        candidates = _nn_checkpoint_entries(pool)
+        if not candidates:
+            return learner_ts_path
+        chosen = min(candidates, key=lambda e: (e.elo, -e.games_played))
+        assert chosen.opponent.path is not None
+        return chosen.opponent.path
+
+
 # ----------------------------------------------------------------------
 
 
@@ -298,8 +324,10 @@ def create_shadow_source(
         return LeaguePoolShadowSource(rng_seed=rng_seed)
     if shadow_source == "best_snapshot":
         return BestSnapshotShadowSource()
+    if shadow_source == "weakest_snapshot":
+        return WeakestSnapshotShadowSource()
     raise ValueError(
         f"Unknown duplicate.shadow_source={shadow_source!r}; "
         "expected one of 'previous_iteration', 'trailing', 'relative_trailing', "
-        "'league_pool', 'best_snapshot'."
+        "'league_pool', 'best_snapshot', 'weakest_snapshot'."
     )

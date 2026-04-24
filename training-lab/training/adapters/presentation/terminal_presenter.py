@@ -68,6 +68,36 @@ def _fmt_imitation_schedule(config: TrainingConfig) -> str:
     return _fmt_schedule(config.imitation_coef, config.imitation_coef_min, config.imitation_schedule)
 
 
+def _format_opponent_token(token: str) -> str:
+    """Format opponent token for display.
+    
+    Converts full checkpoint paths like
+    /path/to/GhostName/league_pool/iter_025.pt → GhostName@iter_025
+    Keeps short tokens like bot_m6, bot_lustrek unchanged.
+    """
+    # If it contains a slash, it's a path
+    if "/" in token:
+        try:
+            path = Path(token)
+            # Check if this is a league_pool checkpoint
+            if "league_pool" in path.parts:
+                # Extract ghost name (parent of league_pool) and iteration from filename
+                parts = path.parts
+                if "league_pool" in parts:
+                    league_idx = parts.index("league_pool")
+                    if league_idx > 0:
+                        ghost_name = parts[league_idx - 1]
+                        stem = path.stem  # e.g., "iter_025"
+                        return f"{ghost_name}@{stem}"
+            # Fallback: just return filename without extension
+            return path.stem
+        except (ValueError, IndexError):
+            pass
+    
+    # Short token like "bot_m6" or "bot_v3" — return as-is
+    return token
+
+
 def _delta_arrow(delta: float, lower_is_better: bool = True) -> str:
     if delta == 0:
         return "  ─"
@@ -127,6 +157,8 @@ class TerminalPresenter(PresenterPort):
             f"              entropy  "
             f"{_fmt_schedule(config.entropy_coef, config.entropy_coef_min, config.entropy_schedule)}"
         )
+        if getattr(config, "bid_entropy_coef", None) is not None:
+            print(f"              bid-ent  fixed {float(config.bid_entropy_coef):.5f}")
         explore_rate_min = getattr(config, "explore_rate_min", config.explore_rate)
         explore_rate_schedule = getattr(config, "explore_rate_schedule", "constant")
         print(
@@ -193,6 +225,18 @@ class TerminalPresenter(PresenterPort):
         else:
             print(f"{n_total:,} exp  [{_format_time(elapsed)}]")
 
+    def on_learner_contract_stats(self, stats: dict[str, dict[str, int]]) -> None:
+        print("      learner contract stats (per iter):")
+        print("        contract         bids  won_bid  won_contract  win%")
+        for contract, row in stats.items():
+            bids = int(row.get("bids_made", 0))
+            won_bid = int(row.get("bids_won", 0))
+            won_contract = int(row.get("contracts_won", 0))
+            win_pct = (100.0 * won_contract / won_bid) if won_bid > 0 else 0.0
+            print(
+                f"        {contract:<14} {bids:>5} {won_bid:>8} {won_contract:>13} {win_pct:>5.1f}%"
+            )
+
     def on_duplicate_selfplay_start(
         self,
         n_pods: int,
@@ -243,8 +287,9 @@ class TerminalPresenter(PresenterPort):
                     continue
                 rate = 100.0 * lo / n_games
                 draw_tag = f"  ({d} draws)" if d > 0 else ""
+                display_token = _format_opponent_token(token)
                 print(
-                    f"        {token:<24} {rate:5.1f}%  "
+                    f"        {display_token:<24} {rate:5.1f}%  "
                     f"({lo:>5}W / {oo:>5}L{draw_tag})   n={n_games:,}"
                 )
 

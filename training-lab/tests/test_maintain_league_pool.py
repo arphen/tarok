@@ -3,6 +3,7 @@ from __future__ import annotations
 from pathlib import Path
 from unittest.mock import MagicMock
 
+from training.adapters.league_calibration import SelfPlayLeagueCalibrationAdapter
 from training.entities.iteration_result import IterationResult
 from training.entities.league import LeagueConfig, LeagueOpponent, LeaguePool, LeaguePoolEntry
 from training.use_cases.maintain_league_pool import MaintainLeaguePool
@@ -93,6 +94,7 @@ def test_maintain_league_pool_admits_calibrated_snapshot_and_evicts_weakest(tmp_
         presenter=presenter,
         persistence=persistence,
         selfplay=selfplay,
+        league_calibration=SelfPlayLeagueCalibrationAdapter(selfplay),
     )
 
     out = use_case.execute(
@@ -140,6 +142,7 @@ def test_maintain_league_pool_rejects_candidate_below_checkpoint_margin(tmp_path
         presenter=presenter,
         persistence=persistence,
         selfplay=selfplay,
+        league_calibration=SelfPlayLeagueCalibrationAdapter(selfplay),
     )
 
     out = use_case.execute(

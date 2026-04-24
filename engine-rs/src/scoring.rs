@@ -190,11 +190,18 @@ fn score_normal(state: &GameState, contract: Contract) -> [i32; NUM_PLAYERS] {
     let declarer_won = declarer_points > POINT_HALF;
 
     let point_diff = (declarer_points - POINT_HALF).abs();
-    let mut base_score = contract.base_value() + point_diff;
-    if !declarer_won {
-        base_score = -base_score;
-    }
-    base_score *= state.kontra_multiplier(KontraTarget::Game);
+    // Split the "game" portion into a contract-base component (awarded only
+    // to the declarer) and a point-difference component (shared with the
+    // partner). Bonuses (trula/kings/pagat/valat) are shared, always.
+    // Rationale: the contract value is a reward for *bidding*, which only
+    // the declarer did. Point-diff and bonuses reward *play*, which the
+    // partner contributed to — sharing them encourages the partner seat to
+    // play actively instead of coasting on the contract base.
+    let sign = if declarer_won { 1 } else { -1 };
+    let km_game = state.kontra_multiplier(KontraTarget::Game);
+    let contract_base = sign * contract.base_value() * km_game;
+    let point_diff_score = sign * point_diff * km_game;
+    let base_score = contract_base + point_diff_score;
 
     // --- Bonuses ---
     let mut bonus = 0i32;
@@ -321,12 +328,22 @@ fn score_normal(state: &GameState, contract: Contract) -> [i32; NUM_PLAYERS] {
         total_declarer = base_score + bonus;
     }
 
-    // Distribute scores — only declarer team scores, opponents get 0
+    // Distribute scores — only declarer team scores, opponents get 0.
+    // The declarer gets the full total; the partner gets the total minus
+    // the contract-base component (declarer-only). Valat replaces all
+    // scoring, so both share the full valat value in that branch.
+    let partner_total = if valat_achieved {
+        total_declarer
+    } else {
+        total_declarer - contract_base
+    };
     let mut scores = [0i32; NUM_PLAYERS];
+    let declarer_idx = state.declarer.expect("normal game without declarer") as usize;
     for p in 0..NUM_PLAYERS {
-        if state.get_team(p as u8) == Team::DeclarerTeam {
-            scores[p] = total_declarer;
+        if state.get_team(p as u8) != Team::DeclarerTeam {
+            continue;
         }
+        scores[p] = if p == declarer_idx { total_declarer } else { partner_total };
     }
     scores
 }
@@ -630,17 +647,24 @@ fn breakdown_normal(
         )),
     });
 
-    let game_score = if declarer_won {
-        base + point_diff
-    } else {
-        -(base + point_diff)
-    };
+    let sign = if declarer_won { 1 } else { -1 };
     let km_game = state.kontra_multiplier(KontraTarget::Game);
+    let contract_component = sign * base * km_game;
+    let point_diff_component = sign * point_diff * km_game;
     lines.push(BreakdownLine {
-        label: "Game score".to_string(),
-        value: Some(game_score * km_game),
+        label: "Contract score (declarer only)".to_string(),
+        value: Some(contract_component),
         detail: if km_game > 1 {
-            Some(format!("{} × kontra {}", game_score, km_game))
+            Some(format!("{} × kontra {}", sign * base, km_game))
+        } else {
+            None
+        },
+    });
+    lines.push(BreakdownLine {
+        label: "Point-diff score (shared)".to_string(),
+        value: Some(point_diff_component),
+        detail: if km_game > 1 {
+            Some(format!("{} × kontra {}", sign * point_diff, km_game))
         } else {
             None
         },

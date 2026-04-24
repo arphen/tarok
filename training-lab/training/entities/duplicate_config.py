@@ -23,6 +23,7 @@ _VALID_SHADOW_SOURCES: frozenset[str] = frozenset({
     "relative_trailing",
     "league_pool",
     "best_snapshot",
+    "weakest_snapshot",
 })
 
 _VALID_REWARD_MODELS: frozenset[str] = frozenset({
@@ -52,6 +53,13 @@ class DuplicateConfig:
     actor_only: bool = False
     pairing: str = "rotation_8game"
     pods_per_iteration: int = 400
+    # Performance knob: caps how many distinct ordered opponent triplets
+    # the pairing adapter samples per iteration. Fewer triplets → fewer
+    # distinct seatings → fewer `run_self_play` invocations in the Rust
+    # engine → fewer TorchScript model reloads. Duplicate-invariant
+    # semantics are unaffected (the deck seed still drives dealing). Set
+    # to None to restore the legacy per-pod independent sampling.
+    max_opponent_triplets: int | None = 4
     shadow_source: str = "previous_iteration"
     # Only used when ``shadow_source == "trailing"``: the shadow TorchScript
     # file is refreshed every ``shadow_refresh_interval`` iterations, so
@@ -95,6 +103,11 @@ class DuplicateConfig:
         if self.pods_per_iteration < 0:
             raise ValueError(
                 f"duplicate.pods_per_iteration must be >= 0, got {self.pods_per_iteration}"
+            )
+        if self.max_opponent_triplets is not None and self.max_opponent_triplets < 1:
+            raise ValueError(
+                f"duplicate.max_opponent_triplets must be >= 1 or null, "
+                f"got {self.max_opponent_triplets}"
             )
         if self.learner_seat_token not in _VALID_LEARNER_SEAT_TOKENS:
             raise ValueError(

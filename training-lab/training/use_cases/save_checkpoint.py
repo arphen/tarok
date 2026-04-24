@@ -77,4 +77,9 @@ class SaveCheckpoint:
                 if bundle.duplicate_stats is not None
                 else 0
             ),
+            learner_contract_stats=(
+                dict(bundle.learner_contract_stats)
+                if bundle.learner_contract_stats is not None
+                else {}
+            ),
         )

@@ -140,21 +140,23 @@ pub fn pimc_choose_card_with_seed(
     // Parallel over worlds, then reduce into per-card aggregates:
     // (total_viewer_utility, sample_count) per legal card.
     //
-    // We collect per-world locals into a Vec and fold serially (in world
-    // index order) so the final aggregates are independent of rayon's
-    // work-stealing schedule. This is what makes the deterministic-seed
-    // variant yield bit-identical decisions across runs.
-    let per_world_locals: Vec<Vec<(f64, u32)>> = (0..num_worlds)
+    // DD utilities are integers, so summing them as i64 is associative
+    // and the parallel rayon reduce is bit-deterministic regardless of
+    // work-stealing order. This preserves the deterministic-seed
+    // guarantee without the per-world Vec allocation + serial fold.
+    let n_legal = legal_vec.len();
+    let (sum_i64, counts) = (0..num_worlds)
         .into_par_iter()
         .map(|world_i| {
-            let mut local = vec![(0.0, 0u32); legal_vec.len()];
+            let mut local_sum = vec![0i64; n_legal];
+            let mut local_cnt = vec![0u32; n_legal];
             let mut rng = SmallRng::seed_from_u64(
                 base_seed ^ (world_i as u64).wrapping_mul(0x9E37_79B9_7F4A_7C15),
             );
 
             let sampled_hands = match sample_world(gs, viewer, &constraints, &mut rng) {
                 Some(h) => h,
-                None => return local,
+                None => return (local_sum, local_cnt),
             };
 
             let dd_state = DDState::new(
@@ -170,34 +172,33 @@ pub fn pimc_choose_card_with_seed(
                 double_dummy::solve_all_moves_viewer(&dd_state, viewer, objective);
             for (card, val) in &move_values {
                 if let Some(idx) = legal_idx[card.0 as usize] {
-                    local[idx].0 += *val as f64;
-                    local[idx].1 += 1;
+                    local_sum[idx] += *val as i64;
+                    local_cnt[idx] += 1;
                 }
             }
-            local
+            (local_sum, local_cnt)
         })
-        .collect();
-
-    let mut scores: Vec<(f64, u32)> = vec![(0.0, 0u32); legal_vec.len()];
-    for local in &per_world_locals {
-        for i in 0..scores.len() {
-            scores[i].0 += local[i].0;
-            scores[i].1 += local[i].1;
-        }
-    }
+        .reduce(
+            || (vec![0i64; n_legal], vec![0u32; n_legal]),
+            |mut a, b| {
+                for i in 0..n_legal {
+                    a.0[i] += b.0[i];
+                    a.1[i] += b.1[i];
+                }
+                a
+            },
+        );
 
     // Pick card with best average viewer utility (higher is always better).
-    let best_idx = scores
-        .iter()
-        .enumerate()
-        .max_by(|(_, a), (_, b)| {
-            let avg_a = if a.1 > 0 {
-                a.0 / a.1 as f64
+    let best_idx = (0..n_legal)
+        .max_by(|&a, &b| {
+            let avg_a = if counts[a] > 0 {
+                sum_i64[a] as f64 / counts[a] as f64
             } else {
                 f64::NEG_INFINITY
             };
-            let avg_b = if b.1 > 0 {
-                b.0 / b.1 as f64
+            let avg_b = if counts[b] > 0 {
+                sum_i64[b] as f64 / counts[b] as f64
             } else {
                 f64::NEG_INFINITY
             };
@@ -205,7 +206,6 @@ pub fn pimc_choose_card_with_seed(
                 .partial_cmp(&avg_b)
                 .unwrap_or(std::cmp::Ordering::Equal)
         })
-        .map(|(i, _)| i)
         .unwrap();
 
     legal_vec[best_idx]

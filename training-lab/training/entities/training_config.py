@@ -62,6 +62,7 @@ class TrainingConfig:
     policy_coef: float = 1.0
     value_coef: float = 0.5
     entropy_coef: float = 0.01
+    bid_entropy_coef: float | None = None
     entropy_schedule: str = "constant"  # constant | linear | cosine | exponential | geometric
     entropy_coef_min: float = 0.005
     iteration_runner_mode: str = "in-process"

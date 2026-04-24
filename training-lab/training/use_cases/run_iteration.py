@@ -121,7 +121,7 @@ class RunIteration:
                 shadow_iteration = getattr(self._shadow_source, "last_refresh_iteration", None)
             elif duplicate_cfg.shadow_source == "relative_trailing":
                 shadow_iteration = getattr(self._shadow_source, "last_target_iteration", None)
-            elif duplicate_cfg.shadow_source in {"league_pool", "best_snapshot"}:
+            elif duplicate_cfg.shadow_source in {"league_pool", "best_snapshot", "weakest_snapshot"}:
                 # League snapshots use paths like .../iter_005.pt in this repo.
                 # If the path follows that convention, surface it.
                 m = re.search(r"iter[_-](\d+)", shadow_path)

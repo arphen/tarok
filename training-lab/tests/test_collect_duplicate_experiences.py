@@ -45,10 +45,20 @@ def _fake_rsp(**kwargs):
     actions, log_probs, values = [], [], []
     decision_types, game_modes, game_ids, players = [], [], [], []
     scores = np.zeros((n_games, 4), dtype=np.int32)
+    bid_contracts = np.zeros((n_games, 4), dtype=np.int8)
+    contracts = np.zeros((n_games,), dtype=np.uint8)
+    declarers = np.zeros((n_games,), dtype=np.int8)
+    partners = np.zeros((n_games,), dtype=np.int8)
 
     for g, seed in enumerate(seeds):
         for seat in range(4):
             scores[g, seat] = _det_score(seat_config, int(seed), seat, model_path)
+        # Deterministic bid contract values based on seed
+        bid_contracts[g, :] = np.array([g % 3, (g + 1) % 3, (g + 2) % 3, (g + 3) % 3], dtype=np.int8)
+        contracts[g] = g % 8
+        declarers[g] = g % 4
+        partners[g] = (g + 1) % 4
+        
         # 3 steps per learner seat per game.
         for seat in learner_seats:
             for step in range(3):
@@ -77,6 +87,10 @@ def _fake_rsp(**kwargs):
         "game_ids": np.asarray(game_ids, dtype=np.uint32),
         "players": np.asarray(players, dtype=np.uint8),
         "scores": scores,
+        "bid_contracts": bid_contracts,
+        "contracts": contracts,
+        "declarers": declarers,
+        "partners": partners,
     }
 
 
@@ -202,3 +216,35 @@ def test_collect_duplicate_experiences_reward_sign_is_active_minus_shadow(monkey
     # All terminal rewards should be (0 − 20) / 100 = −0.2.
     assert nonzero.size > 0
     assert np.allclose(nonzero, -0.2, atol=1e-6)
+
+
+def test_collect_duplicate_experiences_includes_bid_contracts(monkeypatch):
+    """Verify that bid_contracts metadata from engine is merged correctly."""
+    monkeypatch.setattr(ssa_mod.te, "run_self_play", _fake_rsp)
+    selfplay = SeededSelfPlayAdapter(inner=object())  # type: ignore[arg-type]
+    pairing = RotationPairingAdapter(pairing="rotation_8game")
+    reward = ShadowScoreRewardAdapter(score_scale=100.0)
+    presenter = _StubPresenter()
+    uc = CollectDuplicateExperiences(selfplay, pairing, reward, presenter)
+
+    cfg = DuplicateConfig(enabled=True, pods_per_iteration=2, rng_seed=1)
+    bundle = uc.execute(
+        duplicate_config=cfg,
+        concurrency=1,
+        explore_rate=0.05,
+        learner_path="L.pt",
+        shadow_path="S.pt",
+        pool=None,
+        outplace_session_size=1,
+    )
+
+    # Verify bid_contracts is present and has correct shape
+    assert "bid_contracts" in bundle.raw, "bid_contracts missing from merged data"
+    bid_contracts = bundle.raw["bid_contracts"]
+    assert bid_contracts.ndim == 2, f"Expected 2D array, got {bid_contracts.ndim}D"
+    assert bid_contracts.shape[1] == 4, f"Expected 4 columns (seats), got {bid_contracts.shape[1]}"
+    
+    # Verify other metadata keys are also present
+    for key in ["contracts", "declarers", "partners"]:
+        assert key in bundle.raw, f"{key} missing from merged data"
+

@@ -133,3 +133,71 @@ def test_build_pods_uses_live_league_pool_entries_including_ghosts() -> None:
 
     sampled = {tok for pod in pods for tok in pod.opponents}
     assert "/tmp/league_pool/iter_070.pt" in sampled
+
+
+def test_max_opponent_triplets_caps_distinct_seatings() -> None:
+    """Perf knob: pre-sampled triplet pool should cap the number of
+    distinct opponent triplets regardless of n_pods.
+
+    This directly controls how many `run_self_play` invocations the Rust
+    engine has to do per iteration — every extra distinct seating means
+    another TorchScript model reload.
+    """
+    adapter = RotationPairingAdapter(
+        pairing="rotation_8game",
+        max_opponent_triplets=2,
+    )
+    pool = LeaguePool(config=LeagueConfig(enabled=True))
+    pool.entries = [
+        LeaguePoolEntry(LeagueOpponent(name="V3", type="bot_v3"), elo=1500.0),
+        LeaguePoolEntry(LeagueOpponent(name="V5", type="bot_v5"), elo=1500.0),
+        LeaguePoolEntry(LeagueOpponent(name="M6", type="bot_m6"), elo=1500.0),
+        LeaguePoolEntry(LeagueOpponent(name="LU", type="bot_lustrek"), elo=1500.0),
+    ]
+
+    pods = adapter.build_pods(
+        pool=pool,
+        learner_seat_token="nn",
+        shadow_seat_token="shadow",
+        n_pods=50,
+        rng_seed=0,
+    )
+    distinct_triplets = {pod.opponents for pod in pods}
+    assert len(distinct_triplets) <= 2, (
+        f"expected at most 2 distinct triplets, got {len(distinct_triplets)}"
+    )
+    # Deck seeds must still vary per pod even though triplets are reused.
+    deck_seeds = [pod.deck_seed for pod in pods]
+    assert len(set(deck_seeds)) == len(pods)
+
+
+def test_max_opponent_triplets_none_restores_legacy_sampling() -> None:
+    """With the cap disabled, every pod samples independently."""
+    adapter = RotationPairingAdapter(
+        pairing="rotation_8game",
+        max_opponent_triplets=None,
+    )
+    pool = LeaguePool(config=LeagueConfig(enabled=True))
+    pool.entries = [
+        LeaguePoolEntry(LeagueOpponent(name="V3", type="bot_v3"), elo=1500.0),
+        LeaguePoolEntry(LeagueOpponent(name="V5", type="bot_v5"), elo=1500.0),
+        LeaguePoolEntry(LeagueOpponent(name="M6", type="bot_m6"), elo=1500.0),
+        LeaguePoolEntry(LeagueOpponent(name="LU", type="bot_lustrek"), elo=1500.0),
+    ]
+
+    pods = adapter.build_pods(
+        pool=pool,
+        learner_seat_token="nn",
+        shadow_seat_token="shadow",
+        n_pods=200,
+        rng_seed=1,
+    )
+    distinct_triplets = {pod.opponents for pod in pods}
+    # With 4 opponents, 24 ordered triplets are possible; over 200 pods we
+    # expect to see substantially more than the default cap of 4.
+    assert len(distinct_triplets) > 4
+
+
+def test_max_opponent_triplets_invalid_rejected() -> None:
+    with pytest.raises(ValueError, match="max_opponent_triplets"):
+        RotationPairingAdapter(max_opponent_triplets=0)

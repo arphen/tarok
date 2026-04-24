@@ -73,6 +73,7 @@ class PPOAdapter(PPOPort):
         self._policy_coef: float = 1.0
         self._value_coef: float = 0.5
         self._entropy_coef: float = 0.01
+        self._bid_entropy_coef: float | None = None
         self._imitation_coef: float = 0.0
         self._behavioral_clone_coef: float = 0.0
 
@@ -86,6 +87,11 @@ class PPOAdapter(PPOPort):
         self._policy_coef = float(config.policy_coef)
         self._value_coef = float(config.value_coef)
         self._entropy_coef = float(config.entropy_coef)
+        self._bid_entropy_coef = (
+            float(config.bid_entropy_coef)
+            if getattr(config, "bid_entropy_coef", None) is not None
+            else None
+        )
         self._behavioral_clone_coef = float(config.behavioral_clone_coef)
 
         hidden_size = weights["shared.0.weight"].shape[0]
@@ -201,6 +207,11 @@ class PPOAdapter(PPOPort):
 
         for (dt, gm), idx in groups.items():
             action_size = _ACTION_SIZES[dt]
+            entropy_coef = (
+                self._bid_entropy_coef
+                if dt == DecisionType.BID and self._bid_entropy_coef is not None
+                else self._entropy_coef
+            )
 
             # Filter out PIMC-decided experiences (tagged with NaN log_prob by
             # CentaurBot). GAE already ran over the full trajectory so rewards
@@ -315,7 +326,7 @@ class PPOAdapter(PPOPort):
                         + self._value_coef * value_loss
                         + self._imitation_coef * il_loss
                         + self._behavioral_clone_coef * bc_loss
-                        - self._entropy_coef * entropy.mean()
+                        - entropy_coef * entropy.mean()
                     )
 
                     if not torch.isfinite(loss):

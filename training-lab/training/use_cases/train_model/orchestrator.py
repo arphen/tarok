@@ -15,12 +15,12 @@ from training.ports.benchmark_port import BenchmarkPort
 from training.ports.explore_rate_policy_port import ExploreRatePolicyPort
 from training.ports.imitation_coef_policy_port import ImitationCoefPolicyPort
 from training.ports.iteration_runner_port import IterationRunnerPort
+from training.ports.league_calibration_port import LeagueCalibrationPort
 from training.ports.league_persistence_port import LeagueStatePersistencePort
 from training.ports.learning_rate_policy_port import LearningRatePolicyPort
 from training.ports.model_port import ModelPort
 from training.ports.presenter_port import PresenterPort
 from training.ports.selfplay_port import SelfPlayPort
-from training.use_cases.calibrate_initial_league_elo import CalibrateInitialLeagueElo
 from training.use_cases.maintain_league_pool import MaintainLeaguePool
 from training.use_cases.sample_league_seats import SampleLeagueSeats
 from training.use_cases.train_model.policies import (
@@ -48,6 +48,7 @@ class TrainModel:
         explore_rate_policy: ExploreRatePolicyPort | None = None,
         league_persistence: LeagueStatePersistencePort | None = None,
         behavioral_clone_policy: DefaultBehavioralCloneCoefPolicy | None = None,
+        league_calibration: LeagueCalibrationPort | None = None,
     ):
         self._iteration_runner = iteration_runner
         self._benchmark = benchmark
@@ -66,6 +67,7 @@ class TrainModel:
         if league_persistence is None:
             raise ValueError("league_persistence must be provided — wire JsonLeagueStatePersistence via the container")
         self._league_persistence: LeagueStatePersistencePort = league_persistence
+        self._league_calibration: LeagueCalibrationPort | None = league_calibration
 
     def execute(
         self,
@@ -118,6 +120,7 @@ class TrainModel:
             presenter=self._presenter,
             persistence=self._league_persistence,
             selfplay=self._selfplay,
+            league_calibration=self._league_calibration,
         )
         league_pool_dir = save_dir / "league_pool"
         league_pool_dir.mkdir(parents=True, exist_ok=True)
@@ -157,9 +160,13 @@ class TrainModel:
                 anchor_elo=config.league.initial_calibration_anchor_elo,
             )
             t_cal = time.time()
-            calibrated = CalibrateInitialLeagueElo().execute(
+            if self._league_calibration is None:
+                raise ValueError(
+                    "Initial league calibration requires a LeagueCalibrationPort; "
+                    "wire it via the container."
+                )
+            calibrated = self._league_calibration.calibrate_initial(
                 pool=pool,
-                selfplay=self._selfplay,
                 model_path=ts_path,
                 n_games_per_pair=config.league.initial_calibration_games_per_pair,
                 concurrency=config.concurrency,

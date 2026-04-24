@@ -65,6 +65,11 @@ class LeagueConfig:
     # Multiplies Elo K-factor when converting outplace outcomes to rating deltas.
     # Defaults to outplace_session_size so a session result carries more weight.
     elo_outplace_unit_weight: float = 1.0
+    # Strategy for initial & candidate Elo calibration. "self_play" uses
+    # independent mixed-seat greedy games (historical default). "duplicate_tournament"
+    # pairs the calibratee and opponent on identical deck seeds so variance from
+    # deal luck cancels. Swappable via a port.
+    calibration_strategy: Literal["self_play", "duplicate_tournament"] = "self_play"
 
 
 # ---------------------------------------------------------------------------

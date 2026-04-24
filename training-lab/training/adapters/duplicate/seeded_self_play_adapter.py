@@ -304,7 +304,8 @@ def _merge_active_runs(
         "players",
     ]
     carry_keys_2d = ["states", "legal_masks", "oracle_states"]
-    per_game_keys = ["scores"]  # per-game, not per-step
+    # Per-game metadata arrays: indexed by game_id, shape (n_games, ...)
+    per_game_keys = ["scores", "bid_contracts", "contracts", "declarers", "partners", "taroks_in_hand"]
 
     active_game_ids = np.zeros((n_pods, n_games_per_group), dtype=np.int64)
 
@@ -312,6 +313,9 @@ def _merge_active_runs(
     row_blocks: dict[str, list[np.ndarray]] = {k: [] for k in carry_keys_1d + carry_keys_2d}
     pod_id_blocks: list[np.ndarray] = []
     scores_out = np.zeros((n_pods, n_games_per_group, 4), dtype=np.int32)
+    
+    # Containers for per-game metadata arrays with their inferred shapes
+    per_game_arrays: dict[str, np.ndarray | None] = {k: None for k in per_game_keys}
 
     for run in active_runs:
         raw = run["raw"]
@@ -329,10 +333,35 @@ def _merge_active_runs(
             pod_ids_for_rows[mask] = pod_idx
             active_game_ids[pod_idx, variant_idx] = gid
 
-            # scores: shape (n_games, 4) in group-local ordering
+            # Per-game metadata: collect and reshape into pod-variant-indexed arrays
             scores_out[pod_idx, variant_idx, :] = np.asarray(
                 raw["scores"], dtype=np.int32
             )[local_g, :]
+            
+            for key in per_game_keys:
+                if key == "scores":
+                    continue  # Already handled above
+                if key not in raw:
+                    continue
+                raw_data = np.asarray(raw[key])
+                # For per-game data: shape is either (n_games,) for scalars or (n_games, ...) for arrays
+                if raw_data.ndim < 1:
+                    continue
+                
+                # Extract value(s) for this game
+                game_row = raw_data[local_g]
+                
+                # Initialize per-game array on first encounter
+                if per_game_arrays[key] is None:
+                    if raw_data.ndim == 1:
+                        # Scalar per game: shape (n_pods, n_games_per_group)
+                        arr_shape = (n_pods, n_games_per_group)
+                    else:
+                        # Array per game: shape (n_pods, n_games_per_group, ...)
+                        arr_shape = (n_pods, n_games_per_group) + game_row.shape
+                    per_game_arrays[key] = np.zeros(arr_shape, dtype=game_row.dtype)
+                
+                per_game_arrays[key][pod_idx, variant_idx] = game_row
 
         pod_id_blocks.append(pod_ids_for_rows)
 
@@ -351,10 +380,18 @@ def _merge_active_runs(
     for k, blocks in row_blocks.items():
         if blocks:
             merged[k] = np.concatenate(blocks, axis=0)
+    
+    # Flatten and add per-game metadata arrays
     merged["scores"] = scores_out.reshape(n_pods * n_games_per_group, 4)
+    for key, arr in per_game_arrays.items():
+        if key == "scores":
+            continue  # Already handled above
+        if arr is not None:
+            # Reshape from (n_pods, n_games_per_group, ...) to (n_pods * n_games_per_group, ...)
+            merged[key] = arr.reshape((n_pods * n_games_per_group,) + arr.shape[2:])
+    
     pod_ids_flat = np.concatenate(pod_id_blocks, axis=0) if pod_id_blocks else np.zeros(
         0, dtype=np.int64
     )
 
-    _ = per_game_keys  # keep name referenced for readability
     return merged, pod_ids_flat, active_game_ids

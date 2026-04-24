@@ -4,14 +4,13 @@ from __future__ import annotations
 
 import shutil
 from pathlib import Path
-from itertools import cycle
 
 from training.entities.iteration_result import IterationResult
 from training.entities.league import LeaguePool
+from training.ports.league_calibration_port import LeagueCalibrationPort
 from training.ports.league_persistence_port import LeagueStatePersistencePort
 from training.ports.presenter_port import PresenterPort
 from training.ports.selfplay_port import SelfPlayPort
-from training.use_cases.league_calibration_utils import _ELO_PER_PLACEMENT, _avg_placements
 from training.use_cases.update_league_elo import UpdateLeagueElo
 
 
@@ -22,11 +21,13 @@ class MaintainLeaguePool:
         presenter: PresenterPort,
         persistence: LeagueStatePersistencePort,
         selfplay: SelfPlayPort | None = None,
+        league_calibration: LeagueCalibrationPort | None = None,
     ):
         self._updater = updater
         self._presenter = presenter
         self._persistence = persistence
         self._selfplay = selfplay
+        self._league_calibration = league_calibration
 
     @staticmethod
     def state_path(league_pool_dir: Path) -> Path:
@@ -118,58 +119,17 @@ class MaintainLeaguePool:
         lapajne_mc_worlds: int | None,
         lapajne_mc_sims: int | None,
     ) -> float | None:
-        if self._selfplay is None:
-            # Keep compatibility in tests/wiring that do not provide selfplay.
+        if self._league_calibration is None:
+            # Back-compat: tests/wiring that pre-date the port simply keep the
+            # current learner Elo as the candidate's implied Elo.
             return pool.learner_elo
 
-        opponents = list(pool.entries)
-        if not opponents:
-            return None
-
-        n_games = max(1, pool.config.elo_eval_games)
-        implied_elos: list[float] = []
-
-        for target_idx, target in enumerate(opponents):
-            filler_indices = [i for i in range(len(opponents)) if i != target_idx]
-            if not filler_indices:
-                filler_indices = [target_idx]
-            cyc = cycle(filler_indices)
-            f1 = opponents[next(cyc)]
-            f2 = opponents[next(cyc)]
-
-            seat_config = (
-                f"{model_path},"
-                f"{target.opponent.seat_token()},"
-                f"{f1.opponent.seat_token()},"
-                f"{f2.opponent.seat_token()}"
-            )
-
-            raw = self._selfplay.run(
-                model_path=model_path,
-                n_games=n_games,
-                seat_config=seat_config,
-                explore_rate=0.0,
-                concurrency=concurrency,
-                include_replay_data=False,
-                include_oracle_states=False,
-                lapajne_mc_worlds=lapajne_mc_worlds,
-                lapajne_mc_sims=lapajne_mc_sims,
-            )
-            scores = raw.get("scores")
-            places = _avg_placements(scores, session_size=session_size)
-            if places is None:
-                continue
-
-            learner_place = places[0]
-            target_place = places[1]
-            implied = target.elo + _ELO_PER_PLACEMENT * (target_place - learner_place)
-            implied_elos.append(implied)
-
-        if not implied_elos:
-            return None
-
-        implied_elos.sort()
-        mid = len(implied_elos) // 2
-        if len(implied_elos) % 2 == 0:
-            return (implied_elos[mid - 1] + implied_elos[mid]) / 2.0
-        return implied_elos[mid]
+        return self._league_calibration.calibrate_candidate(
+            pool=pool,
+            model_path=model_path,
+            concurrency=concurrency,
+            session_size=session_size,
+            n_games_per_opponent=max(1, pool.config.elo_eval_games),
+            lapajne_mc_worlds=lapajne_mc_worlds,
+            lapajne_mc_sims=lapajne_mc_sims,
+        )

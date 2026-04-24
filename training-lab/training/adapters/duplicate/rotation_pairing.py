@@ -71,12 +71,37 @@ def _pool_opponent_tokens(pool: "LeaguePool | LeagueConfig | None") -> tuple[str
 
 
 class RotationPairingAdapter(DuplicatePairingPort):
-    """Default pairing: 8-game rotation (4 active + 4 shadow)."""
+    """Default pairing: 8-game rotation (4 active + 4 shadow).
 
-    def __init__(self, pairing: str = "rotation_8game") -> None:
+    ``max_opponent_triplets`` caps how many distinct ordered opponent
+    triplets are sampled per ``build_pods`` call. Pods are then assigned a
+    triplet round-robin. This is a pure performance knob: the Rust
+    self-play adapter groups pods by seating before calling the engine, so
+    fewer distinct triplets → fewer ``run_self_play`` invocations → fewer
+    TorchScript model reloads. With 400 pods and a 4-bot league, the
+    uncapped sampler produces up to 24 distinct ordered triplets per
+    iteration; each one becomes its own Rust call (×4 rotation variants ×
+    2 for active+shadow ≈ 192 model reloads). Capping at 4 cuts that to
+    32 — a ~6× throughput win with no effect on duplicate-invariant
+    semantics (same deck seed still drives the deal regardless of seating).
+
+    Set ``max_opponent_triplets=None`` to restore the legacy per-pod
+    independent sampling behaviour.
+    """
+
+    def __init__(
+        self,
+        pairing: str = "rotation_8game",
+        max_opponent_triplets: int | None = 4,
+    ) -> None:
         if pairing not in {"rotation_8game", "rotation_4game", "single_seat_2game"}:
             raise ValueError(f"Unknown pairing mode: {pairing!r}")
+        if max_opponent_triplets is not None and max_opponent_triplets < 1:
+            raise ValueError(
+                f"max_opponent_triplets must be >= 1 or None, got {max_opponent_triplets}"
+            )
         self._pairing = pairing
+        self._max_opponent_triplets = max_opponent_triplets
 
     def build_pods(
         self,
@@ -99,15 +124,27 @@ class RotationPairingAdapter(DuplicatePairingPort):
                 _DEFAULT_OPPONENT_ROSTER
             )
 
+        def _sample_triplet() -> tuple[str, str, str]:
+            if len(opponent_tokens) >= 3:
+                return tuple(rng.sample(list(opponent_tokens), 3))  # type: ignore[return-value]
+            return tuple(rng.choices(list(opponent_tokens), k=3))  # type: ignore[return-value]
+
+        # Pre-sample a bounded pool of ordered triplets so the downstream
+        # Rust runner can batch pods sharing the same seating into a single
+        # `run_self_play` invocation. See class docstring for rationale.
+        if self._max_opponent_triplets is None:
+            triplet_pool: list[tuple[str, str, str]] | None = None
+        else:
+            pool_size = min(self._max_opponent_triplets, n_pods)
+            triplet_pool = [_sample_triplet() for _ in range(pool_size)]
+
         pods: list[DuplicatePod] = []
         for pod_idx in range(n_pods):
             deck_seed = rng.getrandbits(64)
-            # Sample 3 opponents without replacement when the roster allows; otherwise
-            # fall back to a random sample with replacement.
-            if len(opponent_tokens) >= 3:
-                opponents = tuple(rng.sample(list(opponent_tokens), 3))
+            if triplet_pool is None:
+                opponents: tuple[str, str, str] = _sample_triplet()
             else:
-                opponents = tuple(rng.choices(list(opponent_tokens), k=3))
+                opponents = triplet_pool[pod_idx % len(triplet_pool)]
 
             active_seatings, shadow_seatings, learner_positions = self._build_seatings(
                 opponents=opponents,
@@ -117,7 +154,7 @@ class RotationPairingAdapter(DuplicatePairingPort):
             pods.append(
                 DuplicatePod(
                     deck_seed=int(deck_seed),
-                    opponents=opponents,  # type: ignore[arg-type]
+                    opponents=opponents,
                     active_seatings=active_seatings,
                     shadow_seatings=shadow_seatings,
                     learner_positions=learner_positions,

@@ -10,6 +10,7 @@ from training.adapters.duplicate.shadow_sources import (
     PreviousIterationShadowSource,
     RelativeTrailingShadowSource,
     TrailingShadowSource,
+    WeakestSnapshotShadowSource,
     create_shadow_source,
 )
 from training.entities.league import (
@@ -171,6 +172,46 @@ def test_best_snapshot_ignores_non_nn_entries():
     assert src.resolve(iteration=1, learner_ts_path=LEARNER_PATH, pool=pool) == "/tmp/A.ts"
 
 
+def test_weakest_snapshot_falls_back_when_pool_is_none():
+    src = WeakestSnapshotShadowSource()
+    assert src.resolve(iteration=1, learner_ts_path=LEARNER_PATH, pool=None) == LEARNER_PATH
+
+
+def test_weakest_snapshot_falls_back_when_no_nn_checkpoints():
+    src = WeakestSnapshotShadowSource()
+    pool = _make_pool([_bot_entry("bv5", "bot_v5")])
+    assert src.resolve(iteration=1, learner_ts_path=LEARNER_PATH, pool=pool) == LEARNER_PATH
+
+
+def test_weakest_snapshot_picks_lowest_elo():
+    src = WeakestSnapshotShadowSource()
+    pool = _make_pool([
+        _nn_entry("A", "/tmp/A.ts", 1400.0),  # weakest
+        _nn_entry("B", "/tmp/B.ts", 1800.0),
+        _nn_entry("C", "/tmp/C.ts", 1600.0),
+    ])
+    assert src.resolve(iteration=1, learner_ts_path=LEARNER_PATH, pool=pool) == "/tmp/A.ts"
+
+
+def test_weakest_snapshot_ties_broken_by_games_played():
+    src = WeakestSnapshotShadowSource()
+    pool = _make_pool([
+        _nn_entry("A", "/tmp/A.ts", 1300.0, games_played=10),
+        _nn_entry("B", "/tmp/B.ts", 1300.0, games_played=50),  # tie on Elo, more games
+        _nn_entry("C", "/tmp/C.ts", 1300.0, games_played=20),
+    ])
+    assert src.resolve(iteration=1, learner_ts_path=LEARNER_PATH, pool=pool) == "/tmp/B.ts"
+
+
+def test_weakest_snapshot_ignores_non_nn_entries():
+    src = WeakestSnapshotShadowSource()
+    pool = _make_pool([
+        _bot_entry("bv5", "bot_v5", elo=-9999.0),  # ignored despite very low Elo
+        _nn_entry("A", "/tmp/A.ts", 1500.0),
+    ])
+    assert src.resolve(iteration=1, learner_ts_path=LEARNER_PATH, pool=pool) == "/tmp/A.ts"
+
+
 # ---------------------------------------------------------------------------
 # Factory
 # ---------------------------------------------------------------------------
@@ -189,6 +230,11 @@ def test_factory_creates_league_pool():
 def test_factory_creates_best_snapshot():
     src = create_shadow_source("best_snapshot")
     assert isinstance(src, BestSnapshotShadowSource)
+
+
+def test_factory_creates_weakest_snapshot():
+    src = create_shadow_source("weakest_snapshot")
+    assert isinstance(src, WeakestSnapshotShadowSource)
 
 
 def test_factory_rejects_unknown():

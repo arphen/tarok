@@ -161,7 +161,10 @@ class ConfigurableIterationRunner(IterationRunnerPort):
             from training.adapters.duplicate.shadow_sources import create_shadow_source
 
             selfplay = SeededSelfPlayAdapter(inner=selfplay)
-            duplicate_pairing = RotationPairingAdapter(pairing=duplicate_cfg.pairing)
+            duplicate_pairing = RotationPairingAdapter(
+                pairing=duplicate_cfg.pairing,
+                max_opponent_triplets=duplicate_cfg.max_opponent_triplets,
+            )
             duplicate_reward = ShadowScoreRewardAdapter()
             duplicate_shadow_source = create_shadow_source(
                 duplicate_cfg.shadow_source,

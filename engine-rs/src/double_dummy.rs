@@ -236,10 +236,11 @@ fn alpha_beta(state: &DDState, mut alpha: i32, mut beta: i32) -> i32 {
     }
 
     let maximizing = state.get_team(player) == Team::DeclarerTeam;
+    let ordered = ordered_moves(legal, maximizing);
 
     if maximizing {
         let mut best = i32::MIN + 1;
-        for card in legal.iter() {
+        for card in ordered {
             let child = state.play_card(player, card);
             let val = alpha_beta(&child, alpha, beta);
             if val > best {
@@ -255,7 +256,7 @@ fn alpha_beta(state: &DDState, mut alpha: i32, mut beta: i32) -> i32 {
         best
     } else {
         let mut best = i32::MAX - 1;
-        for card in legal.iter() {
+        for card in ordered {
             let child = state.play_card(player, card);
             let val = alpha_beta(&child, alpha, beta);
             if val < best {
@@ -270,6 +271,26 @@ fn alpha_beta(state: &DDState, mut alpha: i32, mut beta: i32) -> i32 {
         }
         best
     }
+}
+
+/// Order legal moves for alpha-beta: maximizer tries high-value / high-point
+/// cards first (they tend to produce the best score), minimizer tries low
+/// cards first. Card id is used as a stable tiebreaker so ordering is
+/// deterministic — this preserves the seeded-PIMC determinism guarantee.
+#[inline]
+fn ordered_moves(legal: CardSet, maximizing: bool) -> Vec<Card> {
+    // Hand sizes here are ≤ 4 (endgame), so allocation + sort is cheap.
+    let mut moves: Vec<Card> = legal.iter().collect();
+    if maximizing {
+        moves.sort_by_key(|c| {
+            // Sort key: higher points first, then higher value, then lower id.
+            // We invert by using (-points, -value, id).
+            (-(c.points() as i32), -(c.value() as i32), c.0 as i32)
+        });
+    } else {
+        moves.sort_by_key(|c| (c.points() as i32, c.value() as i32, c.0 as i32));
+    }
+    moves
 }
 
 /// Solve all legal moves for the current player.
@@ -368,10 +389,11 @@ fn alpha_beta_viewer(
     }
 
     let maximizing = player_maximises_for_viewer(state, player, viewer, obj);
+    let ordered = ordered_moves(legal, maximizing);
 
     if maximizing {
         let mut best = i32::MIN + 1;
-        for card in legal.iter() {
+        for card in ordered {
             let child = state.play_card(player, card);
             let val = alpha_beta_viewer(&child, viewer, obj, alpha, beta);
             if val > best {
@@ -387,7 +409,7 @@ fn alpha_beta_viewer(
         best
     } else {
         let mut best = i32::MAX - 1;
-        for card in legal.iter() {
+        for card in ordered {
             let child = state.play_card(player, card);
             let val = alpha_beta_viewer(&child, viewer, obj, alpha, beta);
             if val < best {

@@ -27,6 +27,7 @@ class ExperienceBundle:
     mean_scores: tuple  # (p0, p1, p2, p3) floats
     seat_outcomes: dict  # seat_idx -> (learner_outplaces, opponent_outplaces, draws)
     sp_time: float
+    learner_contract_stats: dict[str, dict[str, int]] | None = None
     # Populated only in duplicate-RL mode (see CollectDuplicateExperiences).
     # ``None`` for regular self-play iterations.
     duplicate_stats: DuplicateIterationStats | None = None

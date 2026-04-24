@@ -47,6 +47,7 @@ def _parse_league(raw: dict[str, Any], default_outplace_unit_weight: float) -> L
             1, int(raw.get("snapshot_calibration_games_per_opponent", 1_000))
         ),
         elo_outplace_unit_weight=float(raw.get("elo_outplace_unit_weight", default_outplace_unit_weight)),
+        calibration_strategy=str(raw.get("calibration_strategy", "self_play")),
     )
 
 
@@ -58,11 +59,18 @@ def _parse_duplicate(raw: dict[str, Any]) -> DuplicateConfig:
     """
     if not raw:
         return DuplicateConfig()
+    raw_max_triplets = raw.get("max_opponent_triplets", 4)
+    max_opponent_triplets: int | None
+    if raw_max_triplets is None:
+        max_opponent_triplets = None
+    else:
+        max_opponent_triplets = int(raw_max_triplets)
     return DuplicateConfig(
         enabled=bool(raw.get("enabled", False)),
         actor_only=bool(raw.get("actor_only", False)),
         pairing=str(raw.get("pairing", "rotation_8game")),
         pods_per_iteration=int(raw.get("pods_per_iteration", 400)),
+        max_opponent_triplets=max_opponent_triplets,
         shadow_source=str(raw.get("shadow_source", "previous_iteration")),
         shadow_refresh_interval=int(raw.get("shadow_refresh_interval", 1)),
         apply_shaped_bonuses=bool(raw.get("apply_shaped_bonuses", False)),
@@ -163,6 +171,11 @@ class ResolveConfig:
             ),
             policy_coef=float(merged.get("policy_coef", 1.0)),
             entropy_coef=merged.get("entropy_coef", 0.01),
+            bid_entropy_coef=(
+                float(merged["bid_entropy_coef"])
+                if merged.get("bid_entropy_coef") is not None
+                else None
+            ),
             entropy_schedule=merged.get("entropy_schedule", "constant"),
             entropy_coef_min=float(merged.get("entropy_coef_min", 0.005)),
             iteration_runner_mode=str(merged.get("iteration_runner_mode", "in-process")),

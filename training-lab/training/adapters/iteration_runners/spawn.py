@@ -104,6 +104,9 @@ class _QueuePresenter(PresenterPort):
     def on_selfplay_done(self, n_total, n_learner, elapsed):
         self._send("on_selfplay_done", n_total, n_learner, elapsed)
 
+    def on_learner_contract_stats(self, stats):
+        self._send("on_learner_contract_stats", stats)
+
     def on_ppo_start(
         self,
         config,

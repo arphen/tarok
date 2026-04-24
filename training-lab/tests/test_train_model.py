@@ -630,9 +630,7 @@ def test_train_model_elo_based_lr_decays_smoothly(
     assert lrs[2] == pytest.approx(cfg.effective_lr_min, rel=1e-9)
 
 
-@patch("training.use_cases.train_model.orchestrator.CalibrateInitialLeagueElo")
 def test_train_model_runs_initial_calibration_when_enabled_and_no_state(
-    MockInitialCalibrate: MagicMock,
     mock_iteration_runner: MagicMock,
     mock_benchmark: MagicMock,
     mock_model_port: MagicMock,
@@ -657,7 +655,8 @@ def test_train_model_runs_initial_calibration_when_enabled_and_no_state(
         ),
     )
     mock_selfplay = MagicMock()
-    MockInitialCalibrate.return_value.execute.return_value = True
+    mock_calibration = MagicMock()
+    mock_calibration.calibrate_initial.return_value = True
 
     use_case = TrainModel(
         iteration_runner=mock_iteration_runner,
@@ -666,13 +665,13 @@ def test_train_model_runs_initial_calibration_when_enabled_and_no_state(
         presenter=mock_presenter,
         selfplay=mock_selfplay,
         league_persistence=mock_league_persistence,
+        league_calibration=mock_calibration,
     )
 
     use_case.execute(config=cfg, identity=identity, weights={}, device="cpu")
 
-    MockInitialCalibrate.return_value.execute.assert_called_once()
-    cal_kwargs = MockInitialCalibrate.return_value.execute.call_args.kwargs
-    assert cal_kwargs["selfplay"] is mock_selfplay
+    mock_calibration.calibrate_initial.assert_called_once()
+    cal_kwargs = mock_calibration.calibrate_initial.call_args.kwargs
     assert cal_kwargs["n_games_per_pair"] == 3000
     assert cal_kwargs["anchor_name"] == "V3"
     mock_presenter.on_initial_league_calibration_start.assert_called_once()

@@ -147,3 +147,15 @@ def test_resolve_config_parses_duplicate_learner_seat_token() -> None:
     assert cfg.duplicate is not None
     assert cfg.duplicate.enabled is True
     assert cfg.duplicate.learner_seat_token == "centaur"
+
+
+def test_resolve_config_reads_bid_entropy_coef() -> None:
+    payload = {
+        "entropy_coef": 0.01,
+        "bid_entropy_coef": 0.03,
+    }
+
+    cfg = ResolveConfig(_Loader(payload)).resolve(cli={}, config_path="x.yaml")
+
+    assert cfg.entropy_coef == 0.01
+    assert cfg.bid_entropy_coef == 0.03

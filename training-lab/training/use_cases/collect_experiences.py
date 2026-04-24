@@ -10,6 +10,7 @@ from training.entities.training_config import LEARNER_SEAT_LABELS, TrainingConfi
 from training.ports.ppo_port import PPOPort
 from training.ports.presenter_port import PresenterPort
 from training.ports.selfplay_port import SelfPlayPort
+from training.use_cases.learner_contract_stats import compute_learner_contract_stats
 
 
 class CollectExperiences:
@@ -81,6 +82,9 @@ class CollectExperiences:
             session_size=config.outplace_session_size,
         )
         self._presenter.on_selfplay_done(n_total, n_learner, sp_time)
+        learner_contract_stats = compute_learner_contract_stats(raw, nn_seats)
+        if learner_contract_stats:
+            self._presenter.on_learner_contract_stats(learner_contract_stats)
 
         if config.human_data_dir:
             human_raw = self._ppo.load_human_data(config.human_data_dir)
@@ -115,4 +119,5 @@ class CollectExperiences:
             mean_scores=mean_scores,
             seat_outcomes=seat_outcomes,
             sp_time=sp_time,
+            learner_contract_stats=learner_contract_stats,
         )
