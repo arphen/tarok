@@ -387,17 +387,17 @@ class TerminalPresenter(PresenterPort):
 
         learner_delta = elo_deltas.get("__learner__", 0.0) if elo_deltas else 0.0
 
-        rows: list[tuple[str, float, float | None, str]] = []
-        rows.append(("★ LEARNER", pool.learner_elo, learner_delta, ""))
+        rows: list[tuple[str, float, float | None, str, float | None]] = []
+        rows.append(("★ LEARNER", pool.learner_elo, learner_delta, "", None))
         for e in entries:
             recent = e.recent_outplace_rate
             extra = f"outplace {e.outplace_rate:.0%}  ({e.games_played:,} sessions)"
-            rows.append((e.opponent.name, e.elo, recent, extra))
+            rows.append((e.opponent.name, e.elo, recent, extra, e.outplace_rate))
         rows.sort(key=lambda x: x[1], reverse=True)
 
         print(f"  {'┈' * (_W - 4)}")
         print(f"  {'#':>3}  {'Name':<22} {'Elo':>7}  {'Δ':>8}  long term")
-        for idx, (name, elo, delta_or_recent, extra) in enumerate(rows, 1):
+        for idx, (name, elo, delta_or_recent, extra, long_term) in enumerate(rows, 1):
             if name == "★ LEARNER":
                 d_str = f"{(delta_or_recent or 0.0):+.1f}"
                 if (delta_or_recent or 0.0) > 0:
@@ -411,10 +411,18 @@ class TerminalPresenter(PresenterPort):
                 else:
                     pct = delta_or_recent * 100.0
                     d_str = f"{pct:>6.1f}%"
-                    if pct >= 50.0:
-                        d_str = _color(d_str, _ANSI_GREEN)
+                    # Color based on comparison: delta vs long-term outplace
+                    if long_term is not None:
+                        if delta_or_recent > long_term:
+                            d_str = _color(d_str, _ANSI_GREEN)
+                        elif delta_or_recent < long_term:
+                            d_str = _color(d_str, _ANSI_RED)
                     else:
-                        d_str = _color(d_str, _ANSI_RED)
+                        # Fallback to fixed threshold if no long-term data
+                        if pct >= 50.0:
+                            d_str = _color(d_str, _ANSI_GREEN)
+                        else:
+                            d_str = _color(d_str, _ANSI_RED)
                 name_str = name
             print(f"  {idx:>3}  {name_str:<22} {elo:>7.1f}  {d_str:>8}  {extra}")
 
