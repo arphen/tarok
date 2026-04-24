@@ -257,7 +257,7 @@ class TerminalPresenter(PresenterPort):
                 suffix = f"  (+{len(shown) - 10} more)"
                 shown = shown[:10]
             print(f"      seats: nn rotates all 4 seats")
-            print(f"      vs   : {', '.join(shown)}{suffix}")
+            print(f"      vs   : {', '.join(_format_opponent_token(name) for name in shown)}{suffix}")
         else:
             print(f"      seats: nn rotates all 4 seats  (no league opponents)")
         print("      stats: ", end="", flush=True)
