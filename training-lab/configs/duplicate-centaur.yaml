@@ -118,7 +118,7 @@ duplicate:
   # Centaur rollouts are ~2–4x slower than pure-NN rollouts (PIMC is
   # expensive in the last four tricks). Start with fewer pods until you
   # know the per-iter wall time; scale up once you do.
-  pods_per_iteration: 400
+  pods_per_iteration: 50
 
   # Perf knob: see docs/double_rl.md. Caps distinct opponent triplets per
   # iteration so the Rust engine can batch pods into fewer run_self_play
@@ -133,7 +133,12 @@ duplicate:
   # is exactly the ghosts currently in the league with the learner.
   # Falls back to the learner's own TorchScript path while the pool
   # still has zero nn_checkpoint entries (i.e. before the first snapshot).
-  shadow_source: weakest_snapshot
+  #
+  # A heuristic bot label (e.g. "bot_v3", "bot_v5", "bot_m6",
+  # "bot_lustrek") routes to HeuristicBotShadowSource: the shadow seat is
+  # played by the hand-coded bot and no NN is loaded for the shadow run.
+  # Useful as a stable, non-drifting baseline during early training.
+  shadow_source: bot_v3
   apply_shaped_bonuses: false
   reward_model: shadow_score_diff
   rng_seed: 0

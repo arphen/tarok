@@ -38,6 +38,22 @@ log = logging.getLogger(__name__)
 
 
 _LEARNER_TOKENS = LEARNER_SEAT_LABELS
+# Heuristic seat labels accepted at the learner position in *shadow* seatings
+# when ``duplicate.shadow_source`` is a hand-coded bot (e.g. ``"bot_v3"``).
+# Kept in sync with ``SUPPORTED_BOT_SEAT_LABELS`` in
+# ``engine-rs/src/player_bot.rs``.
+_HEURISTIC_SHADOW_TOKENS = frozenset({
+    "bot_lapajne",
+    "bot_lustrek",
+    "bot_v1",
+    "bot_v3",
+    "bot_v5",
+    "bot_v6",
+    "bot_m6",
+    "bot_m8",
+    "bot_m9",
+    "bot_pozrl",
+})
 
 
 def _render_seat_config(
@@ -48,17 +64,20 @@ def _render_seat_config(
     """Convert a seating tuple to a comma-separated seat_config and the
     path-or-token used in the learner position.
 
-    The learner position must already hold a learner-seat token (``"nn"`` or
-    ``"centaur"``); we pass it through unchanged so the Rust engine knows
-    whether to load ``actor_path`` as a pure NN player or as a Centaur
-    hybrid. Opponents are rendered as-is (bot labels or checkpoint paths);
-    the engine already dedups them.
+    The learner position normally holds a learner-seat token (``"nn"`` or
+    ``"centaur"``) — passed through unchanged so the Rust engine knows
+    whether to load ``actor_path`` as a pure NN player or a Centaur hybrid.
+    For heuristic-bot *shadow* seatings (``duplicate.shadow_source: bot_v3``
+    etc.) the learner position instead carries a bot label; it is also
+    passed through and ``actor_path`` is never dereferenced by the engine
+    because no NN seat is present.
     """
     rendered = list(seating)
-    if rendered[learner_pos] not in _LEARNER_TOKENS:
+    token = rendered[learner_pos]
+    if token not in _LEARNER_TOKENS and token not in _HEURISTIC_SHADOW_TOKENS:
         raise ValueError(
-            f"seating[{learner_pos}] = {rendered[learner_pos]!r} is not a learner token; "
-            f"learner_positions disagree with seating."
+            f"seating[{learner_pos}] = {token!r} is not a learner token nor a "
+            "heuristic shadow bot label; learner_positions disagree with seating."
         )
     return ",".join(rendered), actor_path
 

@@ -6,6 +6,7 @@ import pytest
 
 from training.adapters.duplicate.shadow_sources import (
     BestSnapshotShadowSource,
+    HeuristicBotShadowSource,
     LeaguePoolShadowSource,
     PreviousIterationShadowSource,
     RelativeTrailingShadowSource,
@@ -240,6 +241,39 @@ def test_factory_creates_weakest_snapshot():
 def test_factory_rejects_unknown():
     with pytest.raises(ValueError, match="shadow_source"):
         create_shadow_source("does_not_exist")
+
+
+# ---------------------------------------------------------------------------
+# HeuristicBotShadowSource
+# ---------------------------------------------------------------------------
+
+
+def test_heuristic_shadow_resolve_returns_learner_path_placeholder():
+    src = HeuristicBotShadowSource(seat_token="bot_v3")
+    # Placeholder path: engine never dereferences it because no ``nn`` seat
+    # sits in the shadow seating; heuristic bot occupies that slot.
+    assert src.resolve(iteration=0, learner_ts_path=LEARNER_PATH, pool=None) == LEARNER_PATH
+    assert src.resolve(iteration=5, learner_ts_path=LEARNER_PATH, pool=None) == LEARNER_PATH
+
+
+def test_heuristic_shadow_exposes_seat_token():
+    src = HeuristicBotShadowSource(seat_token="bot_v3")
+    assert src.seat_token == "bot_v3"
+
+
+def test_heuristic_shadow_rejects_unknown_label():
+    with pytest.raises(ValueError, match="heuristic shadow bot label"):
+        HeuristicBotShadowSource(seat_token="not_a_bot")
+
+
+@pytest.mark.parametrize(
+    "label",
+    ["bot_v3", "bot_v5", "bot_v6", "bot_m6", "bot_lustrek", "bot_lapajne"],
+)
+def test_factory_creates_heuristic_shadow(label):
+    src = create_shadow_source(label)
+    assert isinstance(src, HeuristicBotShadowSource)
+    assert src.seat_token == label
 
 
 # ---------------------------------------------------------------------------

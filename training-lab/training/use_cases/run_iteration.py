@@ -114,6 +114,13 @@ class RunIteration:
             shadow_path = self._shadow_source.resolve(
                 iteration=iteration, learner_ts_path=ts_path, pool=pool,
             )
+            # Heuristic-bot shadow sources expose a ``seat_token`` attribute
+            # (e.g. ``"bot_v3"``). When present, pairing renders the shadow
+            # seat as that token so the engine plays a heuristic bot there
+            # instead of an NN — ``shadow_path`` is then only a placeholder.
+            shadow_seat_token: str | None = getattr(
+                self._shadow_source, "seat_token", None
+            )
             shadow_iteration: int | None = None
             if duplicate_cfg.shadow_source == "previous_iteration":
                 shadow_iteration = max(iteration - 1, 0)
@@ -155,6 +162,7 @@ class RunIteration:
                 centaur_endgame_solver=config.centaur_endgame_solver,
                 centaur_alpha_mu_depth=config.centaur_alpha_mu_depth,
                 centaur_deterministic_seed=config.centaur_deterministic_seed,
+                shadow_seat_token=shadow_seat_token,
             )
         else:
             bundle = self._collect_experiences.execute(

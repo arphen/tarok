@@ -69,6 +69,7 @@ class CollectDuplicateExperiences:
         centaur_endgame_solver: str | None = None,
         centaur_alpha_mu_depth: int | None = None,
         centaur_deterministic_seed: int | None = None,
+        shadow_seat_token: str | None = None,
     ) -> ExperienceBundle:
         if not duplicate_config.enabled:
             raise ValueError(
@@ -86,10 +87,19 @@ class CollectDuplicateExperiences:
 
         # 1. Build pods.
         learner_token = duplicate_config.learner_seat_token
+        # When the shadow is a heuristic bot (e.g. ``bot_v3``), its seat
+        # token differs from the learner token so the Rust engine
+        # instantiates the heuristic player at the shadow seat instead of
+        # loading ``shadow_path`` as an NN. Otherwise the shadow is NN too
+        # and shares the learner seat token (engine loads the frozen
+        # snapshot via ``model_path=shadow_path``).
+        resolved_shadow_token = (
+            shadow_seat_token if shadow_seat_token is not None else learner_token
+        )
         pods = self._pairing.build_pods(
             pool=pool,
             learner_seat_token=learner_token,
-            shadow_seat_token=learner_token,  # engine loads shadow via model_path
+            shadow_seat_token=resolved_shadow_token,
             n_pods=duplicate_config.pods_per_iteration,
             rng_seed=int(duplicate_config.rng_seed),
         )

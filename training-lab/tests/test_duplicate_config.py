@@ -54,6 +54,22 @@ def test_valid_shadow_sources_accepted() -> None:
         assert cfg.shadow_source == src
 
 
+def test_heuristic_bot_shadow_sources_accepted() -> None:
+    # Heuristic-bot seat labels are valid shadow_source values. They route
+    # through ``HeuristicBotShadowSource`` in the factory and make the
+    # engine play a hand-coded bot at the shadow seat (no NN).
+    for src in (
+        "bot_v3",
+        "bot_v5",
+        "bot_v6",
+        "bot_m6",
+        "bot_lustrek",
+        "bot_lapajne",
+    ):
+        cfg = DuplicateConfig(shadow_source=src)
+        assert cfg.shadow_source == src
+
+
 def test_invalid_shadow_refresh_interval_rejected() -> None:
     with pytest.raises(ValueError, match="shadow_refresh_interval"):
         DuplicateConfig(shadow_refresh_interval=0)

@@ -24,6 +24,22 @@ _VALID_SHADOW_SOURCES: frozenset[str] = frozenset({
     "league_pool",
     "best_snapshot",
     "weakest_snapshot",
+}) | frozenset({
+    # Heuristic-bot shadow sources: the shadow seat is played by a
+    # hand-coded bot with no NN involved. Kept in sync with
+    # ``HEURISTIC_SHADOW_BOT_LABELS`` in
+    # ``training.adapters.duplicate.shadow_sources`` and
+    # ``SUPPORTED_BOT_SEAT_LABELS`` in ``engine-rs/src/player_bot.rs``.
+    "bot_lapajne",
+    "bot_lustrek",
+    "bot_v1",
+    "bot_v3",
+    "bot_v5",
+    "bot_v6",
+    "bot_m6",
+    "bot_m8",
+    "bot_m9",
+    "bot_pozrl",
 })
 
 _VALID_REWARD_MODELS: frozenset[str] = frozenset({

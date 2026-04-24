@@ -248,3 +248,64 @@ def test_collect_duplicate_experiences_includes_bid_contracts(monkeypatch):
     for key in ["contracts", "declarers", "partners"]:
         assert key in bundle.raw, f"{key} missing from merged data"
 
+
+def test_collect_duplicate_experiences_heuristic_shadow_seat_token(monkeypatch):
+    """When ``shadow_seat_token`` is a heuristic bot label, the shadow
+    self-play invocations must carry that label at the learner-position
+    seat (instead of the NN ``learner_seat_token``). Active runs are
+    unchanged and still carry ``nn`` at the learner position.
+    """
+
+    captured: list[dict] = []
+
+    def _spy_rsp(**kwargs):
+        captured.append(dict(kwargs))
+        return _fake_rsp(**kwargs)
+
+    monkeypatch.setattr(ssa_mod.te, "run_self_play", _spy_rsp)
+    selfplay = SeededSelfPlayAdapter(inner=object())  # type: ignore[arg-type]
+    pairing = RotationPairingAdapter(pairing="rotation_8game")
+    reward = ShadowScoreRewardAdapter(score_scale=100.0)
+    presenter = _StubPresenter()
+    uc = CollectDuplicateExperiences(selfplay, pairing, reward, presenter)
+
+    cfg = DuplicateConfig(enabled=True, pods_per_iteration=1, rng_seed=7)
+    uc.execute(
+        duplicate_config=cfg,
+        concurrency=1,
+        explore_rate=0.05,
+        learner_path="learner.pt",
+        shadow_path="shadow.pt",
+        pool=None,
+        outplace_session_size=1,
+        shadow_seat_token="bot_v3",
+    )
+
+    # The seeded self-play adapter issues pairs of calls (active then
+    # shadow) per variant. Active calls use explore_rate>0; shadow calls
+    # use explore_rate==0. Verify the seat_config of each group:
+    assert captured, "no self-play calls captured"
+    active_calls = [c for c in captured if c["explore_rate"] != 0.0]
+    shadow_calls = [c for c in captured if c["explore_rate"] == 0.0]
+    assert active_calls and shadow_calls
+
+    for call in active_calls:
+        seats = call["seat_config"].split(",")
+        assert "nn" in seats, f"active seat_config {call['seat_config']!r} missing learner 'nn'"
+        assert "bot_v3" not in seats or seats.count("bot_v3") == seats.count("bot_v3"), (
+            # opponent may coincidentally be bot_v3; that's fine. The key
+            # invariant is that 'nn' is present.
+            ""
+        )
+
+    for call in shadow_calls:
+        seats = call["seat_config"].split(",")
+        assert "bot_v3" in seats, (
+            f"shadow seat_config {call['seat_config']!r} must carry 'bot_v3' "
+            "at the learner position"
+        )
+        assert "nn" not in seats, (
+            f"shadow seat_config {call['seat_config']!r} must NOT carry 'nn' — "
+            "heuristic shadow replaces the NN seat entirely"
+        )
+

@@ -310,6 +310,63 @@ class WeakestSnapshotShadowSource(DuplicateShadowSourcePort):
 # ----------------------------------------------------------------------
 
 
+# ----------------------------------------------------------------------
+
+
+# Heuristic seat labels the Rust engine recognises as StockSkis bots.
+# Mirrors ``SUPPORTED_BOT_SEAT_LABELS`` in ``engine-rs/src/player_bot.rs``.
+HEURISTIC_SHADOW_BOT_LABELS: frozenset[str] = frozenset({
+    "bot_lapajne",
+    "bot_lustrek",
+    "bot_v1",
+    "bot_v3",
+    "bot_v5",
+    "bot_v6",
+    "bot_m6",
+    "bot_m8",
+    "bot_m9",
+    "bot_pozrl",
+})
+
+
+class HeuristicBotShadowSource(DuplicateShadowSourcePort):
+    """Shadow seat played by a hand-coded heuristic bot (no NN).
+
+    Unlike the NN-path shadow sources, this adapter does not carry a
+    meaningful TorchScript path — the shadow seat at every pod is rendered
+    directly as ``seat_token`` (e.g. ``"bot_v3"``) so the Rust engine
+    instantiates the heuristic player for that seat and never touches the
+    model. :meth:`resolve` still returns ``learner_ts_path`` as a
+    placeholder because the downstream self-play call signature requires
+    *some* ``model_path``; with no ``nn`` seat present in the shadow run it
+    is simply never dereferenced.
+
+    The caller (``run_iteration`` → ``CollectDuplicateExperiences``) reads
+    :attr:`seat_token` off this adapter to drive the pairing builder.
+    """
+
+    def __init__(self, seat_token: str) -> None:
+        if seat_token not in HEURISTIC_SHADOW_BOT_LABELS:
+            raise ValueError(
+                f"Unknown heuristic shadow bot label {seat_token!r}; "
+                f"expected one of {sorted(HEURISTIC_SHADOW_BOT_LABELS)}."
+            )
+        self.seat_token = seat_token
+
+    def resolve(
+        self,
+        *,
+        iteration: int,
+        learner_ts_path: str,
+        pool: "LeaguePool | None",
+    ) -> str:
+        del iteration, pool
+        return learner_ts_path
+
+
+# ----------------------------------------------------------------------
+
+
 def create_shadow_source(
     shadow_source: str, *, rng_seed: int = 0, refresh_interval: int = 1
 ) -> DuplicateShadowSourcePort:
@@ -326,8 +383,11 @@ def create_shadow_source(
         return BestSnapshotShadowSource()
     if shadow_source == "weakest_snapshot":
         return WeakestSnapshotShadowSource()
+    if shadow_source in HEURISTIC_SHADOW_BOT_LABELS:
+        return HeuristicBotShadowSource(seat_token=shadow_source)
     raise ValueError(
         f"Unknown duplicate.shadow_source={shadow_source!r}; "
         "expected one of 'previous_iteration', 'trailing', 'relative_trailing', "
-        "'league_pool', 'best_snapshot', 'weakest_snapshot'."
+        "'league_pool', 'best_snapshot', 'weakest_snapshot', or a heuristic "
+        f"bot label {sorted(HEURISTIC_SHADOW_BOT_LABELS)}."
     )
