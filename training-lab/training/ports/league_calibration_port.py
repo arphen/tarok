@@ -40,6 +40,7 @@ class LeagueCalibrationPort(ABC):
         lapajne_mc_worlds: int | None = None,
         lapajne_mc_sims: int | None = None,
         on_mixed_result: Callable[[int, int, str, tuple[str, str, str], tuple[float, float, float, float]], None] | None = None,
+        variant: int = 0,
     ) -> bool:
         """Bootstrap Elo ratings for every pool entry + the learner.
 
@@ -58,6 +59,7 @@ class LeagueCalibrationPort(ABC):
         n_games_per_opponent: int,
         lapajne_mc_worlds: int | None = None,
         lapajne_mc_sims: int | None = None,
+        variant: int = 0,
     ) -> float | None:
         """Return the implied Elo of ``model_path`` vs the current pool.
 

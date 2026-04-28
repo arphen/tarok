@@ -63,7 +63,8 @@ class DiscardRequest(BaseModel):
 class NewGameRequest(BaseModel):
     """Request to create a new human-vs-AI game with per-opponent model selection."""
 
-    opponents: list[str] = ["latest", "latest", "latest"]  # 3 entries: filename or "latest"
+    variant: str = "four_player"  # "four_player" | "three_player"
+    opponents: list[str] = ["latest", "latest", "latest"]  # n-1 entries: filename or "latest"
     num_rounds: int = 1
     shadow_bot: str | None = None  # Optional: show AI suggestions while human plays
 

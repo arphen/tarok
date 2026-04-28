@@ -82,15 +82,24 @@ class LeaguePoolEntry:
     elo: float = 1500.0
     games_played: int = 0
     learner_outplaces: int = 0  # games where learner scored above this opponent
+    draws: int = 0  # games where learner and opponent tied on cumulative score
     recent_outplace_rate: float | None = None
     recent_outplace_samples: int = 0
 
     @property
     def outplace_rate(self) -> float:
-        """Fraction of games where the learner placed above this opponent."""
-        if self.games_played == 0:
+        """Fraction of *decisive* games where the learner placed above this
+        opponent. Draws are excluded from the denominator so a network that
+        ties is not penalised the same way as a network that loses —
+        ``decisive = games_played - draws``.
+
+        Elo updates still treat draws as 0.5 (see ``update_league_elo``);
+        this property only reflects how the rate is displayed/reported.
+        """
+        decisive = self.games_played - self.draws
+        if decisive <= 0:
             return 0.5
-        return self.learner_outplaces / self.games_played
+        return self.learner_outplaces / decisive
 
 
 @dataclass

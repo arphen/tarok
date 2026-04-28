@@ -101,7 +101,7 @@ def _card_from_dict(c: dict) -> Card:
         return suit_card(suit, rank)
 
 
-def _load_opponent(choice: str, index: int):
+def _load_opponent(choice: str, index: int, variant: str = "four_player"):
     """Load a single AI opponent.
 
     Supports registry players (stockskis_v*, stockskis_m6, nn, human)
@@ -130,7 +130,7 @@ def _load_opponent(choice: str, index: int):
             pass
         agent = NeuralPlayer.from_checkpoint(path, name=name)
     else:
-        agent = NeuralPlayer(name=name)
+        agent = NeuralPlayer(name=name, variant=variant)
     agent.set_training(False)
     return agent
 
@@ -139,18 +139,22 @@ def _load_opponent(choice: str, index: int):
 async def new_game(req: NewGameRequest | None = None):
     """Create a new human-vs-AI game with optional per-opponent model selection."""
     game_id = f"game-{len(_active_games)}"
-    opponents = (req.opponents if req else ["latest"] * 3)[:3]
-    while len(opponents) < 3:
+    variant = (req.variant if req else "four_player") or "four_player"
+    n_players = 3 if variant == "three_player" else 4
+    n_opponents = n_players - 1
+    raw_opponents = req.opponents if req else ["latest"] * n_opponents
+    opponents = list(raw_opponents)[:n_opponents]
+    while len(opponents) < n_opponents:
         opponents.append("latest")
 
     human = HumanPlayer(name="You")
     agents: list = [human]
     for i, choice in enumerate(opponents):
-        agents.append(_load_opponent(choice, i))
+        agents.append(_load_opponent(choice, i, variant=variant))
 
     shadow_agent = None
     if req and req.shadow_bot:
-        shadow_agent = _load_opponent(req.shadow_bot, -1)
+        shadow_agent = _load_opponent(req.shadow_bot, -1, variant=variant)
 
     _active_games[game_id] = {
         "human": human,
@@ -159,8 +163,9 @@ async def new_game(req: NewGameRequest | None = None):
         "state": None,
         "num_rounds": req.num_rounds if req else 1,
         "shadow_agent": shadow_agent,
+        "variant": variant,
     }
-    return {"game_id": game_id}
+    return {"game_id": game_id, "variant": variant}
 
 
 @router.websocket("/ws/game/{game_id}")
@@ -176,6 +181,8 @@ async def game_websocket(ws: WebSocket, game_id: str):
     agents = list(game_info["agents"])
     num_rounds = game_info.get("num_rounds", 1)
     shadow_agent = game_info.get("shadow_agent")
+    variant = game_info.get("variant", "four_player")
+    n_players = 3 if variant == "three_player" else 4
 
     # Wrap human player with shadow if a shadow agent was requested
     if shadow_agent is not None:
@@ -186,21 +193,22 @@ async def game_websocket(ws: WebSocket, game_id: str):
     observer = WebSocketObserver(ws, player_idx=0, player_names=player_names)
     experience_logger = HumanPlayExperienceLogger()
 
-    cumulative_scores = {i: 0 for i in range(4)}
-    caller_counts = {i: 0 for i in range(4)}
-    called_counts = {i: 0 for i in range(4)}
+    cumulative_scores = {i: 0 for i in range(n_players)}
+    caller_counts = {i: 0 for i in range(n_players)}
+    called_counts = {i: 0 for i in range(n_players)}
     round_history: list[dict] = []
 
     async def run_match():
         nonlocal cumulative_scores
         for round_num in range(num_rounds):
-            dealer = round_num % 4
+            dealer = round_num % n_players
             round_decisions: list[dict] = []
             game_loop = GameLoop(
                 agents,
                 observer=observer,
                 decision_recorder=round_decisions.append,
                 score_breakdown_parser=JsonScoreBreakdownParser(),
+                variant=variant,
             )
 
             observer.set_match_info(
@@ -237,7 +245,7 @@ async def game_websocket(ws: WebSocket, game_id: str):
                     round_num=round_num + 1,
                     player_names=player_names,
                     decisions=round_decisions,
-                    scores=[int(scores.get(i, 0)) for i in range(4)],
+                    scores=[int(scores.get(i, 0)) for i in range(n_players)],
                     contract=state.contract.name if state.contract else None,
                     declarer=state.declarer,
                     partner=state.partner,

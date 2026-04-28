@@ -106,3 +106,24 @@ async def test_duplicate_start_rejects_zero_boards(client, isolated_history):
     data = resp.json()
     assert data["status"] == "error"
     assert "boards" in data["message"]
+
+
+@pytest.mark.asyncio
+async def test_duplicate_start_accepts_rotation_6game_pairing(client, isolated_history):
+    """`rotation_6game` is a valid pairing token (3-player); router should
+    surface a different validation error (missing checkpoint) rather than
+    'unsupported pairing'."""
+    async with client as c:
+        resp = await c.post(
+            "/api/arena/duplicate/start",
+            json={
+                "challenger": "this_ckpt_does_not_exist_xyz.pt",
+                "defender": "another_missing_xyz.pt",
+                "boards": 10,
+                "pairing": "rotation_6game",
+            },
+        )
+    data = resp.json()
+    assert data["status"] == "error"
+    # Must not be the "unsupported pairing" error.
+    assert "pairing" not in data["message"].lower() or "not found" in data["message"].lower()

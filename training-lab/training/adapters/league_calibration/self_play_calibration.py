@@ -37,6 +37,7 @@ class SelfPlayLeagueCalibrationAdapter(LeagueCalibrationPort):
         lapajne_mc_worlds: int | None = None,
         lapajne_mc_sims: int | None = None,
         on_mixed_result: Callable[[int, int, str, tuple[str, str, str], tuple[float, float, float, float]], None] | None = None,
+        variant: int = 0,
     ) -> bool:
         return CalibrateInitialLeagueElo().execute(
             pool=pool,
@@ -50,6 +51,7 @@ class SelfPlayLeagueCalibrationAdapter(LeagueCalibrationPort):
             lapajne_mc_worlds=lapajne_mc_worlds,
             lapajne_mc_sims=lapajne_mc_sims,
             on_mixed_result=on_mixed_result,
+            variant=variant,
         )
 
     def calibrate_candidate(
@@ -62,12 +64,15 @@ class SelfPlayLeagueCalibrationAdapter(LeagueCalibrationPort):
         n_games_per_opponent: int,
         lapajne_mc_worlds: int | None = None,
         lapajne_mc_sims: int | None = None,
+        variant: int = 0,
     ) -> float | None:
         opponents = list(pool.entries)
         if not opponents:
             return None
 
         n_games = max(1, n_games_per_opponent)
+        n_seats = 3 if int(variant) == 1 else 4
+        n_filler = n_seats - 2  # learner + target are seats 0 and 1
         implied_elos: list[float] = []
 
         for target_idx, target in enumerate(opponents):
@@ -75,14 +80,10 @@ class SelfPlayLeagueCalibrationAdapter(LeagueCalibrationPort):
             if not filler_indices:
                 filler_indices = [target_idx]
             cyc = cycle(filler_indices)
-            f1 = opponents[next(cyc)]
-            f2 = opponents[next(cyc)]
+            filler_tokens = [opponents[next(cyc)].opponent.seat_token() for _ in range(n_filler)]
 
-            seat_config = (
-                f"{model_path},"
-                f"{target.opponent.seat_token()},"
-                f"{f1.opponent.seat_token()},"
-                f"{f2.opponent.seat_token()}"
+            seat_config = ",".join(
+                [model_path, target.opponent.seat_token()] + filler_tokens
             )
 
             raw = self._selfplay.run(
@@ -95,6 +96,7 @@ class SelfPlayLeagueCalibrationAdapter(LeagueCalibrationPort):
                 include_oracle_states=False,
                 lapajne_mc_worlds=lapajne_mc_worlds,
                 lapajne_mc_sims=lapajne_mc_sims,
+                variant=variant,
             )
             scores = raw.get("scores")
             places = _avg_placements(scores, session_size=session_size)

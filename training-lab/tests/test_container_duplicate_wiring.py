@@ -29,7 +29,12 @@ def _make_config(duplicate_enabled: bool) -> TrainingConfig:
         explore_rate=0.0,
         batch_size=16,
         ppo_epochs=1,
-        duplicate=DuplicateConfig(enabled=duplicate_enabled, pods_per_iteration=2),
+        duplicate=DuplicateConfig(
+            enabled=duplicate_enabled,
+            pods_per_iteration=2,
+            negative_reward_multiplier=3.0,
+            berac_bid_penalty=-10.0,
+        ),
     )
 
 
@@ -45,6 +50,8 @@ def test_iteration_runner_factory_wires_duplicate_adapters_when_enabled():
     assert isinstance(runner._selfplay, SeededSelfPlayAdapter)  # type: ignore[attr-defined]
     assert isinstance(runner._duplicate_pairing, RotationPairingAdapter)  # type: ignore[attr-defined]
     assert isinstance(runner._duplicate_reward, ShadowScoreRewardAdapter)  # type: ignore[attr-defined]
+    assert runner._duplicate_reward._negative_reward_multiplier == 3.0  # type: ignore[attr-defined]
+    assert runner._duplicate_reward._berac_bid_penalty == -10.0  # type: ignore[attr-defined]
 
 
 def test_iteration_runner_factory_skips_duplicate_when_disabled():

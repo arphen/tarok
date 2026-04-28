@@ -57,6 +57,7 @@ class RustSelfPlay(SelfPlayPort):
         centaur_endgame_solver: str | None = None,
         centaur_alpha_mu_depth: int | None = None,
         centaur_deterministic_seed: int | None = None,
+        variant: int = 0,
     ) -> dict[str, Any]:
         raw = te.run_self_play(
             n_games=n_games,
@@ -73,6 +74,7 @@ class RustSelfPlay(SelfPlayPort):
             centaur_endgame_solver=centaur_endgame_solver,
             centaur_alpha_mu_depth=centaur_alpha_mu_depth,
             centaur_deterministic_seed=centaur_deterministic_seed,
+            variant=variant,
         )
 
         # Compatibility shim for older engine builds that don't expose game_modes.
@@ -138,7 +140,8 @@ class RustSelfPlay(SelfPlayPort):
 
             nn_seat_indices = [i for i, s in enumerate(seat_labels) if s in LEARNER_SEAT_LABELS]
             seat_outcomes: dict[int, tuple[int, int, int]] = {}
-            for si in range(1, 4):
+            n_seats = len(seat_labels)
+            for si in range(1, n_seats):
                 if seat_labels[si] in LEARNER_SEAT_LABELS:
                     continue
                 opp_scores = unit_scores[:, si]

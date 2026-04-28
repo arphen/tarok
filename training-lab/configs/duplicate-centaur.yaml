@@ -20,7 +20,7 @@
 seats: "centaur,bot_v5,bot_v5,bot_v5"   # ignored during duplicate pods; pairing picks seatings
 bench_seats: "nn,bot_m6,bot_m6,bot_m6"
 
-iterations: 250
+iterations: 100
 outplace_session_size: 50
 bench_games: 2000
 benchmark_checkpoints: [0, 5, 10, 20, 30, 40, 50, 55, 60, 70, 80, 90, 100, 150, 200, 210, 220, 230, 240, 250]
@@ -44,9 +44,8 @@ lr_schedule: linear
 lr_min: 0.00001
 
 entropy_coef: 0.01
-entropy_schedule: linear
+entropy_schedule: exponential
 entropy_coef_min: 0.0005
-bid_entropy_coef: 0.01
 
 # Duplicate cancels dealing variance — BC is not needed to stabilise gradients.
 imitation_coef: 0.0
@@ -92,12 +91,17 @@ league:
   snapshot_interval: 5
   snapshot_elo_delta: 50
   max_active_snapshots: 3
-  elo_outplace_unit_weight: 5
+  elo_outplace_unit_weight: 2
   initial_calibration_enabled: true
   initial_calibration_games_per_pair: 3000
   initial_calibration_anchor: V3
   initial_calibration_anchor_elo: 1500
-  calibration_strategy: duplicate_tournament
+  # Keep the legacy mixed-seat self-play calibrator: it produced a
+  # stable ordering (Lustrek > M6 > V5 > V3) that matched empirical
+  # head-to-head play. The duplicate-tournament variant rated each bot
+  # only vs the anchor, which saturated win-rates against the weakest
+  # bot and collapsed the non-anchor Elos onto a single band.
+  calibration_strategy: self_play
 
   opponents:
     - name: V3
@@ -118,7 +122,7 @@ duplicate:
   # Centaur rollouts are ~2–4x slower than pure-NN rollouts (PIMC is
   # expensive in the last four tricks). Start with fewer pods until you
   # know the per-iter wall time; scale up once you do.
-  pods_per_iteration: 50
+  pods_per_iteration: 1000
 
   # Perf knob: see docs/double_rl.md. Caps distinct opponent triplets per
   # iteration so the Rust engine can batch pods into fewer run_self_play
@@ -138,7 +142,7 @@ duplicate:
   # "bot_lustrek") routes to HeuristicBotShadowSource: the shadow seat is
   # played by the hand-coded bot and no NN is loaded for the shadow run.
   # Useful as a stable, non-drifting baseline during early training.
-  shadow_source: bot_v3
+  shadow_source: weakest_snapshot
   apply_shaped_bonuses: false
   reward_model: shadow_score_diff
   rng_seed: 0

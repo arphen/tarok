@@ -89,7 +89,10 @@ class AdvanceIteration:
                 config=config, iteration=iteration, learner_elo=ctx.pool.learner_elo,
             )
 
-        seats_override = self._sample_seats.execute(ctx.pool)
+        seats_override = self._sample_seats.execute(
+            ctx.pool,
+            num_seats=len([s for s in config.seats.split(",") if s.strip()]),
+        )
         prev_placement = ctx.run.placements[-1]
 
         result = self._iteration_runner.run_iteration(

@@ -26,6 +26,8 @@ def _load_checkpoint_meta(fpath: Path, ckpt_dir: Path) -> dict:
 
     try:
         meta = _torch.load(fpath, map_location="cpu", weights_only=False)
+        model_arch = meta.get("model_arch", "v4")
+        variant = "three_player" if model_arch == "v3p" else "four_player"
         entry = {
             "filename": fname,
             "episode": meta.get("episode", 0),
@@ -33,9 +35,11 @@ def _load_checkpoint_meta(fpath: Path, ckpt_dir: Path) -> dict:
             "win_rate": meta.get("metrics", {}).get("win_rate", 0),
             "avg_reward": meta.get("metrics", {}).get("avg_reward", 0),
             "model_name": meta.get("model_name", None),
+            "model_arch": model_arch,
+            "variant": variant,
         }
     except Exception:
-        entry = {"filename": fname, "episode": 0}
+        entry = {"filename": fname, "episode": 0, "model_arch": "v4", "variant": "four_player"}
 
     _checkpoint_cache[fstr] = (mtime, entry)
     return entry
@@ -84,6 +88,8 @@ async def list_checkpoints():
         try:
             meta = _torch.load(f, map_location="cpu", weights_only=False)
             model_name = meta.get("model_name") or meta.get("display_name") or f.stem
+            model_arch = meta.get("model_arch", "v4")
+            variant = "three_player" if model_arch == "v3p" else "four_player"
             result.append(
                 {
                     "filename": f"hall_of_fame/{f.name}",
@@ -94,11 +100,21 @@ async def list_checkpoints():
                     "win_rate": meta.get("metrics", {}).get("win_rate", 0),
                     "avg_reward": meta.get("metrics", {}).get("avg_reward", 0),
                     "is_hof": True,
+                    "model_arch": model_arch,
+                    "variant": variant,
                 }
             )
             seen_filenames.add(f.name)
         except Exception:
-            result.append({"filename": f"hall_of_fame/{f.name}", "is_hof": True, "episode": 0})
+            result.append(
+                {
+                    "filename": f"hall_of_fame/{f.name}",
+                    "is_hof": True,
+                    "episode": 0,
+                    "model_arch": "v4",
+                    "variant": "four_player",
+                }
+            )
             seen_filenames.add(f.name)
 
     # 2. Persona subdirectories — expose _current.pt for each
@@ -112,6 +128,8 @@ async def list_checkpoints():
         try:
             meta = _torch.load(current, map_location="cpu", weights_only=False)
             model_name = meta.get("model_name") or meta.get("display_name") or persona_name
+            model_arch = meta.get("model_arch", "v4")
+            variant = "three_player" if model_arch == "v3p" else "four_player"
             result.append(
                 {
                     "filename": f"{persona_name}/_current.pt",
@@ -122,6 +140,8 @@ async def list_checkpoints():
                     "win_rate": meta.get("metrics", {}).get("win_rate", 0),
                     "avg_reward": meta.get("metrics", {}).get("avg_reward", 0),
                     "is_hof": False,
+                    "model_arch": model_arch,
+                    "variant": variant,
                 }
             )
             seen_filenames.add(f"{persona_name}/_current.pt")

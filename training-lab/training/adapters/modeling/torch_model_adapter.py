@@ -11,11 +11,12 @@ from typing import Any
 import torch
 
 from tarok_model.network import TarokNetV4, TarokNetV5
+from tarok_model.network_3p import TarokNet3
 
 from training.ports import ModelPort
 
 
-_SUPPORTED_ARCHES = ("v4", "v5")
+_SUPPORTED_ARCHES = ("v4", "v5", "v3p")
 
 
 def build_model(hidden_size: int, oracle: bool, model_arch: str):
@@ -31,6 +32,8 @@ def build_model(hidden_size: int, oracle: bool, model_arch: str):
         if oracle:
             raise ValueError("TarokNetV5 is actor-only; oracle_critic is not supported.")
         return TarokNetV5(hidden_size=hidden_size, oracle_critic=False)
+    if model_arch == "v3p":
+        return TarokNet3(hidden_size=hidden_size, oracle_critic=oracle)
     raise ValueError(
         f"Unsupported model_arch={model_arch}. Supported: {_SUPPORTED_ARCHES}."
     )
@@ -71,7 +74,10 @@ class TorchModelAdapter(ModelPort):
         model.load_state_dict(weights, strict=False)
         model.eval()
         try:
-            _export_torchscript(model, path)
+            if model_arch == "v3p":
+                _export_torchscript_v3p(model, path)
+            else:
+                _export_torchscript(model, path)
         finally:
             del model
             _cleanup_torch_native_memory()
@@ -129,6 +135,53 @@ def _export_torchscript(model: TarokNetV4, path: str) -> None:
     w = _Wrapper(model)
     w.eval()
     example = torch.randn(1, STATE_SIZE)
+    traced = None
+    try:
+        with torch.inference_mode():
+            traced = torch.jit.trace(w, example, check_trace=False)
+        traced.save(path)
+    finally:
+        del traced
+        del example
+        del w
+        _cleanup_torch_native_memory()
+
+
+def _export_torchscript_v3p(model: TarokNet3, path: str) -> None:
+    """Export a TarokNet3 to TorchScript matching the Rust 4p superset shapes.
+
+    The Rust `NeuralNetPlayer` is variant-agnostic: it expects a 5-tuple
+    of `(bid[B,9], king[B,4], talon[B,6], card[B,54], value[B])`. The 3p
+    network's bid head only outputs 8 logits, so we right-pad with a
+    large-negative constant; the king head doesn't exist in 3p, so we
+    emit zeros (the Rust side never reads king for 3p decisions).
+    """
+    bid_pad_neg = -1e9
+
+    class _AllHeads3P(torch.nn.Module):
+        def __init__(self, base: TarokNet3):
+            super().__init__()
+            self.base = base
+
+        def forward(self, x: torch.Tensor):
+            f = self.base.res_blocks(self.base.shared(x))
+            bid8 = self.base.bid_head(f)
+            pad = torch.full(
+                (bid8.shape[0], 1), bid_pad_neg,
+                dtype=bid8.dtype, device=bid8.device,
+            )
+            bid9 = torch.cat([bid8, pad], dim=-1)
+            king = torch.zeros(
+                f.shape[0], 4, dtype=f.dtype, device=f.device,
+            )
+            talon = self.base.talon_head(f)
+            card = self.base.card_head(f)
+            value = self.base.critic(f).squeeze(-1)
+            return (bid9, king, talon, card, value)
+
+    w = _AllHeads3P(model)
+    w.eval()
+    example = torch.randn(1, model.state_size)
     traced = None
     try:
         with torch.inference_mode():

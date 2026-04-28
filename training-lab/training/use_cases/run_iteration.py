@@ -19,7 +19,7 @@ import torch
 
 from training.entities.iteration_result import IterationResult
 from training.entities.model_identity import ModelIdentity
-from training.entities.training_config import TrainingConfig
+from training.entities.training_config import TrainingConfig, variant_int
 from training.ports.benchmark_port import BenchmarkPort
 from training.ports.duplicate_iteration_stats_port import DuplicateIterationStatsPort
 from training.ports.duplicate_pairing_port import DuplicatePairingPort
@@ -163,6 +163,7 @@ class RunIteration:
                 centaur_alpha_mu_depth=config.centaur_alpha_mu_depth,
                 centaur_deterministic_seed=config.centaur_deterministic_seed,
                 shadow_seat_token=shadow_seat_token,
+                variant=variant_int(config.variant),
             )
         else:
             bundle = self._collect_experiences.execute(

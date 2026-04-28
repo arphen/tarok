@@ -159,3 +159,31 @@ def test_resolve_config_reads_bid_entropy_coef() -> None:
 
     assert cfg.entropy_coef == 0.01
     assert cfg.bid_entropy_coef == 0.03
+
+
+def test_resolve_config_parses_duplicate_negative_reward_multiplier() -> None:
+    payload = {
+        "duplicate": {
+            "enabled": True,
+            "negative_reward_multiplier": 3.5,
+        },
+    }
+
+    cfg = ResolveConfig(_Loader(payload)).resolve(cli={}, config_path="x.yaml")
+
+    assert cfg.duplicate.enabled is True
+    assert cfg.duplicate.negative_reward_multiplier == 3.5
+
+
+def test_resolve_config_parses_duplicate_berac_bid_penalty() -> None:
+    payload = {
+        "duplicate": {
+            "enabled": True,
+            "berac_bid_penalty": -10.0,
+        },
+    }
+
+    cfg = ResolveConfig(_Loader(payload)).resolve(cli={}, config_path="x.yaml")
+
+    assert cfg.duplicate.enabled is True
+    assert cfg.duplicate.berac_bid_penalty == -10.0

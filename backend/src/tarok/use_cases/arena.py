@@ -45,33 +45,57 @@ def agent_type_to_seat_label(agent_type: str) -> str | None:
         return "bot_v6"
     if t in ("stockskis_m6", "bot_m6"):
         return "bot_m6"
+    if t in ("stockskis_m6_3p", "bot_m6_3p", "m6_3p"):
+        return "bot_m6_3p"
     if t in ("stockskis_m8", "bot_m8"):
         return "bot_m8"
     if t in ("stockskis_m9", "bot_m9"):
         return "bot_m9"
+    if t in ("stockskis_v3_3p", "bot_v3_3p", "v3_3p"):
+        return "bot_v3_3p"
     if t in ("stockskis_pozrl", "bot_pozrl", "pozrl"):
         return "bot_pozrl"
     if t in ("lustrek", "stockskis_lustrek", "bot_lustrek"):
         return "bot_lustrek"
+    if t in ("centaur", "stockskis_centaur"):
+        return "centaur"
     if t == "rl":
         return "nn"
     return None
 
 
 def export_checkpoint_to_torchscript(checkpoint_path: str) -> str:
-    """Load a regular PyTorch checkpoint and export a TorchScript model."""
+    """Load a regular PyTorch checkpoint and export a TorchScript model.
+
+    Dispatches on the checkpoint's ``model_arch`` tag:
+
+    - ``"v4"`` → 4-player TarokNetV4 → 5-tuple
+      ``(bid[B,9], king[B,4], talon[B,6], card[B,54], value[B])``.
+    - ``"v3p"`` → 3-player TarokNet3 → 5-tuple of the same Rust-side
+      shapes; bid logits are right-padded from 8 to 9 columns with a
+      large negative number, and king logits are returned as zeros
+      ``[B,4]`` (3p has no king-call decision; the engine never indexes
+      that head). This lets the existing Rust ``NeuralNetPlayer`` load
+      3p checkpoints without any variant-specific code.
+    """
     import tempfile
 
     import torch
-    from tarok_model.network import TarokNetV4
 
     ckpt = torch.load(checkpoint_path, map_location="cpu", weights_only=True)
     sd = ckpt.get("model_state_dict", ckpt)
     model_arch = ckpt.get("model_arch")
+
+    if model_arch == "v3p":
+        return _export_v3p_torchscript(sd)
     if model_arch != "v4":
         raise ValueError(
-            f"Unsupported checkpoint architecture '{model_arch}'. Only 'v4' checkpoints are supported."
+            f"Unsupported checkpoint architecture '{model_arch}'. "
+            "Supported: 'v4' (4-player), 'v3p' (3-player)."
         )
+
+    from tarok_model.network import TarokNetV4
+
     hidden_size = sd["shared.0.weight"].shape[0]
     has_oracle = any(k.startswith("critic_backbone.") for k in sd)
 
@@ -105,6 +129,64 @@ def export_checkpoint_to_torchscript(checkpoint_path: str) -> str:
     traced = torch.jit.trace(wrapper, torch.randn(1, STATE_SIZE), check_trace=False)
 
     with tempfile.NamedTemporaryFile(suffix=".pt", prefix="tarok_arena_ts_", delete=False) as f:
+        path = f.name
+    traced.save(path)
+    return path
+
+
+def _export_v3p_torchscript(sd: dict) -> str:
+    """Export a TarokNet3 (3-player) checkpoint to TorchScript.
+
+    Rust expects bid logits of width 9 and king logits of width 4
+    (legacy 4p superset action sizes); the 3p network produces width 8
+    bid logits and has no king head. We pad bid → 9 with a large
+    negative constant (effectively -∞ post-softmax) so the unused 9th
+    slot is never sampled, and emit a zero ``[B, 4]`` king tensor that
+    the engine never indexes for 3p decisions.
+    """
+    import tempfile
+
+    import torch
+
+    from tarok_model.network_3p import TarokNet3
+
+    hidden_size = sd["shared.0.weight"].shape[0]
+    has_oracle = any(k.startswith("critic_backbone.") for k in sd)
+
+    net = TarokNet3(hidden_size=hidden_size, oracle_critic=has_oracle)
+    net.load_state_dict(sd, strict=True)
+    net.eval()
+
+    state_size = net.state_size
+
+    # Magnitude chosen large enough to dominate softmax even after
+    # gradient-induced logit growth, yet representable in fp32. Using a
+    # literal -inf is unsafe under fp32 add operations downstream.
+    BID_PAD_NEG = -1e9
+
+    class _AllHeads3P(torch.nn.Module):
+        def __init__(self, base: TarokNet3, bid_pad_neg: float) -> None:
+            super().__init__()
+            self.base = base
+            self.bid_pad_neg = bid_pad_neg
+
+        def forward(self, x: torch.Tensor):
+            actor = self.base.res_blocks(self.base.shared(x))
+            bid8 = self.base.bid_head(actor)  # [B, 8]
+            B = bid8.shape[0]
+            pad = torch.full((B, 1), self.bid_pad_neg, dtype=bid8.dtype, device=bid8.device)
+            bid9 = torch.cat([bid8, pad], dim=-1)  # [B, 9]
+            talon = self.base.talon_head(actor)  # [B, 6]
+            card = self.base.card_head(actor)  # [B, 54]
+            king = torch.zeros(B, 4, dtype=bid8.dtype, device=bid8.device)
+            value = self.base.critic(actor).squeeze(-1)  # [B]
+            return (bid9, king, talon, card, value)
+
+    wrapper = _AllHeads3P(net, BID_PAD_NEG)
+    wrapper.eval()
+    traced = torch.jit.trace(wrapper, torch.randn(1, state_size), check_trace=False)
+
+    with tempfile.NamedTemporaryFile(suffix=".pt", prefix="tarok_arena_ts_v3p_", delete=False) as f:
         path = f.name
     traced.save(path)
     return path

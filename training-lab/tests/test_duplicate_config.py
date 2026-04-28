@@ -98,3 +98,18 @@ def test_learner_seat_token_accepts_centaur() -> None:
 def test_invalid_learner_seat_token_rejected() -> None:
     with pytest.raises(ValueError, match="learner_seat_token"):
         DuplicateConfig(learner_seat_token="bot_v5")
+
+
+def test_negative_reward_multiplier_default_is_two() -> None:
+    cfg = DuplicateConfig()
+    assert cfg.negative_reward_multiplier == 2.0
+
+
+def test_invalid_negative_reward_multiplier_rejected() -> None:
+    with pytest.raises(ValueError, match="negative_reward_multiplier"):
+        DuplicateConfig(negative_reward_multiplier=0.0)
+
+
+def test_berac_bid_penalty_default_is_zero() -> None:
+    cfg = DuplicateConfig()
+    assert cfg.berac_bid_penalty == 0.0

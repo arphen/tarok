@@ -30,6 +30,7 @@ class _FakeSelfPlay:
         include_oracle_states: bool = False,
         lapajne_mc_worlds: int | None = None,
         lapajne_mc_sims: int | None = None,
+        variant: int = 0,
     ) -> dict[str, list[list[float]]]:
         del model_path
         del n_games
@@ -39,6 +40,7 @@ class _FakeSelfPlay:
         del include_oracle_states
         del lapajne_mc_worlds
         del lapajne_mc_sims
+        del variant
         self.calls.append(seat_config)
         seat0 = seat_config.split(",")[0]
         return {"scores": self._by_seat0.get(seat0, [])}

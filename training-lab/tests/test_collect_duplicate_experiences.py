@@ -182,7 +182,7 @@ def test_collect_duplicate_experiences_rejects_zero_pods(monkeypatch):
 
 def test_collect_duplicate_experiences_reward_sign_is_active_minus_shadow(monkeypatch):
     """Verify reward sign: when shadow beats active by a known margin,
-    rewards at terminal steps should equal (active − shadow) / 100 < 0.
+    negative rewards are scaled by the adapter's default multiplier.
     """
 
     def constant_rsp(**kwargs):
@@ -213,9 +213,10 @@ def test_collect_duplicate_experiences_reward_sign_is_active_minus_shadow(monkey
 
     rewards = bundle.raw["precomputed_rewards"]
     nonzero = rewards[rewards != 0.0]
-    # All terminal rewards should be (0 − 20) / 100 = −0.2.
+    # Base reward would be (0 − 20) / 100 = −0.2, then default
+    # negative_reward_multiplier=2.0 scales it to −0.4.
     assert nonzero.size > 0
-    assert np.allclose(nonzero, -0.2, atol=1e-6)
+    assert np.allclose(nonzero, -0.4, atol=1e-6)
 
 
 def test_collect_duplicate_experiences_includes_bid_contracts(monkeypatch):

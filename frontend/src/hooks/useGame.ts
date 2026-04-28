@@ -195,7 +195,7 @@ export function useGame() {
     wsRef.current = ws;
   }, [addEvent, addLogEntry]);
 
-  const startNewGame = useCallback(async (opponents?: string[], numRounds?: number, shadowBot?: string) => {
+  const startNewGame = useCallback(async (opponents?: string[], numRounds?: number, shadowBot?: string, variant?: 'four_player' | 'three_player') => {
     try {
       if (wsRef.current) {
         wsRef.current.close();
@@ -205,6 +205,7 @@ export function useGame() {
       if (opponents) body.opponents = opponents;
       if (numRounds && numRounds > 1) body.num_rounds = numRounds;
         if (shadowBot && shadowBot !== 'none') body.shadow_bot = shadowBot;
+      if (variant && variant !== 'four_player') body.variant = variant;
       const hasBody = Object.keys(body).length > 0;
       const res = await fetch('/api/game/new', {
         method: 'POST',

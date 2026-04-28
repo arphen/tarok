@@ -53,7 +53,7 @@ def test_negative_score_diff_is_negative_reward() -> None:
     shadow_scores = np.array([[[30, 0, 0, 0]]], dtype=np.int32)
     adapter = ShadowScoreRewardAdapter()
     rewards = adapter.compute_rewards(active_raw, shadow_scores, [_make_pod()])
-    np.testing.assert_allclose(rewards[-1], -0.70, atol=1e-6)
+    np.testing.assert_allclose(rewards[-1], -1.40, atol=1e-6)
 
 
 def test_custom_score_scale() -> None:
@@ -140,3 +140,56 @@ def test_invalid_shadow_scores_shape_rejected() -> None:
 def test_invalid_score_scale_rejected() -> None:
     with pytest.raises(ValueError, match="score_scale"):
         ShadowScoreRewardAdapter(score_scale=0.0)
+
+
+def test_negative_reward_multiplier_is_configurable() -> None:
+    active_raw = {
+        "game_ids": np.array([0], dtype=np.uint32),
+        "players": np.array([0], dtype=np.uint8),
+        "scores": np.array([[-40, 0, 0, 0]], dtype=np.int32),
+        "pod_ids": np.array([0], dtype=np.int64),
+        "learner_positions_flat": np.array([0], dtype=np.int64),
+        "game_idx_within_pod": np.array([0], dtype=np.int64),
+    }
+    shadow_scores = np.array([[[30, 0, 0, 0]]], dtype=np.int32)
+
+    # Baseline multiplier=1.0 preserves the original score difference.
+    adapter_linear = ShadowScoreRewardAdapter(negative_reward_multiplier=1.0)
+    rewards_linear = adapter_linear.compute_rewards(active_raw, shadow_scores, [_make_pod()])
+    np.testing.assert_allclose(rewards_linear[-1], -0.70, atol=1e-6)
+
+    # Stronger multiplier applies only to negative rewards.
+    adapter_scaled = ShadowScoreRewardAdapter(negative_reward_multiplier=3.0)
+    rewards_scaled = adapter_scaled.compute_rewards(active_raw, shadow_scores, [_make_pod()])
+    np.testing.assert_allclose(rewards_scaled[-1], -2.10, atol=1e-6)
+
+
+def test_invalid_negative_reward_multiplier_rejected() -> None:
+    with pytest.raises(ValueError, match="negative_reward_multiplier"):
+        ShadowScoreRewardAdapter(negative_reward_multiplier=0.0)
+
+
+def test_berac_bid_penalty_applies_at_bid_step() -> None:
+    # One trajectory (game 0, seat 0): BID then CARD_PLAY.
+    # Base score diff is zero; only the explicit Berač bid penalty should remain.
+    active_raw = {
+        "game_ids": np.array([0, 0], dtype=np.uint32),
+        "players": np.array([0, 0], dtype=np.uint8),
+        "scores": np.array([[0, 0, 0, 0]], dtype=np.int32),
+        "pod_ids": np.array([0, 0], dtype=np.int64),
+        "learner_positions_flat": np.array([0, 0], dtype=np.int64),
+        "game_idx_within_pod": np.array([0, 0], dtype=np.int64),
+        "decision_types": np.array([0, 3], dtype=np.int8),  # BID, CARD_PLAY
+        "bid_contracts": np.array([[8, -1, -1, -1]], dtype=np.int8),  # learner bid Berač
+    }
+    shadow_scores = np.array([[[0, 0, 0, 0]]], dtype=np.int32)
+
+    adapter = ShadowScoreRewardAdapter(
+        negative_reward_multiplier=1.0,
+        berac_bid_penalty=-10.0,
+    )
+    rewards = adapter.compute_rewards(active_raw, shadow_scores, [_make_pod()])
+
+    # Penalty is moved to / kept on bid-phase step; cardplay terminal stays zero.
+    np.testing.assert_allclose(rewards[0], -10.0, atol=1e-6)
+    np.testing.assert_allclose(rewards[1], 0.0, atol=1e-6)

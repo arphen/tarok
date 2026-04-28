@@ -18,7 +18,11 @@
 //! through the NN's earlier decisions.
 
 use crate::alpha_mu;
-use crate::game_state::{Contract, GameState};
+use crate::bots::centaur_bidding;
+use crate::bots::stockskis_v3_3p;
+use crate::card::{Card, CardSet, CardType};
+use crate::game_state::{Contract, GameState, Variant};
+use crate::legal_moves;
 use crate::pimc;
 use crate::player::*;
 use crate::player_nn::NeuralNetPlayer;
@@ -114,6 +118,13 @@ impl CentaurBot {
         if ctx.gs.contract == Some(Contract::Klop) {
             return false;
         }
+        // Berač declarer uses a deterministic heuristic (see batch_decide);
+        // skip PIMC so it doesn't overwrite that override.
+        if ctx.gs.contract == Some(Contract::Berac)
+            && ctx.gs.declarer == Some(ctx.player)
+        {
+            return false;
+        }
         ctx.gs.tricks_played() >= self.handoff_trick
     }
 }
@@ -127,6 +138,117 @@ impl BatchPlayer for CentaurBot {
         // Let the NN decide everything first (gives us value estimates
         // for all positions and correct actions for non-PIMC decisions).
         let mut results = self.nn.batch_decide(contexts);
+
+        // Override bidding-phase decisions with the m6 heuristic (4p only).
+        //
+        // For 4p, the NN bid/king/talon heads are not trained when bidding
+        // is handled heuristically — log_prob is set to NaN so the PPO
+        // trainer skips the policy-gradient update for these steps while
+        // still flowing terminal rewards back through the card-play heads.
+        //
+        // For 3p, the NN handles bid / king / talon-pick / discard. We
+        // *do* want the bid head to learn (e.g. that Berač is risky); for
+        // that to work the duplicate-RL signal must produce a non-zero
+        // gradient on bid steps, which requires `shadow_source` to be a
+        // heuristic bot (e.g. `bot_v3_3p`) rather than a near-copy of the
+        // learner — see training-lab/configs/three-player-duplicate.yaml.
+        for (i, ctx) in contexts.iter().enumerate() {
+            // 3p: leave bid / king / talon decisions to the NN so the
+            // policy gradient can shape them.
+            if matches!(ctx.gs.variant, Variant::ThreePlayer)
+                && !matches!(ctx.decision_type, DecisionType::CardPlay)
+            {
+                continue;
+            }
+            let action = match ctx.decision_type {
+                DecisionType::Bid => {
+                    let hand = ctx.gs.hands[ctx.player as usize];
+                    let highest = ctx.gs.bids.iter()
+                        .filter_map(|b| b.contract)
+                        .max_by_key(|c| c.strength());
+                    let chosen = centaur_bidding::evaluate_bid_centaur(hand, highest);
+                    let a = contract_to_bid_action(chosen);
+                    if ctx.legal_mask.get(a).map_or(false, |&v| v > 0.5) { a } else { 0 }
+                }
+                DecisionType::KingCall => {
+                    let hand = ctx.gs.hands[ctx.player as usize];
+                    let chosen = centaur_bidding::choose_king_centaur(hand);
+                    match chosen.and_then(|c| card_suit_idx(c.0)) {
+                        Some(idx) if ctx.legal_mask.get(idx).map_or(false, |&v| v > 0.5) => idx,
+                        _ => ctx.legal_mask.iter().position(|&v| v > 0.5).unwrap_or(0),
+                    }
+                }
+                DecisionType::TalonPick => {
+                    let hand = ctx.gs.hands[ctx.player as usize];
+                    let chosen = centaur_bidding::choose_talon_group_centaur(
+                        &ctx.gs.talon_revealed, hand, ctx.gs.called_king,
+                    );
+                    if ctx.legal_mask.get(chosen).map_or(false, |&v| v > 0.5) {
+                        chosen
+                    } else {
+                        ctx.legal_mask.iter().position(|&v| v > 0.5).unwrap_or(0)
+                    }
+                }
+                DecisionType::CardPlay => continue,
+            };
+            results[i] = DecisionResult {
+                action,
+                log_prob: f32::NAN,
+                value: results[i].value,
+            };
+        }
+
+        // Berač declarer cardplay override.
+        //
+        // Berač is won by the declarer iff they take ZERO tricks. The
+        // optimal heuristic for the declarer is well-known and we
+        // hardcode it here so the NN doesn't have to learn the inverted
+        // objective (every other contract rewards taking tricks):
+        //
+        //   * On the very first lead of the game, lead the HIGHEST tarok
+        //     in hand (declarer always leads in berač). This dumps the
+        //     dangerous high tarok while opponents still hold higher ones.
+        //   * Otherwise (whether leading later or following) play the
+        //     HIGHEST legal card that does NOT become the trick's
+        //     best-card-so-far — i.e. the highest card that will not win
+        //     the trick. If every legal card would win, play the LOWEST
+        //     legal card to minimise the damage on the next trick.
+        //
+        // This runs for the declarer seat only; defenders keep using the
+        // NN (their objective — making the declarer win at least one
+        // trick — is the same "take tricks" objective the NN trains on
+        // everywhere else, so the NN can handle it).
+        for (i, ctx) in contexts.iter().enumerate() {
+            if ctx.decision_type != DecisionType::CardPlay {
+                continue;
+            }
+            if ctx.gs.contract != Some(Contract::Berac) {
+                continue;
+            }
+            if ctx.gs.declarer != Some(ctx.player) {
+                continue;
+            }
+            if let Some(action) = berac_declarer_play(ctx) {
+                if std::env::var("CENTAUR_BERAC_DEBUG").is_ok() {
+                    let legal_ok = ctx.legal_mask.get(action).map_or(false, |&v| v > 0.5);
+                    let nn_action = results[i].action;
+                    eprintln!(
+                        "[BERAC] seat={} trick={} count={} nn_action={} our_action={} legal_ok={}",
+                        ctx.player,
+                        ctx.gs.tricks_played(),
+                        ctx.gs.current_trick.as_ref().map_or(0, |t| t.count),
+                        nn_action,
+                        action,
+                        legal_ok,
+                    );
+                }
+                results[i] = DecisionResult {
+                    action,
+                    log_prob: f32::NAN,
+                    value: results[i].value,
+                };
+            }
+        }
 
         // Override late-game card plays with the endgame solver.
         //
@@ -192,10 +314,149 @@ impl BatchPlayer for CentaurBot {
         results
     }
 
+    fn choose_discards(
+        &self,
+        gs: &GameState,
+        player: u8,
+        must_discard: usize,
+    ) -> Option<Vec<crate::card::Card>> {
+        let hand = gs.hands[player as usize];
+        match gs.variant {
+            Variant::FourPlayer => Some(centaur_bidding::choose_discards_centaur(
+                hand,
+                must_discard,
+                gs.called_king,
+            )),
+            Variant::ThreePlayer => Some(stockskis_v3_3p::choose_discards_v3_3p(
+                hand,
+                must_discard,
+            )),
+        }
+    }
+
     fn name(&self) -> &str {
         "centaur"
     }
 }
+
+// -----------------------------------------------------------------------
+// Berač declarer cardplay heuristic
+// -----------------------------------------------------------------------
+
+/// Decide a Berač declarer card play. Returns the action index (== card.0
+/// as usize) or `None` if the legal moves are empty (which should never
+/// happen during a real game; falls back to the NN-chosen action then).
+///
+/// Strategy:
+///   1. First lead of the game: lead the highest tarok in hand.
+///   2. Otherwise: pick the highest legal card that does not beat the
+///      current trick-best (i.e. would not win the trick). If no legal
+///      card avoids winning, pick the lowest legal card.
+fn berac_declarer_play(ctx: &DecisionContext<'_>) -> Option<usize> {
+    let move_ctx = legal_moves::MoveCtx::from_state(ctx.gs, ctx.player);
+    let legal = legal_moves::generate_legal_moves(&move_ctx);
+    if legal.is_empty() {
+        return None;
+    }
+
+    let trick_count = ctx.gs.current_trick.as_ref().map_or(0, |t| t.count);
+    let is_first_lead =
+        ctx.gs.tricks_played() == 0 && trick_count == 0;
+
+    // (1) First lead → highest tarok if any.
+    if is_first_lead {
+        if let Some(card) = highest_tarok(legal) {
+            return Some(card.0 as usize);
+        }
+        // No taroks at all: fall through to "highest legal card" logic.
+    }
+
+    let best_card = ctx.gs.current_trick.as_ref().and_then(|t| t.best_card());
+    let lead_suit = ctx.gs.current_trick.as_ref().and_then(|t| t.lead_suit());
+
+    // (2a) When LEADING (no card on the table yet), every legal card we
+    //      lead becomes "best" — there is no way to "not win" a lead.
+    //      Pick the highest legal card; this dumps high cards while
+    //      opponents still hold higher ones.
+    if best_card.is_none() {
+        return highest_card(legal).map(|c| c.0 as usize);
+    }
+
+    // (2b) Following: prefer the highest legal card that does NOT beat the
+    //      current best. Beating-or-not is determined by `Card::beats`
+    //      with the recorded lead suit.
+    let best = best_card.unwrap();
+    let mut losing: Option<Card> = None;
+    let mut winning: Option<Card> = None;
+    for c in legal.iter() {
+        if c.beats(best, lead_suit) {
+            // would-win candidate — track the LOWEST so we can fall back.
+            winning = match winning {
+                None => Some(c),
+                Some(prev) => Some(if c.beats(prev, lead_suit) { prev } else { c }),
+            };
+        } else {
+            // would-lose candidate — track the HIGHEST.
+            losing = match losing {
+                None => Some(c),
+                Some(prev) => Some(if c.beats(prev, lead_suit) { c } else { prev }),
+            };
+        }
+    }
+    let chosen = losing.or(winning)?;
+    Some(chosen.0 as usize)
+}
+
+/// Highest tarok in `set`, or `None` if no taroks. Skis (value=22) wins
+/// over Mond (21) in tarok-vs-tarok comparisons.
+fn highest_tarok(set: CardSet) -> Option<Card> {
+    let taroks = set.taroks();
+    let mut best: Option<Card> = None;
+    for c in taroks.iter() {
+        match best {
+            None => best = Some(c),
+            Some(prev) => {
+                if c.beats(prev, None) {
+                    best = Some(c);
+                }
+            }
+        }
+    }
+    best
+}
+
+/// Highest card in `set` under tarok-trumps-suit ordering. Among suit
+/// cards of different suits, ranks them as if each is the lead — i.e.
+/// returns the highest-rank suit card overall, with ties broken by value.
+/// Used for "I'm leading, dump my biggest card".
+fn highest_card(set: CardSet) -> Option<Card> {
+    if let Some(t) = highest_tarok(set) {
+        return Some(t);
+    }
+    let mut best: Option<Card> = None;
+    for c in set.iter() {
+        match best {
+            None => best = Some(c),
+            Some(prev) => {
+                // Both are suit cards (no taroks left); compare by value
+                // (King > Queen > Knight > Jack > 10..1). For different
+                // suits we just pick the higher value — when leading,
+                // either choice "wins its own suit" so value rank is
+                // what matters.
+                let cv = c.value();
+                let pv = prev.value();
+                if c.card_type() == CardType::Suit
+                    && prev.card_type() == CardType::Suit
+                    && cv > pv
+                {
+                    best = Some(c);
+                }
+            }
+        }
+    }
+    best
+}
+
 
 // -----------------------------------------------------------------------
 // Deterministic state fingerprint (for duplicate-RL PIMC seeding)

@@ -9,7 +9,7 @@ from pathlib import Path
 
 from training.entities.league import LeaguePool
 from training.entities.model_identity import ModelIdentity
-from training.entities.training_config import TrainingConfig
+from training.entities.training_config import TrainingConfig, variant_int
 from training.entities.training_run import TrainingRun
 from training.ports.benchmark_port import BenchmarkPort
 from training.ports.explore_rate_policy_port import ExploreRatePolicyPort
@@ -97,6 +97,7 @@ class TrainModel:
             config.concurrency, session_size=50,
             lapajne_mc_worlds=config.lapajne_mc_worlds,
             lapajne_mc_sims=config.lapajne_mc_sims,
+            variant=variant_int(config.variant),
         )
         self._presenter.on_initial_benchmark(
             initial, config.bench_games, config.effective_bench_seats, time.time() - t0,
@@ -176,6 +177,7 @@ class TrainModel:
                 lapajne_mc_worlds=config.lapajne_mc_worlds,
                 lapajne_mc_sims=config.lapajne_mc_sims,
                 on_mixed_result=self._presenter.on_initial_league_calibration_mixed_result,
+                variant=variant_int(config.variant),
             )
             self._presenter.on_initial_league_calibration_done(time.time() - t_cal)
             if calibrated:
@@ -221,7 +223,10 @@ class TrainModel:
                     config=config, iteration=i, learner_elo=pool.learner_elo,
                 )
 
-                seats_override = sample_seats.execute(pool)
+                seats_override = sample_seats.execute(
+                    pool,
+                    num_seats=len([s for s in config.seats.split(",") if s.strip()]),
+                )
 
                 prev = run.placements[-1]
                 should_bench = config.should_benchmark_iteration(i)
@@ -254,6 +259,7 @@ class TrainModel:
                     session_size=config.outplace_session_size,
                     lapajne_mc_worlds=config.lapajne_mc_worlds,
                     lapajne_mc_sims=config.lapajne_mc_sims,
+                    variant=variant_int(config.variant),
                 )
         finally:
             self._iteration_runner.teardown()

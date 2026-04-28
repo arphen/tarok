@@ -3,6 +3,7 @@ pub mod arena;
 pub mod card;
 pub mod double_dummy;
 pub mod encoding;
+pub mod encoding_3p;
 pub mod expert_games_v5;
 pub mod game_state;
 pub mod legal_moves;

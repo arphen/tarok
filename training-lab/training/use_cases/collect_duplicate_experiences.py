@@ -70,6 +70,7 @@ class CollectDuplicateExperiences:
         centaur_alpha_mu_depth: int | None = None,
         centaur_deterministic_seed: int | None = None,
         shadow_seat_token: str | None = None,
+        variant: int = 0,
     ) -> ExperienceBundle:
         if not duplicate_config.enabled:
             raise ValueError(
@@ -132,6 +133,7 @@ class CollectDuplicateExperiences:
             centaur_endgame_solver=centaur_endgame_solver,
             centaur_alpha_mu_depth=centaur_alpha_mu_depth,
             centaur_deterministic_seed=centaur_deterministic_seed,
+            variant=variant,
         )
         sp_time = time.time() - t0
 
@@ -154,6 +156,7 @@ class CollectDuplicateExperiences:
             active_raw=raw_for_reward,
             shadow_scores=result.shadow_scores,
             pods=pods,
+            shadow_contracts=result.shadow_contracts,
         )
         raw["precomputed_rewards"] = precomputed
         # Phase 3: actor-only mode drops the critic and switches PPO batch
@@ -173,9 +176,10 @@ class CollectDuplicateExperiences:
         # duplicate mode the learner rotates across all four seats, so every
         # seat qualifies as a learner seat from the PPO guard's perspective —
         # regardless of what the stats label looks like.
-        effective_seats = seats_label_for_stats or ",".join([learner_token] * 4)
+        n_seats = pods[0].n_seats if pods else 4
+        effective_seats = seats_label_for_stats or ",".join([learner_token] * n_seats)
         seat_labels = [s.strip() for s in effective_seats.split(",")]
-        nn_seats = [0, 1, 2, 3]
+        nn_seats = list(range(n_seats))
 
         # Per-seat mean scores from the active runs. Outplace outcomes are
         # not meaningful in duplicate mode (the learner rotates across all
@@ -187,11 +191,16 @@ class CollectDuplicateExperiences:
         total_games = scores.shape[0]
         if total_games > 0:
             col_means = scores.mean(axis=0)
+            mean_seat_scores = [float(col_means[s]) for s in range(n_seats)]
+            # Pad to 4-tuple for the legacy ExperienceBundle signature; the
+            # extra slots are zero for ThreePlayer.
+            while len(mean_seat_scores) < 4:
+                mean_seat_scores.append(0.0)
             mean_scores = (
-                float(col_means[0]),
-                float(col_means[1]),
-                float(col_means[2]),
-                float(col_means[3]),
+                mean_seat_scores[0],
+                mean_seat_scores[1],
+                mean_seat_scores[2],
+                mean_seat_scores[3],
             )
         else:
             mean_scores = (0.0, 0.0, 0.0, 0.0)
@@ -214,7 +223,22 @@ class CollectDuplicateExperiences:
             )
 
         self._presenter.on_selfplay_done(n_total, n_learner, sp_time)
-        learner_contract_stats = compute_learner_contract_stats(raw, nn_seats)
+        # In duplicate mode the learner rotates across all four seats within
+        # each pod, so a single constant ``learner_seats`` set would count
+        # opponent bots' bids as if they were the learner's. Pass a
+        # per-game learner-position array instead so bid stats reflect
+        # only the real learner for each game.
+        learner_seat_per_game = _derive_learner_seat_per_game(
+            raw.get("game_ids"),
+            result.learner_positions,
+            n_games_per_group,
+            n_games=int(raw["scores"].shape[0]),
+        )
+        learner_contract_stats = compute_learner_contract_stats(
+            raw,
+            nn_seats,
+            learner_seat_per_game=learner_seat_per_game,
+        )
         if learner_contract_stats:
             self._presenter.on_learner_contract_stats(learner_contract_stats)
         if duplicate_stats is not None:
@@ -259,3 +283,33 @@ def _flatten_learner_positions(
     # ``learner_positions`` is an ndarray-like; indexing with two int arrays
     # produces a 1D array aligned with game_ids.
     return learner_positions[pod_idx, variant_idx]
+
+
+def _derive_learner_seat_per_game(
+    game_ids,  # per-experience global game ids (unused; kept for API symmetry)
+    learner_positions,  # shape (n_pods, n_games_per_group)
+    n_games_per_group: int,
+    n_games: int,
+):
+    """Build a per-game learner seat index aligned with ``scores`` / ``contracts``.
+
+    The merged ``raw`` dict indexes per-game metadata by ``gid = pod *
+    n_games_per_group + variant``. The returned object is a flat sequence
+    of length ``n_games`` where element ``gid`` is the learner's seat for
+    that game — exactly what ``compute_learner_contract_stats`` needs to
+    attribute bids to the real learner (the seat rotates per variant in
+    duplicate mode).
+
+    Follows the same ``_flatten_learner_positions`` convention of treating
+    the numpy-backed ``learner_positions`` as a duck-typed sequence so this
+    use case stays free of a direct numpy import.
+    """
+    _ = game_ids  # not needed: we enumerate all games in [0, n_games)
+    if n_games_per_group <= 0 or n_games <= 0:
+        return []
+    # Build index arrays the same way _flatten_learner_positions does.
+    # ``range(n_games)`` is a plain Python sequence; numpy fancy indexing
+    # accepts any integer sequence, so we avoid importing numpy here.
+    pods = [gid // n_games_per_group for gid in range(n_games)]
+    variants = [gid % n_games_per_group for gid in range(n_games)]
+    return learner_positions[pods, variants]

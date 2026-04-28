@@ -1,10 +1,13 @@
+pub mod centaur_bidding;
 pub mod lapajne;
 pub mod lustrek;
 pub mod m8;
 pub mod m9;
 pub mod stockskis_m6;
+pub mod stockskis_m6_3p;
 pub mod stockskis_pozrl;
 pub mod stockskis_v1;
 pub mod stockskis_v3;
+pub mod stockskis_v3_3p;
 pub mod stockskis_v5;
 pub mod stockskis_v6;

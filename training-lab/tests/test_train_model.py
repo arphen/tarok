@@ -363,7 +363,7 @@ def test_train_model_caps_active_nn_snapshots(
 
     mock_updater.execute.side_effect = _bump_elo
 
-    def _capture_pool(pool) -> str:
+    def _capture_pool(pool, num_seats: int = 4) -> str:
         sampled_total_counts.append(len(pool.entries))
         sampled_checkpoint_counts.append(
             sum(1 for entry in pool.entries if entry.opponent.type == "nn_checkpoint")
@@ -382,14 +382,14 @@ def test_train_model_caps_active_nn_snapshots(
 
     use_case.execute(config=cfg, identity=identity, weights={}, device="cpu")
 
-    # Pool seen before each iteration should cap checkpoints at configured max,
-    # the heuristic anchor remains present.
-    assert sampled_checkpoint_counts == [0, 1, 2, 2, 2]
-    assert sampled_total_counts == [1, 2, 3, 3, 3]
+    # With learner re-anchoring below each admitted snapshot, admissions are
+    # intentionally throttled: pool growth is slower even under steady Elo gain.
+    assert sampled_checkpoint_counts == [0, 1, 1, 1, 2]
+    assert sampled_total_counts == [1, 2, 2, 2, 3]
 
     assert mock_updater.execute.call_count == 5
-    assert mock_copy2.call_count == 5
-    assert mock_presenter.on_league_snapshot_added.call_count == 5
+    assert mock_copy2.call_count == 2
+    assert mock_presenter.on_league_snapshot_added.call_count == 2
 
 
 @patch("training.use_cases.train_model.orchestrator.UpdateLeagueElo")
@@ -485,9 +485,10 @@ def test_train_model_snapshot_admission_uses_configured_elo_delta(
 
     use_case.execute(config=cfg, identity=identity, weights={}, device="cpu")
 
-    # +20 Elo gains clear configured +10 gate each iteration.
-    assert mock_copy2.call_count == 3
-    assert mock_presenter.on_league_snapshot_added.call_count == 3
+    # Learner is re-anchored below each admitted snapshot, so +20/iter is not
+    # enough to repeatedly clear the configured +10 gate in consecutive iters.
+    assert mock_copy2.call_count == 1
+    assert mock_presenter.on_league_snapshot_added.call_count == 1
 
 
 @patch("training.use_cases.train_model.orchestrator.UpdateLeagueElo")
@@ -551,7 +552,7 @@ def test_train_model_restores_persisted_league_state(
 
     mock_sampler = MockSampleSeats.return_value
 
-    def _capture_pool(pool) -> str:
+    def _capture_pool(pool, num_seats: int = 4) -> str:
         assert pool.learner_elo == pytest.approx(1444.0)
         assert [entry.opponent.name for entry in pool.entries] == ["Anchor", "snapshot_iter_005"]
         assert pool.entries[1].elo == pytest.approx(1410.0)

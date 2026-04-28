@@ -12,9 +12,10 @@ use rand::rng;
 use crate::card::*;
 // use crate::double_dummy;
 use crate::encoding;
+use crate::encoding_3p;
 use crate::game_state::*;
 use crate::legal_moves;
-// use crate::pimc;
+use crate::pimc;
 use crate::scoring;
 use crate::trick_eval;
 use crate::warmup;
@@ -32,11 +33,26 @@ pub struct PyGameState {
 #[pymethods]
 impl PyGameState {
     #[new]
-    #[pyo3(signature = (dealer=0))]
-    fn new(dealer: u8) -> Self {
-        PyGameState {
-            state: GameState::new(dealer),
-        }
+    #[pyo3(signature = (dealer=0, variant=0))]
+    fn new(dealer: u8, variant: u8) -> PyResult<Self> {
+        let v = Variant::from_u8(variant).ok_or_else(|| {
+            pyo3::exceptions::PyValueError::new_err(format!("invalid variant: {}", variant))
+        })?;
+        Ok(PyGameState {
+            state: GameState::new_with_variant(v, dealer),
+        })
+    }
+
+    /// Game variant (0 = four-player, 1 = three-player).
+    #[getter]
+    fn variant(&self) -> u8 {
+        self.state.variant as u8
+    }
+
+    /// Number of active players in this variant (3 or 4).
+    #[getter]
+    fn num_players(&self) -> u8 {
+        self.state.num_players() as u8
     }
 
     // -- Card dealing --
@@ -44,10 +60,17 @@ impl PyGameState {
     fn deal(&mut self) {
         let mut deck = build_deck();
         deck.shuffle(&mut rng());
-        // Deal 12 cards to each player, 6 to talon
+        let n = self.state.variant.num_players();
+        let hand_size = self.state.variant.hand_size();
+        let total_in_hands = n * hand_size;
+        // Reset hands + talon so deal() is idempotent across calls.
+        for h in self.state.hands.iter_mut() {
+            *h = CardSet::EMPTY;
+        }
+        self.state.talon = CardSet::EMPTY;
         for (i, &card) in deck.iter().enumerate() {
-            if i < 48 {
-                self.state.hands[i / 12].insert(card);
+            if i < total_in_hands {
+                self.state.hands[i / hand_size].insert(card);
             } else {
                 self.state.talon.insert(card);
             }
@@ -56,8 +79,18 @@ impl PyGameState {
     }
 
     fn deal_hands(&mut self, hands: Vec<Vec<u8>>, talon: Vec<u8>) -> PyResult<()> {
-        if hands.len() != NUM_PLAYERS {
-            return Err(pyo3::exceptions::PyValueError::new_err("Need 4 hands"));
+        let n = self.state.variant.num_players();
+        if hands.len() != n {
+            return Err(pyo3::exceptions::PyValueError::new_err(format!(
+                "Need {} hands for variant {:?}, got {}",
+                n,
+                self.state.variant,
+                hands.len()
+            )));
+        }
+        // Clear all 4 slots first (slot 3 stays empty in 3p).
+        for h in self.state.hands.iter_mut() {
+            *h = CardSet::EMPTY;
         }
         for (i, hand) in hands.iter().enumerate() {
             let mut cs = CardSet::EMPTY;
@@ -367,6 +400,30 @@ impl PyGameState {
     ) -> Bound<'py, PyArray1<f32>> {
         let mut buf = [0.0f32; encoding::ORACLE_STATE_SIZE];
         encoding::encode_oracle_state(&mut buf, &self.state, player, decision_type);
+        PyArray1::from_slice(py, &buf)
+    }
+
+    /// Encode 3-player state (length = STATE_SIZE_3P). Panics if not a 3p game.
+    fn encode_state_3p<'py>(
+        &self,
+        py: Python<'py>,
+        player: u8,
+        decision_type: u8,
+    ) -> Bound<'py, PyArray1<f32>> {
+        let mut buf = vec![0.0f32; encoding_3p::STATE_SIZE_3P];
+        encoding_3p::encode_state_3p(&mut buf, &self.state, player, decision_type, false);
+        PyArray1::from_slice(py, &buf)
+    }
+
+    /// Encode 3-player oracle state (length = ORACLE_STATE_SIZE_3P).
+    fn encode_oracle_state_3p<'py>(
+        &self,
+        py: Python<'py>,
+        player: u8,
+        decision_type: u8,
+    ) -> Bound<'py, PyArray1<f32>> {
+        let mut buf = vec![0.0f32; encoding_3p::ORACLE_STATE_SIZE_3P];
+        encoding_3p::encode_state_3p(&mut buf, &self.state, player, decision_type, true);
         PyArray1::from_slice(py, &buf)
     }
 
@@ -829,6 +886,7 @@ fn compute_legal_plays(hand: Vec<u8>, trick_cards: Vec<(u8, u8)>, contract: Opti
         Some(Contract::SoloTwo) => Some("solo_two"),
         Some(Contract::SoloOne) => Some("solo_one"),
         Some(Contract::Solo) => Some("solo"),
+        Some(Contract::Valat) => Some("valat"),
         None => None,
     };
 
@@ -887,7 +945,7 @@ fn compute_legal_plays(hand: Vec<u8>, trick_cards: Vec<(u8, u8)>, contract: Opti
 ///   initial_talon:  (n_games, 6) uint8, only when `include_replay_data=True`
 ///   traces:         list[dict], only when `include_replay_data=True`
 #[pyfunction]
-#[pyo3(signature = (n_games, concurrency=64, model_path=None, explore_rate=0.05, seat_config="nn,nn,nn,nn", include_replay_data=true, include_oracle_states=false, lapajne_mc_worlds=None, lapajne_mc_sims=None, centaur_handoff_trick=None, centaur_pimc_worlds=None, centaur_endgame_solver=None, centaur_alpha_mu_depth=None, centaur_deterministic_seed=None, deck_seeds=None))]
+#[pyo3(signature = (n_games, concurrency=64, model_path=None, explore_rate=0.05, seat_config="nn,nn,nn,nn", include_replay_data=true, include_oracle_states=false, lapajne_mc_worlds=None, lapajne_mc_sims=None, centaur_handoff_trick=None, centaur_pimc_worlds=None, centaur_endgame_solver=None, centaur_alpha_mu_depth=None, centaur_deterministic_seed=None, deck_seeds=None, variant=0u8))]
 fn run_self_play(
     py: Python<'_>,
     n_games: u32,
@@ -905,6 +963,7 @@ fn run_self_play(
     centaur_alpha_mu_depth: Option<usize>,
     centaur_deterministic_seed: Option<u64>,
     deck_seeds: Option<Vec<u64>>,
+    variant: u8,
 ) -> PyResult<PyObject> {
     use std::collections::HashMap;
     use std::sync::Arc;
@@ -914,6 +973,19 @@ fn run_self_play(
     use crate::player_nn::NeuralNetPlayer;
     use crate::player_centaur::{CentaurBot, EndgamePolicy, DEFAULT_HANDOFF_TRICK, DEFAULT_NUM_WORLDS, DEFAULT_ALPHA_MU_DEPTH};
 
+    // Map u8 variant kwarg to enum.
+    let variant_enum = match variant {
+        v if v == crate::game_state::Variant::FourPlayer as u8 => crate::game_state::Variant::FourPlayer,
+        v if v == crate::game_state::Variant::ThreePlayer as u8 => crate::game_state::Variant::ThreePlayer,
+        other => {
+            return Err(pyo3::exceptions::PyValueError::new_err(format!(
+                "variant={} is not a recognised Variant code (0=FourPlayer, 1=ThreePlayer)",
+                other
+            )));
+        }
+    };
+    let n_players = variant_enum.num_players();
+
     if let Some(sims) = lapajne_mc_sims {
         crate::bots::lapajne::set_mc_sims(sims);
     }
@@ -921,12 +993,40 @@ fn run_self_play(
         crate::bots::lapajne::set_mc_worlds(worlds);
     }
 
-    // Parse seat_config: "nn,nn,nn,nn" or "nn,bot_v5,bot_v5,bot_v5" etc.
+    // Parse seat_config. Length must equal num_players for the chosen variant
+    // (4 for FourPlayer, 3 for ThreePlayer).
     let seat_labels: Vec<&str> = seat_config.split(',').map(|s| s.trim()).collect();
-    if seat_labels.len() != 4 {
-        return Err(pyo3::exceptions::PyValueError::new_err(
-            "seat_config must have exactly 4 comma-separated entries (e.g. 'nn,bot_v5,bot_v5,bot_v5')"
-        ));
+    if seat_labels.len() != n_players {
+        return Err(pyo3::exceptions::PyValueError::new_err(format!(
+            "seat_config must have exactly {} comma-separated entries for variant={:?}, got {}",
+            n_players, variant_enum, seat_labels.len()
+        )));
+    }
+
+    // 3p NN inference is supported via the existing `NeuralNetPlayer`
+    // (3p TorchScript checkpoints export Rust-compatible 5-tuple shapes).
+    // 3p `centaur` is supported ONLY when the endgame solver is disabled
+    // by setting handoff_trick >= tricks_per_game (16 for 3p), because
+    // PIMC / alpha-mu are still hardcoded to NUM_PLAYERS=4. Anything
+    // shorter than 16 would attempt to invoke the 4p solver on a 3p
+    // state and panic.
+    if variant_enum.is_three_player() {
+        for &label in &seat_labels {
+            if label == "centaur" {
+                let handoff = centaur_handoff_trick.unwrap_or(DEFAULT_HANDOFF_TRICK);
+                let tricks_per_game = variant_enum.tricks_per_game();
+                if handoff < tricks_per_game {
+                    return Err(pyo3::exceptions::PyNotImplementedError::new_err(format!(
+                        "3-player centaur requires centaur_handoff_trick >= {} \
+                         (tricks_per_game), got {}. The PIMC / alpha-mu endgame \
+                         solvers are 4-player only; until they are ported, set \
+                         centaur_handoff_trick to {} or larger so the NN handles \
+                         every decision and the solver is never invoked.",
+                        tricks_per_game, handoff, tricks_per_game
+                    )));
+                }
+            }
+        }
     }
 
     let needs_nn = seat_labels.iter().any(|&s| s == "nn");
@@ -1014,17 +1114,32 @@ fn run_self_play(
         players.push(player);
     }
 
-    let players_arr: [Arc<dyn BatchPlayer>; 4] = [
-        players[0].clone(),
-        players[1].clone(),
-        players[2].clone(),
-        players[3].clone(),
-    ];
+    let players_arr: [Arc<dyn BatchPlayer>; 4] = match n_players {
+        4 => [
+            players[0].clone(),
+            players[1].clone(),
+            players[2].clone(),
+            players[3].clone(),
+        ],
+        // 3p: slot 3 is a phantom that the engine never asks to decide.
+        // Pad with player[0] (any Arc works) to satisfy the [_; 4] type.
+        3 => [
+            players[0].clone(),
+            players[1].clone(),
+            players[2].clone(),
+            players[0].clone(),
+        ],
+        _ => unreachable!("n_players must be 3 or 4 (variant gate enforces)"),
+    };
 
     // Training should only learn from learner seats (labels "nn" or "centaur").
-    // We still run full games with all seats, but only emit learner experiences.
+    // For 3p, the phantom seat 3 is never a learner.
     let learner_seat_mask: [bool; 4] = std::array::from_fn(|i| {
-        matches!(seat_labels[i], "nn" | "centaur")
+        if i >= n_players {
+            false
+        } else {
+            matches!(seat_labels[i], "nn" | "centaur")
+        }
     });
 
     // Validate deck_seeds if provided — must match n_games.
@@ -1040,13 +1155,15 @@ fn run_self_play(
 
     // Release GIL — the entire self-play loop runs in pure Rust
     let results: Vec<GameResult> = py.allow_threads(|| {
-        let runner = SelfPlayRunner::new(players_arr);
+        let runner = SelfPlayRunner::new_with_variant(players_arr, variant_enum);
         runner.run_with_deck_seeds(n_games, concurrency, deck_seeds)
     });
 
     // Flatten results into numpy arrays
     let total_games = results.len();
-    let state_size = encoding::STATE_SIZE;
+    let state_size = crate::self_play::state_size_for(variant_enum);
+    let oracle_state_size = crate::self_play::oracle_state_size_for(variant_enum);
+    let hand_size = variant_enum.hand_size();
 
     let total_exp: usize = results
         .iter()
@@ -1072,11 +1189,12 @@ fn run_self_play(
     let mut all_players = Vec::with_capacity(total_exp);
     let mut all_masks: Vec<f32> = Vec::with_capacity(total_exp * CARD_ACTION_SIZE);
     let mut all_oracle_states: Vec<f32> = if include_oracle_states {
-        Vec::with_capacity(total_exp * encoding::ORACLE_STATE_SIZE)
+        Vec::with_capacity(total_exp * oracle_state_size)
     } else {
         Vec::new()
     };
     let mut all_scores: Vec<[i32; 4]> = Vec::with_capacity(total_games);
+    let mut all_reward_scores: Vec<[i32; 4]> = Vec::with_capacity(total_games);
     let mut all_contracts: Vec<u8> = Vec::with_capacity(total_games);
     let mut all_declarers: Vec<i8> = Vec::with_capacity(total_games);
     let mut all_partners: Vec<i8> = Vec::with_capacity(total_games);
@@ -1085,7 +1203,7 @@ fn run_self_play(
     // Replay payload is optional because training never reads it, but arena
     // analytics and future deterministic replay tools still can.
     let mut all_initial_hands: Vec<u8> = if include_replay_data {
-        Vec::with_capacity(total_games * 4 * 12)
+        Vec::with_capacity(total_games * 4 * hand_size)
     } else {
         Vec::new()
     };
@@ -1097,6 +1215,7 @@ fn run_self_play(
 
     for result in &results {
         all_scores.push(result.scores);
+        all_reward_scores.push(result.reward_scores);
         all_contracts.push(result.contract);
         all_declarers.push(result.declarer);
         all_partners.push(result.partner);
@@ -1153,7 +1272,7 @@ fn run_self_play(
     dict.set_item("players", numpy::PyArray1::<u8>::from_vec(py, all_players))?;
     if include_oracle_states {
         let oracle_arr = PyArray1::<f32>::from_vec(py, all_oracle_states)
-            .reshape([total_exp, encoding::ORACLE_STATE_SIZE])
+            .reshape([total_exp, oracle_state_size])
             .map_err(|e| pyo3::exceptions::PyValueError::new_err(format!("oracle_states: {e}")))?;
         dict.set_item("oracle_states", oracle_arr)?;
     }
@@ -1168,6 +1287,15 @@ fn run_self_play(
         .reshape([total_games, 4])
         .map_err(|e| pyo3::exceptions::PyValueError::new_err(format!("scores: {e}")))?;
     dict.set_item("scores", scores_arr)?;
+
+    let reward_scores_flat: Vec<i32> = all_reward_scores
+        .iter()
+        .flat_map(|s| s.iter().copied())
+        .collect();
+    let reward_scores_arr = numpy::PyArray1::<i32>::from_vec(py, reward_scores_flat)
+        .reshape([total_games, 4])
+        .map_err(|e| pyo3::exceptions::PyValueError::new_err(format!("reward_scores: {e}")))?;
+    dict.set_item("reward_scores", reward_scores_arr)?;
 
     // Arena metadata arrays
     dict.set_item("contracts", numpy::PyArray1::<u8>::from_vec(py, all_contracts))?;
@@ -1742,6 +1870,69 @@ fn compute_gae<'py>(
     Ok((PyArray1::from_vec(py, advantages), PyArray1::from_vec(py, returns)))
 }
 
+/// PIMC (Perfect Information Monte Carlo) card selection.
+///
+/// Samples `num_worlds` consistent worlds from `viewer`'s perspective,
+/// double-dummy solves each, and returns the card with the best average
+/// viewer utility. Deterministic when `seed` is provided.
+///
+/// For Berač, the internal DD objective is `DeclarerTricks` (declarer
+/// minimises own tricks, opponents maximise), so each world's α-β search
+/// prunes aggressively once declarer is forced to take a trick.
+#[pyfunction]
+#[pyo3(signature = (gs, viewer, num_worlds=100, seed=None))]
+fn pimc_choose_card(
+    py: Python<'_>,
+    gs: &PyGameState,
+    viewer: u8,
+    num_worlds: u32,
+    seed: Option<u64>,
+) -> PyResult<u8> {
+    let state = gs.state.clone();
+    let card = py.allow_threads(|| match seed {
+        Some(s) => pimc::pimc_choose_card_with_seed(&state, viewer, num_worlds, s),
+        None => pimc::pimc_choose_card(&state, viewer, num_worlds),
+    });
+    Ok(card.0)
+}
+
+/// Berač-specialised PIMC using the survival solver.
+///
+/// Each world short-circuits the instant declarer would be forced to win a
+/// trick. Returns the declarer move that survives the most sampled worlds.
+#[pyfunction]
+#[pyo3(signature = (gs, viewer, num_worlds=2, seed=0))]
+fn pimc_berac_choose_card(
+    py: Python<'_>,
+    gs: &PyGameState,
+    viewer: u8,
+    num_worlds: u32,
+    seed: u64,
+) -> PyResult<u8> {
+    let state = gs.state.clone();
+    let card = py.allow_threads(|| pimc::pimc_berac_choose_card(&state, viewer, num_worlds, seed));
+    Ok(card.0)
+}
+
+/// Berač PIMC detailed vote breakdown.
+///
+/// Returns a list of `(card_idx, survival_count, world_count)` tuples —
+/// one per legal declarer move — so Python scripts can inspect how
+/// decisive the world consensus was.
+#[pyfunction]
+#[pyo3(signature = (gs, viewer, num_worlds=2, seed=0))]
+fn pimc_berac_votes(
+    py: Python<'_>,
+    gs: &PyGameState,
+    viewer: u8,
+    num_worlds: u32,
+    seed: u64,
+) -> PyResult<Vec<(u8, u32, u32)>> {
+    let state = gs.state.clone();
+    let votes = py.allow_threads(|| pimc::pimc_berac_survival_votes(&state, viewer, num_worlds, seed));
+    Ok(votes.into_iter().map(|(c, s, n)| (c.0, s, n)).collect())
+}
+
 pub fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<PyGameState>()?;
     m.add_function(wrap_pyfunction!(generate_warmup_data, m)?)?;
@@ -1751,6 +1942,10 @@ pub fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(compute_gae, m)?)?;
     m.add_function(wrap_pyfunction!(run_self_play, m)?)?;
     m.add_function(wrap_pyfunction!(run_arena_games, m)?)?;
+    m.add_function(wrap_pyfunction!(pimc_choose_card, m)?)?;
+    m.add_function(wrap_pyfunction!(pimc_berac_choose_card, m)?)?;
+    m.add_function(wrap_pyfunction!(pimc_berac_votes, m)?)?;
+    m.add_function(wrap_pyfunction!(reset_process_variant_for_tests_py, m)?)?;
     // Commented out: DD and PIMC functions depend on unavailable modules
     // m.add_function(wrap_pyfunction!(dd_solve, m)?)?;
     // m.add_function(wrap_pyfunction!(dd_solve_all_moves, m)?)?;
@@ -1794,12 +1989,36 @@ pub fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add("CONTRACT_SOLO", Contract::Solo as u8)?;
     m.add("CONTRACT_BERAC", Contract::Berac as u8)?;
     m.add("CONTRACT_BARVNI_VALAT", Contract::BarvniValat as u8)?;
+    m.add("CONTRACT_VALAT", Contract::Valat as u8)?;
+
+    // Variant constants (game mode: 4-player vs 3-player Tarok).
+    m.add("VARIANT_FOUR_PLAYER", Variant::FourPlayer as u8)?;
+    m.add("VARIANT_THREE_PLAYER", Variant::ThreePlayer as u8)?;
+
+    // 3-player encoding constants.
+    m.add("STATE_SIZE_3P", encoding_3p::STATE_SIZE_3P)?;
+    m.add("ORACLE_STATE_SIZE_3P", encoding_3p::ORACLE_STATE_SIZE_3P)?;
+    m.add("CONTRACT_OFFSET_3P", encoding_3p::CONTRACT_OFFSET_3P)?;
+    m.add("CONTRACT_SIZE_3P", encoding_3p::CONTRACT_SIZE_3P)?;
+    m.add("BID_ACTION_SIZE_3P", encoding_3p::BID_ACTION_SIZE_3P)?;
+    m.add("KING_ACTION_SIZE_3P", encoding_3p::KING_ACTION_SIZE_3P)?;
+    m.add("TALON_ACTION_SIZE_3P", encoding_3p::TALON_ACTION_SIZE_3P)?;
+    m.add("CARD_ACTION_SIZE_3P", encoding_3p::CARD_ACTION_SIZE_3P)?;
+    m.add("ANNOUNCE_ACTION_SIZE_3P", encoding_3p::ANNOUNCE_ACTION_SIZE_3P)?;
 
     // Team constants
     m.add("TEAM_DECLARER", Team::DeclarerTeam as u8)?;
     m.add("TEAM_OPPONENT", Team::OpponentTeam as u8)?;
 
     Ok(())
+}
+
+/// Reset the process-global variant guard. Test helper only — production
+/// code should never call this. Used by Python tests that exercise both
+/// 3p and 4p code paths in the same interpreter.
+#[pyfunction]
+fn reset_process_variant_for_tests_py() {
+    crate::game_state::reset_process_variant_for_tests();
 }
 
 /// Generate expert data from v5-only bot games.

@@ -7,7 +7,7 @@ from pathlib import Path
 
 from training.entities.league import LeaguePool
 from training.entities.model_identity import ModelIdentity
-from training.entities.training_config import TrainingConfig
+from training.entities.training_config import TrainingConfig, variant_int
 from training.entities.training_context import TrainingContext
 from training.entities.training_run import TrainingRun
 from training.ports.benchmark_port import BenchmarkPort
@@ -66,6 +66,7 @@ class PrepareTraining:
             config.concurrency, session_size=config.outplace_session_size,
             lapajne_mc_worlds=config.lapajne_mc_worlds,
             lapajne_mc_sims=config.lapajne_mc_sims,
+            variant=variant_int(config.variant),
         )
         self._presenter.on_initial_benchmark(
             initial, config.bench_games, config.effective_bench_seats, time.time() - t0,

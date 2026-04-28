@@ -1352,6 +1352,7 @@ dependencies = [
     { name = "pydantic" },
     { name = "pyyaml" },
     { name = "shortuuid" },
+    { name = "tarok-engine" },
     { name = "tarok-model" },
     { name = "tensorboard" },
     { name = "torch" },
@@ -1395,6 +1396,7 @@ requires-dist = [
     { name = "pyyaml", specifier = ">=6.0.3" },
     { name = "ruff", marker = "extra == 'dev'", specifier = ">=0.7" },
     { name = "shortuuid", specifier = ">=1.0.13" },
+    { name = "tarok-engine", editable = "../engine-rs" },
     { name = "tarok-model", editable = "../model" },
     { name = "tensorboard", specifier = ">=2.18" },
     { name = "torch", specifier = ">=2.4" },
@@ -1406,6 +1408,11 @@ provides-extras = ["dev"]
 
 [package.metadata.requires-dev]
 dev = [{ name = "httpx", specifier = ">=0.28.1" }]
+
+[[package]]
+name = "tarok-engine"
+version = "0.1.0"
+source = { editable = "../engine-rs" }
 
 [[package]]
 name = "tarok-model"

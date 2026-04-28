@@ -394,6 +394,8 @@ fn build_dd_after_move(
         tricks_played,
         gs.roles,
         gs.contract,
+        gs.variant.num_players() as u8,
+        gs.variant.tricks_per_game() as u8,
     )
 }
 

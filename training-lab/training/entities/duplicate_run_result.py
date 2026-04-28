@@ -43,6 +43,14 @@ class DuplicateRunResult:
         Global game id for each ``(pod_idx, game_idx_within_pod)``. Same
         values you will see in ``active["game_ids"]``. ``np.ndarray`` of
         shape ``(n_pods, n_games_per_group)``.
+    shadow_contracts
+        Contract played by the shadow table paired with active game
+        ``(pod_idx, game_idx_within_pod)``. ``np.ndarray`` of shape
+        ``(n_pods, n_games_per_group)`` and dtype ``uint8``. ``None`` if
+        the adapter did not capture this signal (legacy behaviour). Used
+        by ``ShadowScoreRewardAdapter`` to detect bid-divergence between
+        learner and shadow and redirect the reward away from the card
+        head when the two pods played different contracts.
     """
 
     active: Any
@@ -50,3 +58,4 @@ class DuplicateRunResult:
     pod_ids: Any
     learner_positions: Any
     active_game_ids: Any
+    shadow_contracts: Any = None

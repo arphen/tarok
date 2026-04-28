@@ -21,27 +21,31 @@ class SampleLeagueSeats:
       with ``"nn"``.
     """
 
-    def execute(self, pool: LeaguePool) -> str:
+    def execute(self, pool: LeaguePool, num_seats: int = 4) -> str:
         cfg = pool.config
         entries = pool.entries
 
+        if num_seats < 2:
+            raise ValueError(f"num_seats must be >= 2, got {num_seats}")
+
         if not entries:
-            # No opponents yet — fall back to full self-play
-            return "nn,nn,nn,nn"
+            # No opponents yet — fall back to full self-play.
+            return ",".join(["nn"] * num_seats)
 
         weights = pool.sampling_weights()
 
-        # Sample seats 1–3 independently
-        sampled = random.choices(entries, weights=weights, k=3)
+        # Sample seats 1..num_seats-1 independently.
+        n_opp = num_seats - 1
+        sampled = random.choices(entries, weights=weights, k=n_opp)
         seat_tokens = [e.opponent.seat_token() for e in sampled]
 
-        # Enforce min_nn_per_game (seat 0 always nn, so we need min-1 more)
+        # Enforce min_nn_per_game (seat 0 always nn, so we need min-1 more).
         nn_needed = max(0, cfg.min_nn_per_game - 1)
         nn_count = sum(1 for t in seat_tokens if t == "nn")
         if nn_count < nn_needed:
             deficit = nn_needed - nn_count
-            # Replace non-nn slots from right-to-left
-            for i in reversed(range(3)):
+            # Replace non-nn slots from right-to-left.
+            for i in reversed(range(n_opp)):
                 if seat_tokens[i] != "nn" and deficit > 0:
                     seat_tokens[i] = "nn"
                     deficit -= 1

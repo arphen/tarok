@@ -41,6 +41,8 @@ export default function GameBoard({
 }: GameBoardProps) {
   const isMyTurn = state.current_player === 0;
   const names = state.player_names.length > 0 ? state.player_names : ['You', 'AI-1', 'AI-2', 'AI-3'];
+  const isThreePlayer = (state.player_names?.length ?? 0) === 3 || state.hand_sizes.length === 3;
+  const totalTricks = isThreePlayer ? 16 : 12;
   const [discardSelection, setDiscardSelection] = useState<CardData[]>([]);
 
   const mustDiscard = state.must_discard;
@@ -96,7 +98,7 @@ export default function GameBoard({
       <div className="game-info-bar">
         <div className="info-item">
           <span className="info-label">Tricks</span>
-          <span className="info-value">{state.tricks_played}/12</span>
+          <span className="info-value">{state.tricks_played}/{totalTricks}</span>
         </div>
         {state.contract !== null && (
           <div className="info-item">
@@ -124,7 +126,7 @@ export default function GameBoard({
 
       {/* Table layout */}
       <div className="table">
-        {/* Top player (P2) */}
+        {/* Top player (P2 in 4p, P2 in 3p) */}
         <div className="table-top">
           <Hand cards={revealedHands?.['2'] ?? []} faceDown={!revealedHands?.['2']} cardCount={state.hand_sizes[2]} position="top" label={names[2]} teamRole={teamOf(2)} isSolo={isSolo} />
         </div>
@@ -229,10 +231,12 @@ export default function GameBoard({
           )}
         </div>
 
-        {/* Right player (P3) */}
-        <div className="table-right">
-          <Hand cards={revealedHands?.['3'] ?? []} faceDown={!revealedHands?.['3']} cardCount={state.hand_sizes[3]} position="right" label={names[3]} teamRole={teamOf(3)} isSolo={isSolo} />
-        </div>
+        {/* Right player (P3) — hidden in 3p */}
+        {!isThreePlayer && (
+          <div className="table-right">
+            <Hand cards={revealedHands?.['3'] ?? []} faceDown={!revealedHands?.['3']} cardCount={state.hand_sizes[3]} position="right" label={names[3]} teamRole={teamOf(3)} isSolo={isSolo} />
+          </div>
+        )}
 
         {/* Bottom player (human, P0) */}
         <div className="table-bottom">

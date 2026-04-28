@@ -1,0 +1,106 @@
+# ---------------------------------------------------------
+# 3-Player Tarok (tarok v treh) — duplicate-RL config
+#
+# Variant differences vs the 4p game (see docs/basics.md):
+#   - 3 seats, 16 cards each, 6-card talon, no king-calling.
+#   - Bid set: {Klop, Berac, SoloThree, SoloTwo, SoloOne, Valat, BarvniValat}.
+#   - All contracts are solo (declarer vs 2 defenders); partner scoring
+#     does not apply.
+#   - Talon offered as 3 groups of 2 cards; declarer picks one.
+#
+# Network: TarokNet3 (model/src/tarok_model/network_3p.py),
+# state size 513 / oracle 621. Switched on by `model_arch: v3p`.
+#
+# Status: skeleton. Wiring to make this runnable still requires:
+#   * `run_self_play(variant=..., seat_config=3 seats)` in engine-rs/src/py_bindings.rs
+#   * 3p `NeuralNetPlayer` (encode_state_3p + TarokNet3 inference)
+#   * 3-seat duplicate pairing (rotation_6game: 3 active + 3 shadow)
+# Until those land the trainer will refuse to start a 3p run.
+# ---------------------------------------------------------
+
+variant: three_player
+model_arch: v3p
+
+# 3 seats — one learner, two heuristic-v3-3p opponents.
+seats: "centaur,bot_m6_3p,bot_m6_3p"
+bench_seats: "nn,bot_m6_3p,bot_m6_3p"
+
+centaur_handoff_trick: 12
+centaur_pimc_worlds: 100
+centaur_endgame_solver: pimc
+centaur_deterministic_seed: 1
+
+iterations: 100
+outplace_session_size: 50
+bench_games: 10000
+benchmark_checkpoints: [0, 5, 10, 20, 30, 40, 50,60, 70, 80, 90, 100, 150, 200, 210, 220, 230, 240, 250]
+best_model_metric: "elo"
+
+# --- Core RL math (mirrors duplicate.yaml) ---
+gamma: 0.995
+gae_lambda: 0.98
+clip_epsilon: 0.2
+value_coef: 0.5
+
+ppo_epochs: 4
+batch_size: 8192
+
+lr: 0.0003
+lr_schedule: linear
+lr_min: 0.00001
+
+explore_rate_schedule: linear
+explore_rate: 0.10      # Force 10% completely random actions
+explore_rate_min: 0.01
+
+entropy_coef: 0.02      # High initial entropy to prevent Berač mode-collapse
+entropy_schedule: exponential
+entropy_coef_min: 0.001
+
+imitation_coef: 0.0
+
+concurrency: 256
+device: auto
+
+iteration_runner_mode: inprocess
+
+# --- League: only 3p-compatible bots until more 3p heuristics exist ---
+league:
+  enabled: true
+  min_nn_per_game: 1
+  sampling: matchmaking
+  snapshot_interval: 5
+  snapshot_elo_delta: 50
+  max_active_snapshots: 3
+  elo_outplace_unit_weight: 5
+  initial_calibration_enabled: true
+  initial_calibration_games_per_pair: 3000
+  initial_calibration_anchor: V3_3P
+  initial_calibration_anchor_elo: 1500
+
+  opponents:
+    - name: M6
+      type: bot_m6_3p
+    - name: V3
+      type: bot_v3_3p
+# --- Duplicate-RL knobs ---
+duplicate:
+  enabled: true
+  actor_only: false
+
+  # NOTE: existing pairing modes assume 4 seats. The 3p run will need
+  # a `rotation_6game` mode (3 active + 3 shadow). Listed here as the
+  # intended target shape; trainer wiring TBD.
+  pairing: rotation_6game
+
+  pods_per_iteration: 2000
+  max_opponent_triplets: 4
+
+  shadow_source: relative_trailing
+  shadow_refresh_interval: 5
+
+  apply_shaped_bonuses: false
+  reward_model: shadow_score_diff
+  negative_reward_multiplier: 1.0
+  berac_bid_penalty: -10.0
+  rng_seed: 0

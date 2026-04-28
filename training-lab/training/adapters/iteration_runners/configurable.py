@@ -165,7 +165,10 @@ class ConfigurableIterationRunner(IterationRunnerPort):
                 pairing=duplicate_cfg.pairing,
                 max_opponent_triplets=duplicate_cfg.max_opponent_triplets,
             )
-            duplicate_reward = ShadowScoreRewardAdapter()
+            duplicate_reward = ShadowScoreRewardAdapter(
+                negative_reward_multiplier=duplicate_cfg.negative_reward_multiplier,
+                berac_bid_penalty=duplicate_cfg.berac_bid_penalty,
+            )
             duplicate_shadow_source = create_shadow_source(
                 duplicate_cfg.shadow_source,
                 rng_seed=duplicate_cfg.rng_seed,

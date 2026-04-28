@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import time
 
-from training.entities.training_config import TrainingConfig
+from training.entities.training_config import TrainingConfig, variant_int
 from training.ports.benchmark_port import BenchmarkPort
 from training.ports.presenter_port import PresenterPort
 
@@ -41,6 +41,7 @@ class MeasurePlacement:
                 session_size=config.outplace_session_size,
                 lapajne_mc_worlds=config.lapajne_mc_worlds,
             lapajne_mc_sims=config.lapajne_mc_sims,
+                variant=variant_int(config.variant),
             )
             bench_time = time.time() - t0
             self._presenter.on_benchmark_done(placement, bench_time)

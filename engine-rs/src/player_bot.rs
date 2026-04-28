@@ -16,9 +16,11 @@ use crate::bots::lapajne;
 use crate::bots::m8;
 use crate::bots::m9;
 use crate::bots::stockskis_m6;
+use crate::bots::stockskis_m6_3p;
 use crate::bots::stockskis_pozrl;
 use crate::bots::stockskis_v1;
 use crate::bots::stockskis_v3;
+use crate::bots::stockskis_v3_3p;
 use crate::bots::stockskis_v5;
 use crate::bots::stockskis_v6;
 use rayon::prelude::*;
@@ -123,6 +125,30 @@ impl HeuristicStrategy for BotV3 {
     }
 }
 
+/// 3-player Tarok variant of `BotV3`. King-calling is a no-op (3p has no
+/// partner); `called_king` is always `None`. Will panic if used inside a
+/// 4-player game (see `debug_assert` in `stockskis_v3_3p::choose_card_v3_3p`).
+pub struct BotV3ThreePlayer;
+impl HeuristicStrategy for BotV3ThreePlayer {
+    fn seat_label(&self) -> &'static str { "bot_v3_3p" }
+    fn name(&self) -> &'static str { "stockskis_v3_3p" }
+    fn evaluate_bid(&self, hand: CardSet, highest: Option<Contract>) -> Option<Contract> {
+        stockskis_v3_3p::evaluate_bid_v3_3p(hand, highest)
+    }
+    fn choose_king(&self, _hand: CardSet) -> Option<Card> {
+        None // 3p never calls a king
+    }
+    fn choose_talon_group(&self, groups: &[Vec<Card>], hand: CardSet, _called_king: Option<Card>) -> usize {
+        stockskis_v3_3p::choose_talon_group_v3_3p(groups, hand)
+    }
+    fn choose_discards(&self, hand: CardSet, must_discard: usize, _called_king: Option<Card>) -> Vec<Card> {
+        stockskis_v3_3p::choose_discards_v3_3p(hand, must_discard)
+    }
+    fn choose_card(&self, hand: CardSet, gs: &GameState, player: u8) -> Card {
+        stockskis_v3_3p::choose_card_v3_3p(hand, gs, player)
+    }
+}
+
 pub struct BotV5;
 impl HeuristicStrategy for BotV5 {
     fn seat_label(&self) -> &'static str { "bot_v5" }
@@ -183,6 +209,29 @@ impl HeuristicStrategy for BotM6 {
     }
     fn choose_card(&self, hand: CardSet, gs: &GameState, player: u8) -> Card {
         stockskis_m6::choose_card_m6(hand, gs, player)
+    }
+}
+
+/// 3-player Tarok variant of `BotM6`. King-calling is a no-op (3p has no
+/// partner); `called_king` is always `None`.
+pub struct BotM6ThreePlayer;
+impl HeuristicStrategy for BotM6ThreePlayer {
+    fn seat_label(&self) -> &'static str { "bot_m6_3p" }
+    fn name(&self) -> &'static str { "stockskis_m6_3p" }
+    fn evaluate_bid(&self, hand: CardSet, highest: Option<Contract>) -> Option<Contract> {
+        stockskis_m6_3p::evaluate_bid_m6_3p(hand, highest)
+    }
+    fn choose_king(&self, _hand: CardSet) -> Option<Card> {
+        None // 3p never calls a king
+    }
+    fn choose_talon_group(&self, groups: &[Vec<Card>], hand: CardSet, _called_king: Option<Card>) -> usize {
+        stockskis_m6_3p::choose_talon_group_m6_3p(groups, hand)
+    }
+    fn choose_discards(&self, hand: CardSet, must_discard: usize, _called_king: Option<Card>) -> Vec<Card> {
+        stockskis_m6_3p::choose_discards_m6_3p(hand, must_discard)
+    }
+    fn choose_card(&self, hand: CardSet, gs: &GameState, player: u8) -> Card {
+        stockskis_m6_3p::choose_card_m6_3p(hand, gs, player)
     }
 }
 
@@ -275,14 +324,16 @@ impl HeuristicStrategy for BotLapajne {
 // -----------------------------------------------------------------------
 
 /// All recognised heuristic seat-label strings, used for error messages.
-pub const SUPPORTED_BOT_SEAT_LABELS: [&str; 10] = [
+pub const SUPPORTED_BOT_SEAT_LABELS: [&str; 12] = [
     "bot_lapajne",
     "bot_lustrek",
     "bot_v1",
     "bot_v3",
+    "bot_v3_3p",
     "bot_v5",
     "bot_v6",
     "bot_m6",
+    "bot_m6_3p",
     "bot_m8",
     "bot_m9",
     "bot_pozrl",
@@ -296,9 +347,11 @@ pub fn try_make_bot_by_seat_label(label: &str) -> Option<StockSkisPlayer> {
         "bot_lustrek" => Box::new(BotLustrek),
         "bot_v1"      => Box::new(BotV1),
         "bot_v3"      => Box::new(BotV3),
+        "bot_v3_3p"   => Box::new(BotV3ThreePlayer),
         "bot_v5"      => Box::new(BotV5),
         "bot_v6"      => Box::new(BotV6),
         "bot_m6"      => Box::new(BotM6),
+        "bot_m6_3p"   => Box::new(BotM6ThreePlayer),
         "bot_m8"      => Box::new(BotM8),
         "bot_m9"      => Box::new(BotM9),
         "bot_pozrl"   => Box::new(BotPozrl),
@@ -345,7 +398,20 @@ impl StockSkisPlayer {
     fn decide_bid(&self, ctx: &DecisionContext<'_>) -> usize {
         let hand = ctx.gs.hands[ctx.player as usize];
         let highest = ctx.gs.bids.iter().filter_map(|b| b.contract).max_by_key(|c| c.strength());
-        let action = contract_to_bid_action(self.strategy.evaluate_bid(hand, highest));
+        let chosen = self.strategy.evaluate_bid(hand, highest);
+        // Bid action indexing depends on the variant: 4p uses
+        // `BID_IDX_TO_CONTRACT` (Three/Two/One/SoloX/Solo/Berac), 3p uses
+        // `BID_IDX_TO_CONTRACT_3P` (Klop/Berac/SoloX/Valat/BarvniValat).
+        let action = match ctx.gs.variant {
+            Variant::FourPlayer => contract_to_bid_action(chosen),
+            Variant::ThreePlayer => match chosen {
+                None => 0,
+                Some(c) => crate::encoding_3p::BID_IDX_TO_CONTRACT_3P
+                    .iter()
+                    .position(|&m| m == Some(c))
+                    .unwrap_or(0),
+            },
+        };
         if ctx.legal_mask.get(action).map_or(false, |&v| v > 0.5) { action } else { 0 }
     }
 

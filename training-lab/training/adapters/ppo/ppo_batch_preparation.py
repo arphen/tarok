@@ -201,6 +201,14 @@ def prepare_batched(raw: dict[str, Any], gamma: float = 0.99, gae_lambda: float 
     game_ids_np = np.asarray(raw["game_ids"])
     players_np = np.asarray(raw["players"])
     scores_np = np.asarray(raw["scores"])
+    # Training reward signal (non-zero-sum). For normal games the defender
+    # seats receive −partner_total when declarer wins and −total_declarer when
+    # declarer loses; for solo contracts defenders receive −declarer_score; for
+    # klop rewards equal scores. See ``engine-rs/src/scoring.rs::score_game_reward``.
+    # Leaderboard scoring (``scores``) is kept separate and used for
+    # arena/UI/metrics. Rust builds before this commit don't emit the field, so
+    # fall back to ``scores`` for backward compatibility with cached raw dicts.
+    reward_scores_np = np.asarray(raw.get("reward_scores", scores_np))
     legal_masks_np = np.asarray(raw["legal_masks"])
     behavioral_clone_raw = raw.get("behavioral_clone_mask")
     behavioral_clone_mask_np = (
@@ -298,7 +306,7 @@ def prepare_batched(raw: dict[str, Any], gamma: float = 0.99, gae_lambda: float 
                 f"experience count {n_total}"
             )
     else:
-        rewards_np = scores_np[gids, players_np].astype(np.float32) / 100.0
+        rewards_np = reward_scores_np[gids, players_np].astype(np.float32) / 100.0
         if scores_np.shape[0] > 0:
             shaped_bonus_by_game = _compute_special_shaped_bonus_by_game(raw, int(scores_np.shape[0]))
             rewards_np = rewards_np + shaped_bonus_by_game[gids, players_np]
@@ -313,10 +321,19 @@ def prepare_batched(raw: dict[str, Any], gamma: float = 0.99, gae_lambda: float 
     # Zero out non-terminal rewards so the critic learns position value,
     # not a countdown timer. A step is terminal if it's the last element
     # or if the next step belongs to a different (game, player) trajectory.
+    #
+    # Exception: when ``precomputed_rewards`` is provided, the duplicate-RL
+    # reward adapter has already placed rewards at exactly the steps it
+    # wants them (terminal cardplay for matched-contract trajectories,
+    # last bid step for divergent-contract trajectories). Wiping
+    # non-terminal entries here would erase those bid-step rewards and
+    # silently destroy the credit-assignment fix in
+    # ShadowScoreRewardAdapter.compute_rewards.
     is_terminal = np.ones(n_total, dtype=bool)
     if n_total > 0:
         is_terminal[:-1] = sorted_keys[:-1] != sorted_keys[1:]
-    sorted_rewards[~is_terminal] = 0.0
+    if precomputed_rewards is None:
+        sorted_rewards[~is_terminal] = 0.0
 
     advantages_sorted, returns_sorted = te.compute_gae(
         sorted_values,

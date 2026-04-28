@@ -218,7 +218,7 @@ build-engine:
 ensure-engine:
 	@TORCH_LIB_DIR=$$(cd backend && uv run --default-index https://pypi.org/simple python -c 'import pathlib, torch; print(pathlib.Path(torch.__file__).resolve().parent / "lib")'); \
 	export DYLD_FALLBACK_LIBRARY_PATH="$$TORCH_LIB_DIR:$$DYLD_FALLBACK_LIBRARY_PATH"; \
-	if (cd backend && uv run --default-index https://pypi.org/simple python -c 'import tarok_engine as te; assert hasattr(te, "compute_gae"); assert hasattr(te, "CONTRACT_OFFSET")') 2>/dev/null; then \
+	if (cd backend && uv run --default-index https://pypi.org/simple python -c 'import tarok_engine as te, inspect; assert hasattr(te, "compute_gae"); assert hasattr(te, "CONTRACT_OFFSET"); assert hasattr(te, "VARIANT_THREE_PLAYER"); assert "variant" in str(inspect.signature(te.run_self_play))') 2>/dev/null; then \
 		echo "✅  Rust engine already installed."; \
 	else \
 		echo "==> Rust engine missing/outdated, building…"; \
@@ -315,6 +315,36 @@ train-new: ensure-engine
 		export DYLD_FALLBACK_LIBRARY_PATH="$$TORCH_LIB_DIR:$$DYLD_FALLBACK_LIBRARY_PATH" && \
 		PYTHONPATH=backend/src:model/src python training-lab/train_and_evaluate.py \
 		--config training-lab/configs/$(CONFIG).yaml \
+		--new \
+		$(EXTRA)
+
+# Tiny end-to-end smoke run for the 3-player centaur trainer.
+# Verified to complete in a few seconds on Apple Silicon (1 iter, 16 games).
+# Use this to confirm the 3p training pipeline is wired correctly before
+# launching a full training run.
+# Usage:
+#   make train-3p-centaur-smoke
+#   make train-3p-centaur-smoke EXTRA="--iterations 2 --games 32"
+train-3p-centaur-smoke: ensure-engine
+	source backend/.venv/bin/activate && \
+		TORCH_LIB_DIR=$$(python -c 'import pathlib, torch; print(pathlib.Path(torch.__file__).resolve().parent / "lib")') && \
+		export DYLD_FALLBACK_LIBRARY_PATH="$$TORCH_LIB_DIR:$$DYLD_FALLBACK_LIBRARY_PATH" && \
+		PYTHONPATH=backend/src:model/src python training-lab/train_and_evaluate.py \
+		--config training-lab/configs/three-player-duplicate-centaur-smoke.yaml \
+		--new \
+		$(EXTRA)
+
+# Tiny end-to-end smoke run for 3-player DUPLICATE RL (rotation_6game).
+# Verifies the full duplicate pipeline (DuplicatePod n_seats=3,
+# rotation_6game pairing, shadow scoring, league elo with variant=1).
+# Usage:
+#   make train-3p-duplicate-smoke
+train-3p-duplicate-smoke: ensure-engine
+	source backend/.venv/bin/activate && \
+		TORCH_LIB_DIR=$$(python -c 'import pathlib, torch; print(pathlib.Path(torch.__file__).resolve().parent / "lib")') && \
+		export DYLD_FALLBACK_LIBRARY_PATH="$$TORCH_LIB_DIR:$$DYLD_FALLBACK_LIBRARY_PATH" && \
+		PYTHONPATH=backend/src:model/src python training-lab/train_and_evaluate.py \
+		--config training-lab/configs/three-player-duplicate-smoke.yaml \
 		--new \
 		$(EXTRA)
 

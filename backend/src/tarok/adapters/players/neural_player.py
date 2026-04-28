@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import numpy as np
 import torch
 
 from tarok.entities import Announcement, Card, CardType, Contract, GameState
@@ -22,10 +23,18 @@ from tarok_model.encoding import (
     encode_talon_mask,
 )
 from tarok_model.network import TarokNetV4
+from tarok_model.network_3p import TarokNet3
 
 
 class NeuralPlayer:
-    """Inference-only neural network player for Tarok."""
+    """Inference-only neural network player for Tarok.
+
+    Supports both 4-player (`model_arch == "v4"` → `TarokNetV4`) and
+    3-player (`model_arch == "v3p"` → `TarokNet3`) checkpoints. The `variant`
+    flag tells the game loop which Rust state encoder to feed in via the fast
+    tensor path; PlayerPort callers go through Python-state helpers that are
+    variant-agnostic.
+    """
 
     def __init__(
         self,
@@ -34,16 +43,27 @@ class NeuralPlayer:
         device: str = "cpu",
         oracle_critic: bool = False,
         mode_heads: bool = True,
+        variant: str = "four_player",
     ):
         self._name = name
         self.device = torch.device(device)
         del mode_heads
-        self.network = TarokNetV4(hidden_size, oracle_critic=oracle_critic).to(self.device)
+        self.variant = variant
+        if variant == "three_player":
+            self.network = TarokNet3(hidden_size=hidden_size, oracle_critic=oracle_critic).to(
+                self.device
+            )
+        else:
+            self.network = TarokNetV4(hidden_size, oracle_critic=oracle_critic).to(self.device)
         self.network.eval()
 
     @property
     def name(self) -> str:
         return self._name
+
+    @property
+    def is_three_player(self) -> bool:
+        return self.variant == "three_player"
 
     def set_training(self, training: bool) -> None:
         self.network.train(training)
@@ -57,11 +77,24 @@ class NeuralPlayer:
     ) -> "NeuralPlayer":
         ckpt = torch.load(path, map_location=device, weights_only=True)
         model_arch = ckpt.get("model_arch")
+        state_dict = ckpt["model_state_dict"]
+        if model_arch == "v3p":
+            hidden_size = state_dict["shared.0.weight"].shape[0]
+            has_oracle = any(k.startswith("critic_backbone.") for k in state_dict)
+            player = NeuralPlayer(
+                name=name,
+                hidden_size=hidden_size,
+                device=device,
+                oracle_critic=has_oracle or oracle_critic,
+                variant="three_player",
+            )
+            player.network.load_state_dict(state_dict)
+            return player
         if model_arch != "v4":
             raise ValueError(
-                f"Unsupported checkpoint architecture '{model_arch}'. Only 'v4' checkpoints are supported."
+                f"Unsupported checkpoint architecture '{model_arch}'. "
+                "Expected 'v4' (4-player) or 'v3p' (3-player)."
             )
-        state_dict = ckpt["model_state_dict"]
         hidden_size = state_dict["shared.0.weight"].shape[0]
         has_oracle = any(k.startswith("critic_backbone.") for k in state_dict)
         player = NeuralPlayer(
@@ -70,6 +103,7 @@ class NeuralPlayer:
             device=device,
             oracle_critic=has_oracle or oracle_critic,
             mode_heads=True,
+            variant="four_player",
         )
         player.network.load_state_dict(state_dict)
         return player
@@ -98,7 +132,17 @@ class NeuralPlayer:
         legal_mask: torch.Tensor,
         decision_type: DecisionType,
     ) -> int:
-        state_tensor = encode_state(state, player_idx, decision_type).to(self.device)
+        if self.is_three_player:
+            # Use the Rust 3p encoder when running through PlayerPort calls.
+            rust_gs = getattr(state, "_rust_gs", None)
+            if rust_gs is None:
+                raise RuntimeError(
+                    "3-player NeuralPlayer requires a Rust-backed GameState (state._rust_gs)."
+                )
+            arr = rust_gs.encode_state_3p(player_idx, decision_type.value)
+            state_tensor = torch.from_numpy(np.asarray(arr)).float().to(self.device)
+        else:
+            state_tensor = encode_state(state, player_idx, decision_type).to(self.device)
         mask = legal_mask.to(self.device)
         game_mode = (
             contract_to_game_mode(state.contract)

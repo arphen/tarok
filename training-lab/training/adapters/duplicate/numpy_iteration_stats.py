@@ -74,11 +74,12 @@ class NumpyDuplicateIterationStats(DuplicateIterationStatsPort):
         gids = np.asarray(active_game_ids, dtype=np.int64)
         learner_pos_arr = np.asarray(learner_positions, dtype=np.int64)
 
+        n_seats = pods[0].n_seats
         n_pods, n_gpg = gids.shape
-        if shadow_arr.shape != (n_pods, n_gpg, 4):
+        if shadow_arr.shape != (n_pods, n_gpg, n_seats):
             raise ValueError(
                 f"shadow_scores shape {shadow_arr.shape} does not match "
-                f"(n_pods={n_pods}, n_games_per_group={n_gpg}, 4)"
+                f"(n_pods={n_pods}, n_games_per_group={n_gpg}, {n_seats})"
             )
         if learner_pos_arr.shape != (n_pods, n_gpg):
             raise ValueError(
@@ -112,7 +113,7 @@ class NumpyDuplicateIterationStats(DuplicateIterationStatsPort):
                 learner_pos = int(learner_pos_arr[pod_idx, variant_idx])
                 l_score = int(learner_scores[pod_idx, variant_idx])
                 seats = per_game_scores[pod_idx, variant_idx]
-                for j in range(4):
+                for j in range(n_seats):
                     if j == learner_pos:
                         continue
                     opp_idx = j if j < learner_pos else j - 1

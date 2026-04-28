@@ -152,11 +152,13 @@ def _build_py_state_from_rust(
     """Build a lightweight Python GameState view from Rust state."""
     state = GameState.__new__(GameState)
     state.dealer = gs.dealer
-    state.num_players = 4
+    _np = getattr(gs, "num_players", 4)
+    n = int(_np() if callable(_np) else _np)
+    state.num_players = n
     rust_phase = gs.phase if hasattr(gs, "phase") else 5
     state.phase = _RUST_PHASE_TO_PY.get(rust_phase, Phase.TRICK_PLAY)
 
-    state.hands = [[DECK[idx] for idx in gs.hand(p)] for p in range(4)]
+    state.hands = [[DECK[idx] for idx in gs.hand(p)] for p in range(n)]
 
     contract_u8 = gs.contract if hasattr(gs, "contract") else None
     state.contract = _RUST_U8_TO_PY_CONTRACT.get(contract_u8) if contract_u8 is not None else None
@@ -185,7 +187,7 @@ def _build_py_state_from_rust(
     state.kontra_levels = {}
     state.roles = {}
     role_map = {0: PlayerRole.DECLARER, 1: PlayerRole.PARTNER, 2: PlayerRole.OPPONENT}
-    for p in range(4):
+    for p in range(n):
         try:
             rust_role = gs.get_role(p)
             state.roles[p] = role_map.get(rust_role, PlayerRole.OPPONENT)
@@ -278,8 +280,10 @@ def _build_py_state_stub(
     state.declarer = declarer
     state.partner = getattr(gs, "partner", None)
     state.phase = Phase.FINISHED
-    state.num_players = 4
-    state.hands = [[DECK[idx] for idx in gs.hand(p)] for p in range(4)]
+    _np = getattr(gs, "num_players", 4)
+    n = int(_np() if callable(_np) else _np)
+    state.num_players = n
+    state.hands = [[DECK[idx] for idx in gs.hand(p)] for p in range(n)]
     state.tricks = list(completed_tricks)
     state.current_trick = None
     state.bids = list(bid_history)
@@ -295,7 +299,7 @@ def _build_py_state_stub(
 
     rust_role_map = {0: PlayerRole.DECLARER, 1: PlayerRole.PARTNER, 2: PlayerRole.OPPONENT}
     roles: dict[int, PlayerRole] = {}
-    for p in range(4):
+    for p in range(n):
         try:
             rust_role = gs.get_role(p) if hasattr(gs, "get_role") else 2
             roles[p] = rust_role_map.get(rust_role, PlayerRole.OPPONENT)

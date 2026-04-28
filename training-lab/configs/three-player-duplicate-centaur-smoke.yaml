@@ -1,0 +1,98 @@
+# ---------------------------------------------------------
+# 3-player Tarok — centaur (NN-only) smoke training config.
+#
+# Goal: a verified-runnable tiny config that exercises the full 3p
+# training stack end-to-end with the centaur seat token. Use this to
+# validate engine + model + PPO wiring before scaling up.
+#
+# Centaur in 3p:
+#   PIMC is now variant-aware (engine-rs/src/double_dummy.rs threads
+#   num_players/tricks_per_game through DDState) so the endgame solver
+#   fires from `centaur_handoff_trick` onward. Alpha-mu remains 4p-only
+#   and is rejected by the config validator in 3p.
+#   Bid/talon overrides route through the 3p variant of the
+#   StockSkis-v3 heuristic.
+#
+# Duplicate RL is intentionally DISABLED here. The duplicate pairing
+# pipeline (DuplicatePod, _render_seat_config, learner_position bounds,
+# numpy_iteration_stats validators) currently hardcodes 4-seat tuples
+# and 0..3 learner positions. Enabling 3p duplicate requires a
+# rotation_6game pairing variant + plumbing changes — tracked as
+# follow-up after this smoke run lands.
+#
+# Run:
+#   make train-new CONFIG=three-player-duplicate-centaur-smoke \
+#                  EXTRA="--iterations 1 --games 16"
+#
+# Expected: exits 0, writes a checkpoint, prints per-iteration stats.
+# ---------------------------------------------------------
+
+variant: three_player
+model_arch: v3p
+
+# 3 seats: learner (centaur token) + two 3p heuristic opponents.
+seats: "centaur,bot_m6_3p,bot_m6_3p"
+bench_seats: "nn,bot_m6_3p,bot_m6_3p"
+
+# Tiny smoke run.
+iterations: 1
+games: 16
+outplace_session_size: 4
+bench_games: 8
+benchmark_checkpoints: [0]
+
+# --- Core RL math ---
+gamma: 0.995
+gae_lambda: 0.98
+clip_epsilon: 0.2
+value_coef: 0.5
+
+explore_rate_schedule: constant
+explore_rate: 0.1
+
+ppo_epochs: 1
+batch_size: 256
+
+lr: 0.0003
+lr_schedule: constant
+
+entropy_coef: 0.01
+entropy_schedule: constant
+
+imitation_coef: 0.0
+
+concurrency: 4
+device: auto
+
+# v3p has the oracle critic head wired but for the smoke run we keep
+# it off to reduce surface area.
+oracle_critic: false
+
+iteration_runner_mode: inprocess
+
+# --- Centaur knobs ---
+# handoff_trick=12 → PIMC takes the last 4 of 16 tricks in 3p.
+centaur_handoff_trick: 12
+centaur_pimc_worlds: 1
+centaur_endgame_solver: pimc
+centaur_deterministic_seed: 1
+
+# --- League: minimum-viable for the smoke run ---
+# The training orchestrator hardcodes league.enabled=true. We use a tiny
+# 1-opponent league with initial calibration disabled so no extra
+# self-play games are run for elo seeding.
+league:
+  enabled: true
+  min_nn_per_game: 1
+  sampling: matchmaking
+  snapshot_interval: 100
+  snapshot_elo_delta: 50
+  max_active_snapshots: 0  # don't promote checkpoints during the smoke run
+  elo_outplace_unit_weight: 2
+  initial_calibration_enabled: false
+  opponents:
+    - name: M6_3P
+      type: bot_m6_3p
+
+duplicate:
+  enabled: false

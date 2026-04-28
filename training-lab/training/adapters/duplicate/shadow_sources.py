@@ -320,6 +320,7 @@ HEURISTIC_SHADOW_BOT_LABELS: frozenset[str] = frozenset({
     "bot_lustrek",
     "bot_v1",
     "bot_v3",
+    "bot_v3_3p",
     "bot_v5",
     "bot_v6",
     "bot_m6",

@@ -43,9 +43,9 @@ class DuplicatePod:
     """
 
     deck_seed: int
-    opponents: tuple[str, str, str]
-    active_seatings: tuple[tuple[str, str, str, str], ...]
-    shadow_seatings: tuple[tuple[str, str, str, str], ...]
+    opponents: tuple[str, ...]
+    active_seatings: tuple[tuple[str, ...], ...]
+    shadow_seatings: tuple[tuple[str, ...], ...]
     learner_positions: tuple[int, ...]
 
     def __post_init__(self) -> None:
@@ -61,15 +61,39 @@ class DuplicatePod:
             raise ValueError(
                 f"learner_positions ({n_pos}) must match active_seatings ({n_active})"
             )
+        # Seat count is inferred from the first seating; supports 3 or 4
+        # seats (FourPlayer / ThreePlayer variants).
+        if not self.active_seatings:
+            return
+        n_seats = len(self.active_seatings[0])
+        if n_seats not in (3, 4):
+            raise ValueError(f"seating must have 3 or 4 seats, got {n_seats}")
+        if len(self.opponents) != n_seats - 1:
+            raise ValueError(
+                f"opponents must have {n_seats - 1} entries for a {n_seats}-seat pod, "
+                f"got {len(self.opponents)}"
+            )
         for seating in self.active_seatings:
-            if len(seating) != 4:
-                raise ValueError(f"Each seating must have exactly 4 seats, got {len(seating)}")
+            if len(seating) != n_seats:
+                raise ValueError(
+                    f"Each seating must have exactly {n_seats} seats, got {len(seating)}"
+                )
         for seating in self.shadow_seatings:
-            if len(seating) != 4:
-                raise ValueError(f"Each seating must have exactly 4 seats, got {len(seating)}")
+            if len(seating) != n_seats:
+                raise ValueError(
+                    f"Each seating must have exactly {n_seats} seats, got {len(seating)}"
+                )
         for pos in self.learner_positions:
-            if not (0 <= pos < 4):
-                raise ValueError(f"learner_positions entries must be in 0..3, got {pos}")
+            if not (0 <= pos < n_seats):
+                raise ValueError(
+                    f"learner_positions entries must be in 0..{n_seats - 1}, got {pos}"
+                )
+
+    @property
+    def n_seats(self) -> int:
+        if not self.active_seatings:
+            return 4
+        return len(self.active_seatings[0])
 
     @property
     def n_games_per_group(self) -> int:

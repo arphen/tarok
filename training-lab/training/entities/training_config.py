@@ -14,6 +14,25 @@ from training.entities.duplicate_config import DuplicateConfig
 # Seat labels that represent learner agents (NN-backed, generate PPO experiences).
 LEARNER_SEAT_LABELS: frozenset[str] = frozenset({"nn", "centaur"})
 
+# Game variant identifiers. Matches the Rust `Variant` enum (game_state.rs).
+# A run is exactly one variant — the engine enforces this with a process-global
+# guard, so mixing 4-player and 3-player Tarok in the same training process
+# panics inside the Rust layer.
+VARIANT_FOUR_PLAYER: str = "four_player"
+VARIANT_THREE_PLAYER: str = "three_player"
+_VALID_VARIANTS: frozenset[str] = frozenset({VARIANT_FOUR_PLAYER, VARIANT_THREE_PLAYER})
+
+# Maps the YAML variant string to the integer kwarg the Rust engine's
+# `run_self_play` expects (matches the `Variant` enum: 0=4p, 1=3p).
+_VARIANT_TO_INT: dict[str, int] = {
+    VARIANT_FOUR_PLAYER: 0,
+    VARIANT_THREE_PLAYER: 1,
+}
+
+
+def variant_int(variant: str) -> int:
+    return _VARIANT_TO_INT[variant]
+
 
 @dataclass(frozen=True)
 class TrainingConfig:
@@ -75,6 +94,48 @@ class TrainingConfig:
     human_data_dir: str | None = None
     league: LeagueConfig | None = None
     duplicate: DuplicateConfig = field(default_factory=DuplicateConfig)
+    # Tarok variant for the run. ``"four_player"`` (default) is the legacy
+    # 4p game; ``"three_player"`` switches to *tarok v treh* — 3 seats, 16-card
+    # hands, no king-calling, contracts {Berac, SoloThree/Two/One, Valat,
+    # BarvniValat}. The Rust engine's variant guard means a single Python
+    # process must use exactly one variant. ``model_arch`` should be set to
+    # ``"v3p"`` when ``variant == "three_player"``.
+    variant: str = VARIANT_FOUR_PLAYER
+
+    def __post_init__(self) -> None:
+        if self.variant not in _VALID_VARIANTS:
+            raise ValueError(
+                f"variant={self.variant!r} is not one of {sorted(_VALID_VARIANTS)}"
+            )
+        # 3p sanity: seat count must be 3, and king-calling-related fields
+        # must be zero/None to surface misconfigurations early. ``centaur``
+        # is allowed only when the endgame solver is disabled by setting
+        # ``centaur_handoff_trick`` >= 16 (the engine enforces this too,
+        # but failing here gives a clearer config-time error).
+        if self.variant == VARIANT_THREE_PLAYER:
+            seat_count = len([s for s in self.seats.split(",") if s.strip()])
+            if seat_count != 3:
+                raise ValueError(
+                    f"three_player variant requires 3 seats, got {seat_count} "
+                    f"in seats={self.seats!r}"
+                )
+            uses_centaur = any(
+                tok.strip() == "centaur" for tok in self.seats.split(",")
+            )
+            if uses_centaur:
+                # PIMC was generalised to 3p (engine-rs/src/double_dummy.rs
+                # carries num_players through DDState). Alpha-mu remains
+                # 4p-only — block it explicitly so 3p configs can't pick it.
+                solver = getattr(self, "centaur_endgame_solver", "pimc")
+                if solver and solver != "pimc":
+                    handoff = getattr(self, "centaur_handoff_trick", None)
+                    if handoff is None or handoff < 16:
+                        raise ValueError(
+                            "three_player variant only supports 'pimc' as the "
+                            f"centaur endgame solver (got {solver!r}). To use a "
+                            "different solver disable it with "
+                            "centaur_handoff_trick >= 16."
+                        )
 
     def should_benchmark_initial(self) -> bool:
         return 0 in set(self.benchmark_checkpoints)

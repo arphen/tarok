@@ -5,6 +5,7 @@ description = "Slovenian Tarok game engine with self-play RL agents"
 license = "AGPL-3.0-or-later"
 requires-python = ">=3.12"
 dependencies = [
+    "tarok-engine",
     "tarok-model",
     "fastapi>=0.115",
     "uvicorn[standard]>=0.30",
@@ -151,4 +152,5 @@ dev = [
 ]
 
 [tool.uv.sources]
+tarok-engine = { path = "../engine-rs", editable = true }
 tarok-model = { path = "../model", editable = true }

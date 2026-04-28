@@ -166,6 +166,8 @@ pub fn pimc_choose_card_with_seed(
                 gs.tricks_played(),
                 gs.roles,
                 gs.contract,
+                gs.variant.num_players() as u8,
+                gs.variant.tricks_per_game() as u8,
             );
 
             let move_values =
@@ -217,6 +219,183 @@ fn objective_for_contract(contract: Option<Contract>) -> DDObjective {
         Some(Contract::Berac) => DDObjective::DeclarerTricks,
         _ => DDObjective::DeclarerTeamPoints,
     }
+}
+
+// -----------------------------------------------------------------------
+// Berač-specialised PIMC
+// -----------------------------------------------------------------------
+
+/// PIMC for the Berač declarer, using the survival solver in
+/// `double_dummy::berac_solve_all_moves` instead of full DD search.
+///
+/// For each world, each legal declarer move is scored as 1 if a surviving
+/// line exists after that move and 0 otherwise. Across worlds we sum those
+/// bits and return the declarer move that survives the most worlds.
+///
+/// The survival solver short-circuits the instant the declarer wins any
+/// trick in a given line — this is what makes full-hand Berač PIMC
+/// tractable even at trick 1 and very low `num_worlds`.
+///
+/// Deterministic when `base_seed` is supplied.
+pub fn pimc_berac_choose_card(
+    gs: &GameState,
+    viewer: u8,
+    num_worlds: u32,
+    base_seed: u64,
+) -> Card {
+    debug_assert!(
+        matches!(gs.contract, Some(Contract::Berac)),
+        "pimc_berac_choose_card called with non-Berač contract"
+    );
+    debug_assert_eq!(
+        gs.declarer, Some(viewer),
+        "Berač PIMC only makes sense for the declarer's own decisions"
+    );
+
+    let legal = {
+        let ctx = legal_moves::MoveCtx::from_state(gs, viewer);
+        legal_moves::generate_legal_moves(&ctx)
+    };
+    let legal_vec: Vec<Card> = legal.iter().collect();
+    debug_assert!(!legal_vec.is_empty());
+    if legal_vec.len() == 1 {
+        return legal_vec[0];
+    }
+
+    let constraints = detect_constraints(gs);
+    let mut legal_idx: [Option<usize>; DECK_SIZE] = [None; DECK_SIZE];
+    for (i, card) in legal_vec.iter().enumerate() {
+        legal_idx[card.0 as usize] = Some(i);
+    }
+    let n_legal = legal_vec.len();
+
+    let (survives, counts) = (0..num_worlds)
+        .into_par_iter()
+        .map(|world_i| {
+            let mut local_sur = vec![0u32; n_legal];
+            let mut local_cnt = vec![0u32; n_legal];
+            let mut rng = SmallRng::seed_from_u64(
+                base_seed ^ (world_i as u64).wrapping_mul(0x9E37_79B9_7F4A_7C15),
+            );
+
+            let sampled_hands = match sample_world(gs, viewer, &constraints, &mut rng) {
+                Some(h) => h,
+                None => return (local_sur, local_cnt),
+            };
+
+            let dd_state = DDState::new(
+                sampled_hands,
+                gs.current_trick.as_ref(),
+                gs.current_player,
+                gs.tricks_played(),
+                gs.roles,
+                gs.contract,
+                gs.variant.num_players() as u8,
+                gs.variant.tricks_per_game() as u8,
+            );
+
+            let move_values = double_dummy::berac_solve_all_moves(&dd_state, viewer);
+            for (card, val) in &move_values {
+                if let Some(idx) = legal_idx[card.0 as usize] {
+                    local_sur[idx] += *val as u32;
+                    local_cnt[idx] += 1;
+                }
+            }
+            (local_sur, local_cnt)
+        })
+        .reduce(
+            || (vec![0u32; n_legal], vec![0u32; n_legal]),
+            |mut a, b| {
+                for i in 0..n_legal {
+                    a.0[i] += b.0[i];
+                    a.1[i] += b.1[i];
+                }
+                a
+            },
+        );
+
+    // Pick card that survives the highest fraction of worlds.
+    let best_idx = (0..n_legal)
+        .max_by(|&a, &b| {
+            let fa = if counts[a] > 0 { survives[a] as f64 / counts[a] as f64 } else { f64::NEG_INFINITY };
+            let fb = if counts[b] > 0 { survives[b] as f64 / counts[b] as f64 } else { f64::NEG_INFINITY };
+            fa.partial_cmp(&fb).unwrap_or(std::cmp::Ordering::Equal)
+        })
+        .unwrap();
+
+    legal_vec[best_idx]
+}
+
+/// Return `(card, survival_count, world_count)` per legal declarer move.
+/// Exposed for scripts that want to inspect the per-card vote distribution.
+pub fn pimc_berac_survival_votes(
+    gs: &GameState,
+    viewer: u8,
+    num_worlds: u32,
+    base_seed: u64,
+) -> Vec<(Card, u32, u32)> {
+    let legal = {
+        let ctx = legal_moves::MoveCtx::from_state(gs, viewer);
+        legal_moves::generate_legal_moves(&ctx)
+    };
+    let legal_vec: Vec<Card> = legal.iter().collect();
+    let n_legal = legal_vec.len();
+    if n_legal == 0 {
+        return Vec::new();
+    }
+    let constraints = detect_constraints(gs);
+    let mut legal_idx: [Option<usize>; DECK_SIZE] = [None; DECK_SIZE];
+    for (i, card) in legal_vec.iter().enumerate() {
+        legal_idx[card.0 as usize] = Some(i);
+    }
+
+    let (survives, counts) = (0..num_worlds)
+        .into_par_iter()
+        .map(|world_i| {
+            let mut local_sur = vec![0u32; n_legal];
+            let mut local_cnt = vec![0u32; n_legal];
+            let mut rng = SmallRng::seed_from_u64(
+                base_seed ^ (world_i as u64).wrapping_mul(0x9E37_79B9_7F4A_7C15),
+            );
+            let sampled_hands = match sample_world(gs, viewer, &constraints, &mut rng) {
+                Some(h) => h,
+                None => return (local_sur, local_cnt),
+            };
+            let dd_state = DDState::new(
+                sampled_hands,
+                gs.current_trick.as_ref(),
+                gs.current_player,
+                gs.tricks_played(),
+                gs.roles,
+                gs.contract,
+                gs.variant.num_players() as u8,
+                gs.variant.tricks_per_game() as u8,
+            );
+            let move_values = double_dummy::berac_solve_all_moves(&dd_state, viewer);
+            for (card, val) in &move_values {
+                if let Some(idx) = legal_idx[card.0 as usize] {
+                    local_sur[idx] += *val as u32;
+                    local_cnt[idx] += 1;
+                }
+            }
+            (local_sur, local_cnt)
+        })
+        .reduce(
+            || (vec![0u32; n_legal], vec![0u32; n_legal]),
+            |mut a, b| {
+                for i in 0..n_legal {
+                    a.0[i] += b.0[i];
+                    a.1[i] += b.1[i];
+                }
+                a
+            },
+        );
+
+    legal_vec
+        .into_iter()
+        .enumerate()
+        .map(|(i, c)| (c, survives[i], counts[i]))
+        .collect()
 }
 
 // -----------------------------------------------------------------------

@@ -311,3 +311,29 @@ def test_missing_precomputed_rewards_uses_legacy_path() -> None:
     out = prepare_batched(raw, gamma=1.0, gae_lambda=1.0)
     returns = out["vad"][:, 2].numpy()
     assert returns == pytest.approx(np.full(n, 0.80), abs=1e-6)
+
+
+def test_reward_scores_overrides_scores_for_reward_extraction() -> None:
+    """When ``reward_scores`` is present in raw, it replaces ``scores`` as the
+    reward source while leaderboard ``scores`` stays untouched.
+
+    This is the entry point for the non-zero-sum training signal produced by
+    ``scoring::score_game_reward`` on the Rust side: defenders receive a
+    negative reward when the declarer wins, so their gradient is non-trivial.
+    """
+    n = 2
+    game_ids = np.zeros(n, dtype=np.int64)
+    # Seat 0 = declarer, seat 2 = defender.
+    players = np.array([0, 2], dtype=np.int8)
+    scores = np.array([[80.0, 0.0, 0.0, 0.0]], dtype=np.float32)  # leaderboard
+    reward_scores = np.array([[80.0, 0.0, -30.0, -30.0]], dtype=np.float32)
+    values = np.zeros(n, dtype=np.float32)
+
+    raw = _make_raw(n, game_ids=game_ids, players=players, scores=scores, values=values)
+    raw["reward_scores"] = reward_scores
+
+    out = prepare_batched(raw, gamma=1.0, gae_lambda=1.0)
+    returns = out["vad"][:, 2].numpy()
+    # Per-seat reward: 80/100 for declarer, −30/100 for the defender.
+    assert returns[0] == pytest.approx(0.80, abs=1e-6)
+    assert returns[1] == pytest.approx(-0.30, abs=1e-6)

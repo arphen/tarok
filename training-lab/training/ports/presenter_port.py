@@ -44,7 +44,7 @@ class PresenterPort(ABC):
     @abstractmethod
     def on_selfplay_done(self, n_total: int, n_learner: int, elapsed: float) -> None: ...
 
-    def on_learner_contract_stats(self, stats: dict[str, dict[str, int]]) -> None:
+    def on_learner_contract_stats(self, stats: dict[str, dict[str, float | int]]) -> None:
         """Called after self-play with per-contract learner bid/win diagnostics. Optional."""
 
     @abstractmethod

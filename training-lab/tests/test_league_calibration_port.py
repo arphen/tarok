@@ -31,9 +31,11 @@ class _FakeSelfPlay:
         include_oracle_states: bool = False,
         lapajne_mc_worlds=None,
         lapajne_mc_sims=None,
+        variant: int = 0,
     ):
         del model_path, n_games, explore_rate, concurrency
         del include_replay_data, include_oracle_states, lapajne_mc_worlds, lapajne_mc_sims
+        del variant
         self.calls.append(seat_config)
         seat0 = seat_config.split(",", 1)[0]
         return {"scores": self._scores.get(seat0, self._scores["__default__"])}

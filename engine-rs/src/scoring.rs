@@ -109,7 +109,35 @@ pub fn score_game(state: &GameState) -> [i32; NUM_PLAYERS] {
         Contract::Klop => score_klop(state),
         Contract::Berac => score_berac(state),
         Contract::BarvniValat => score_barvni_valat(state),
+        // Valat as a *contract* (3p only — in 4p it stays an announcement that
+        // rides on top of another contract). All-or-nothing on declarer winning
+        // every trick. Loses to the announced-Valat case which gives 500.
+        Contract::Valat => score_valat_contract(state),
         _ => score_normal(state, contract),
+    }
+}
+
+/// Compute per-player **training reward** signals (separate from leaderboard
+/// scoring). The leaderboard scoring in [`score_game`] is locked at
+/// "opponents=0"; this function produces a non-zero-sum reward signal so the
+/// RL agent learns to defend actively instead of coasting to a guaranteed 0.
+///
+/// See [`score_normal_reward`] for the per-seat formula. For solo contracts
+/// (Berač / Solo* / Barvni-valat) the declarer/partner split does not apply
+/// (no partner on the declarer's team), so defenders receive ``−declarer_score``
+/// directly. Klop is unchanged — every seat already has a meaningful per-player
+/// score.
+pub fn score_game_reward(state: &GameState) -> [i32; NUM_PLAYERS] {
+    let contract = state
+        .contract
+        .expect("score_game_reward called without contract");
+
+    match contract {
+        Contract::Klop => score_klop(state),
+        Contract::Berac => score_berac_reward(state),
+        Contract::BarvniValat => score_barvni_valat_reward(state),
+        Contract::Valat => score_valat_contract_reward(state),
+        _ => score_normal_reward(state, contract),
     }
 }
 
@@ -128,8 +156,9 @@ fn score_klop(state: &GameState) -> [i32; NUM_PLAYERS] {
         player_tricks_won[w] += 1;
     }
 
+    let n = state.num_players();
     let mut scores = [0i32; NUM_PLAYERS];
-    for p in 0..NUM_PLAYERS {
+    for p in 0..n {
         if player_points[p] > POINT_HALF {
             scores[p] = -TOTAL_GAME_POINTS;
         } else if player_tricks_won[p] == 0 {
@@ -138,6 +167,7 @@ fn score_klop(state: &GameState) -> [i32; NUM_PLAYERS] {
             scores[p] = -player_points[p];
         }
     }
+    // Phantom seat 3 in 3p stays at 0.
     scores
 }
 
@@ -156,6 +186,21 @@ fn score_berac(state: &GameState) -> [i32; NUM_PLAYERS] {
     scores
 }
 
+/// Reward signal for Berač: defenders receive ``−declarer_score`` so losing to
+/// a declarer-won Berač produces a punishing signal (and defeating a Berač
+/// produces a positive signal).
+fn score_berac_reward(state: &GameState) -> [i32; NUM_PLAYERS] {
+    let scores = score_berac(state);
+    let declarer = state.declarer.expect("berac without declarer") as usize;
+    let defender_reward = -scores[declarer];
+    let n = state.num_players();
+    let mut out = [0i32; NUM_PLAYERS];
+    for p in 0..n {
+        out[p] = if p == declarer { scores[declarer] } else { defender_reward };
+    }
+    out
+}
+
 fn score_barvni_valat(state: &GameState) -> [i32; NUM_PLAYERS] {
     let declarer = state.declarer.expect("barvni_valat without declarer") as usize;
     let winners = trick_winners(state);
@@ -172,8 +217,41 @@ fn score_barvni_valat(state: &GameState) -> [i32; NUM_PLAYERS] {
     scores
 }
 
-fn score_normal(state: &GameState, contract: Contract) -> [i32; NUM_PLAYERS] {
-    let _declarer = state.declarer.expect("normal game without declarer");
+/// Reward signal for Barvni-valat: defenders receive ``−declarer_score``.
+fn score_barvni_valat_reward(state: &GameState) -> [i32; NUM_PLAYERS] {
+    let scores = score_barvni_valat(state);
+    let declarer = state.declarer.expect("barvni_valat without declarer") as usize;
+    let defender_reward = -scores[declarer];
+    let n = state.num_players();
+    let mut out = [0i32; NUM_PLAYERS];
+    for p in 0..n {
+        out[p] = if p == declarer { scores[declarer] } else { defender_reward };
+    }
+    out
+}
+
+/// Intermediate quantities produced by the normal-game scoring pipeline, before
+/// seat-level distribution. Used by both [`score_normal`] (leaderboard scoring)
+/// and [`score_normal_reward`] (training reward signal) so the core scoring
+/// math is computed exactly once.
+#[allow(dead_code)]
+struct NormalTotals {
+    /// Signed total for the declarer seat (contract + diff + bonuses, or valat).
+    total_declarer: i32,
+    /// Signed contract-base component (included in `total_declarer`). Zero when
+    /// valat is achieved (valat replaces all scoring including the contract).
+    /// Currently kept for documentation / future callers; the reward
+    /// distribution uses `partner_total` which already accounts for the split.
+    contract_base: i32,
+    /// Signed total for the partner seat (``total_declarer - contract_base``
+    /// outside valat; equals ``total_declarer`` when valat is achieved).
+    partner_total: i32,
+    declarer_won: bool,
+    declarer_idx: usize,
+    valat_achieved: bool,
+}
+
+fn compute_normal_totals(state: &GameState, contract: Contract) -> NormalTotals {
     let winners = trick_winners(state);
     let (decl_card_set, opp_card_set) = collect_team_cards(state, &winners);
 
@@ -199,7 +277,9 @@ fn score_normal(state: &GameState, contract: Contract) -> [i32; NUM_PLAYERS] {
     // play actively instead of coasting on the contract base.
     let sign = if declarer_won { 1 } else { -1 };
     let km_game = state.kontra_multiplier(KontraTarget::Game);
-    let contract_base = sign * contract.base_value() * km_game;
+    // Variant-aware contract base value. 3p uses a compressed table
+    // (see Contract::base_value_for in game_state.rs).
+    let contract_base = sign * contract.base_value_for(state.variant) * km_game;
     let point_diff_score = sign * point_diff * km_game;
     let base_score = contract_base + point_diff_score;
 
@@ -337,15 +417,102 @@ fn score_normal(state: &GameState, contract: Contract) -> [i32; NUM_PLAYERS] {
     } else {
         total_declarer - contract_base
     };
-    let mut scores = [0i32; NUM_PLAYERS];
     let declarer_idx = state.declarer.expect("normal game without declarer") as usize;
+    NormalTotals {
+        total_declarer,
+        contract_base: if valat_achieved { 0 } else { contract_base },
+        partner_total,
+        declarer_won,
+        declarer_idx,
+        valat_achieved,
+    }
+}
+
+fn score_normal(state: &GameState, contract: Contract) -> [i32; NUM_PLAYERS] {
+    let t = compute_normal_totals(state, contract);
+    let mut scores = [0i32; NUM_PLAYERS];
     for p in 0..NUM_PLAYERS {
         if state.get_team(p as u8) != Team::DeclarerTeam {
             continue;
         }
-        scores[p] = if p == declarer_idx { total_declarer } else { partner_total };
+        scores[p] = if p == t.declarer_idx {
+            t.total_declarer
+        } else {
+            t.partner_total
+        };
     }
     scores
+}
+
+/// Reward-signal distribution for normal games.
+///
+/// Unlike [`score_normal`] (leaderboard scoring where opponents get 0), this
+/// function produces a training reward signal that punishes the defender seats
+/// when the declarer wins and rewards them when the declarer fails. See
+/// `.github/copilot-instructions.md` — the *leaderboard* scoring is locked at
+/// opponents=0; this is a separate signal fed only into the RL optimizer.
+///
+/// Per-seat reward (let `total = total_declarer`, `C = contract_base`):
+/// - Declarer: `total`
+/// - Partner:  `total − C`  (same as leaderboard)
+/// - Each defender:
+///     - declarer won  → `−(total − C)` = ``−partner_total``
+///     - declarer lost → `−total`
+///
+/// Valat: `C` is 0 in that branch, so the two cases collapse to
+/// `defender = −total_declarer`, which is the intended symmetry (the full valat
+/// magnitude flows to both sides).
+fn score_normal_reward(state: &GameState, contract: Contract) -> [i32; NUM_PLAYERS] {
+    let t = compute_normal_totals(state, contract);
+    let defender_reward = if t.declarer_won {
+        -t.partner_total
+    } else {
+        -t.total_declarer
+    };
+    let n = state.num_players();
+    let mut scores = [0i32; NUM_PLAYERS];
+    for p in 0..n {
+        if state.get_team(p as u8) == Team::DeclarerTeam {
+            scores[p] = if p == t.declarer_idx {
+                t.total_declarer
+            } else {
+                t.partner_total
+            };
+        } else {
+            scores[p] = defender_reward;
+        }
+    }
+    scores
+}
+
+/// Valat as a *bid contract* (3-player only). All-or-nothing: declarer must
+/// win every trick. Distinct from the announced-Valat bonus that rides on top
+/// of a normal contract (handled inside `compute_normal_totals`). Mirrors
+/// `score_barvni_valat` structurally; uses `Contract::Valat.base_value_for(variant)`.
+fn score_valat_contract(state: &GameState) -> [i32; NUM_PLAYERS] {
+    let declarer = state.declarer.expect("valat without declarer") as usize;
+    let winners = trick_winners(state);
+    let mut base = Contract::Valat.base_value_for(state.variant);
+    let all_won = winners.iter().all(|&w| w as usize == declarer);
+    if !all_won {
+        base = -base;
+    }
+    base *= state.kontra_multiplier(KontraTarget::Game);
+    let mut scores = [0i32; NUM_PLAYERS];
+    scores[declarer] = base;
+    scores
+}
+
+fn score_valat_contract_reward(state: &GameState) -> [i32; NUM_PLAYERS] {
+    let scores = score_valat_contract(state);
+    let declarer = state.declarer.expect("valat without declarer") as usize;
+    let defender_reward = -scores[declarer];
+    let n = state.num_players();
+    let mut out = [0i32; NUM_PLAYERS];
+    for p in 0..n {
+        out[p] = if p == declarer { scores[declarer] } else { defender_reward };
+    }
+    out
 }
 
 // -----------------------------------------------------------------------
@@ -401,6 +568,7 @@ fn contract_label(c: Contract) -> &'static str {
         Contract::Solo => "Solo",
         Contract::Berac => "Berač",
         Contract::BarvniValat => "Barvni Valat",
+        Contract::Valat => "Valat",
     }
 }
 

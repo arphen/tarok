@@ -66,7 +66,8 @@ def _build_card_tracker(state: GameState) -> dict:
 
     # Track voids and tarok range per opponent
     player_info: dict[int, dict] = {}
-    for p in range(4):
+    n_players = len(state.hands) if state.hands else 4
+    for p in range(n_players):
         if p == 0:
             continue  # skip human
 
@@ -189,8 +190,10 @@ def _state_for_player(
             callable_kings = [_card_to_dict(k) for k in state.callable_kings()]
     elif state.phase == Phase.TALON_EXCHANGE and is_current:
         if state.contract and state.contract.talon_cards > 0:
-            if len(state.hands[player_idx]) > 12:
-                must_discard = len(state.hands[player_idx]) - 12
+            n_players = len(state.hands) if state.hands else 4
+            base_hand_size = 16 if n_players == 3 else 12
+            if len(state.hands[player_idx]) > base_hand_size:
+                must_discard = len(state.hands[player_idx]) - base_hand_size
     elif state.phase == Phase.TRICK_PLAY and is_current:
         if hasattr(state, "legal_plays") and callable(getattr(state, "legal_plays", None)):
             legal_plays = [_card_to_dict(c) for c in state.legal_plays(player_idx)]

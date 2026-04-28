@@ -142,7 +142,10 @@ def _default_iteration_runner(
             pairing=config.duplicate.pairing,
             max_opponent_triplets=config.duplicate.max_opponent_triplets,
         )
-        duplicate_reward = ShadowScoreRewardAdapter()
+        duplicate_reward = ShadowScoreRewardAdapter(
+            negative_reward_multiplier=config.duplicate.negative_reward_multiplier,
+            berac_bid_penalty=config.duplicate.berac_bid_penalty,
+        )
         duplicate_shadow_source = create_shadow_source(
             config.duplicate.shadow_source,
             rng_seed=config.duplicate.rng_seed,

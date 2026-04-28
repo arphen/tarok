@@ -28,6 +28,7 @@ class SelfPlayPort(ABC):
         centaur_endgame_solver: str | None = None,
         centaur_alpha_mu_depth: int | None = None,
         centaur_deterministic_seed: int | None = None,
+        variant: int = 0,
     ) -> dict[str, Any]:
         """Run self-play games, return raw experience dict."""
 
@@ -62,6 +63,7 @@ class SelfPlayPort(ABC):
         centaur_endgame_solver: str | None = None,
         centaur_alpha_mu_depth: int | None = None,
         centaur_deterministic_seed: int | None = None,
+        variant: int = 0,
     ) -> "DuplicateRunResult":
         """Run a batch of duplicate pods deterministically.
 

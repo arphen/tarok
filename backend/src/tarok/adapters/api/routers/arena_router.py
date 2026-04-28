@@ -34,11 +34,36 @@ _arena_progress: dict | None = None
 
 
 class ArenaRequest(BaseModel):
-    agents: list[dict]  # [{name, type, checkpoint?}] — exactly 4
+    agents: list[dict]  # [{name, type, checkpoint?}] — must equal n_seats for variant
     total_games: int = 100000
     session_size: int = 50  # games per session for progress tracking
+    variant: str | None = None  # "four_player" | "three_player" | None (auto-detect)
     lapajne_mc_worlds: int | None = None
     lapajne_mc_sims: int | None = None
+    # Centaur (hybrid NN + endgame solver) knobs. All optional — the Rust
+    # engine substitutes defaults when None. These are ignored unless at
+    # least one seat has ``type: centaur``.
+    centaur_handoff_trick: int | None = None
+    centaur_pimc_worlds: int | None = None
+    centaur_endgame_solver: str | None = None
+    centaur_alpha_mu_depth: int | None = None
+
+
+def _checkpoint_variant(path: Path | str) -> str | None:
+    """Read a checkpoint's ``model_arch`` and return its variant token.
+
+    Returns ``"three_player"`` for ``model_arch == "v3p"``,
+    ``"four_player"`` for any other recognized arch, ``None`` if the
+    checkpoint cannot be read.
+    """
+    try:
+        import torch as _torch
+
+        meta = _torch.load(str(path), map_location="cpu", weights_only=False)
+        arch = meta.get("model_arch", "v4")
+        return "three_player" if arch == "v3p" else "four_player"
+    except Exception:
+        return None
 
 
 # ---- Endpoints ----
@@ -95,9 +120,58 @@ async def start_arena(req: ArenaRequest):
 
     total = max(1, min(req.total_games, 500_000))
     session_size = max(1, min(req.session_size, 1000))
-    agent_configs = req.agents[:4]
-    while len(agent_configs) < 4:
-        agent_configs.append({"name": f"StockŠkis-{len(agent_configs)}", "type": "stockskis"})
+
+    # ---- Variant resolution -------------------------------------------------
+    # Pre-resolve any RL/centaur checkpoints to detect their variant. Mixing
+    # 3p and 4p checkpoints in one arena is a hard error.
+    detected_variants: set[str] = set()
+    pre_resolved: dict[int, str] = {}
+    for i, cfg in enumerate(req.agents):
+        atype = str(cfg.get("type", "stockskis")).strip().lower()
+        if atype not in ("rl", "centaur", "stockskis_centaur"):
+            continue
+        ckpt = str(cfg.get("checkpoint", "") or "").strip()
+        if not ckpt:
+            continue
+        path = resolve_checkpoint(ckpt)
+        if path is None:
+            continue
+        v = _checkpoint_variant(path)
+        if v is not None:
+            detected_variants.add(v)
+            pre_resolved[i] = str(path)
+
+    if len(detected_variants) > 1:
+        return {
+            "status": "error",
+            "message": (
+                "Cannot mix 3-player and 4-player checkpoints in the same arena: "
+                f"detected variants {sorted(detected_variants)}."
+            ),
+        }
+
+    if req.variant in ("three_player", "four_player"):
+        variant = req.variant
+        if detected_variants and variant not in detected_variants:
+            return {
+                "status": "error",
+                "message": (
+                    f"Requested variant '{variant}' does not match checkpoint variant "
+                    f"'{next(iter(detected_variants))}'."
+                ),
+            }
+    elif detected_variants:
+        variant = next(iter(detected_variants))
+    else:
+        variant = "four_player"
+
+    n_seats = 3 if variant == "three_player" else 4
+    variant_int = 1 if variant == "three_player" else 0
+    default_filler_type = "stockskis_v3_3p" if variant == "three_player" else "stockskis"
+
+    agent_configs = list(req.agents[:n_seats])
+    while len(agent_configs) < n_seats:
+        agent_configs.append({"name": f"Bot-{len(agent_configs)}", "type": default_filler_type})
 
     seat_labels = []
     agent_names = []
@@ -112,9 +186,14 @@ async def start_arena(req: ArenaRequest):
         if label is None:
             return {
                 "status": "error",
-                "message": f"Agent '{aname}' type '{atype}' is not supported. Use stockskis / stockskis_lapajne / stockskis_v5 / stockskis_v6 / stockskis_m6 / stockskis_m8 / stockskis_pozrl / stockskis_lustrek / rl.",
+                "message": f"Agent '{aname}' type '{atype}' is not supported. Use stockskis / stockskis_lapajne / stockskis_v5 / stockskis_v6 / stockskis_m6 / stockskis_m8 / stockskis_pozrl / stockskis_lustrek / centaur / rl.",
             }
-        if label == "nn":
+        # Both "nn" (pure neural net) and "centaur" (NN + endgame solver)
+        # require a loaded checkpoint. Treat them uniformly for the
+        # checkpoint-resolution step; the seat label propagated into
+        # ``seat_config`` is what tells the Rust engine which player to
+        # instantiate.
+        if label in ("nn", "centaur"):
             has_nn = True
             ckpt = cfg.get("checkpoint", "")
             if ckpt:
@@ -156,11 +235,23 @@ async def start_arena(req: ArenaRequest):
             seat_config=seat_config,
             has_nn=has_nn,
             ts_model_path=ts_model_path,
+            variant=variant,
+            n_seats=n_seats,
+            variant_int=variant_int,
             lapajne_mc_worlds=req.lapajne_mc_worlds,
             lapajne_mc_sims=req.lapajne_mc_sims,
+            centaur_handoff_trick=req.centaur_handoff_trick,
+            centaur_pimc_worlds=req.centaur_pimc_worlds,
+            centaur_endgame_solver=req.centaur_endgame_solver,
+            centaur_alpha_mu_depth=req.centaur_alpha_mu_depth,
         )
     )
-    return {"status": "started", "total_games": total, "session_size": session_size}
+    return {
+        "status": "started",
+        "total_games": total,
+        "session_size": session_size,
+        "variant": variant,
+    }
 
 
 # ---- Run loop ----
@@ -176,8 +267,15 @@ async def _run_arena(  # noqa: PLR0913
     seat_config: str,
     has_nn: bool,
     ts_model_path: str | None,
+    variant: str = "four_player",
+    n_seats: int = 4,
+    variant_int: int = 0,
     lapajne_mc_worlds: int | None,
     lapajne_mc_sims: int | None,
+    centaur_handoff_trick: int | None = None,
+    centaur_pimc_worlds: int | None = None,
+    centaur_endgame_solver: str | None = None,
+    centaur_alpha_mu_depth: int | None = None,
 ) -> None:
     global _arena_progress
 
@@ -189,7 +287,10 @@ async def _run_arena(  # noqa: PLR0913
         _arena_progress["status"] = "error"
         return
 
-    player_stats = [_empty_player_stats(agent_names[i], agent_types_raw[i]) for i in range(4)]
+    player_stats = [
+        _empty_player_stats(agent_names[i], agent_types_raw[i], n_seats=n_seats)
+        for i in range(n_seats)
+    ]
     contract_stats: dict = {}
     taroks_per_contract: dict = {}
     notable_games: dict = {
@@ -200,21 +301,21 @@ async def _run_arena(  # noqa: PLR0913
         "by_contract": {},
     }
     games_done = 0
-    session_scores = [0, 0, 0, 0]
+    session_scores = [0] * n_seats
     games_in_session = 0
 
     def _flush_session() -> None:
         nonlocal session_scores, games_in_session
-        indexed = sorted(range(4), key=lambda p: session_scores[p], reverse=True)
+        indexed = sorted(range(n_seats), key=lambda p: session_scores[p], reverse=True)
         for rank_idx, pid in enumerate(indexed):
             place = rank_idx + 1
             player_stats[pid]["placements"][place] += 1
             player_stats[pid]["placement_sum"] += place
             if place == 1:
                 player_stats[pid]["wins"] += 1.0
-        for pid in range(4):
+        for pid in range(n_seats):
             player_stats[pid]["score_history"].append(session_scores[pid])
-        session_scores[:] = [0, 0, 0, 0]
+        session_scores[:] = [0] * n_seats
         games_in_session = 0
 
     def _accumulate_scores(
@@ -222,7 +323,7 @@ async def _run_arena(  # noqa: PLR0913
     ) -> None:
         nonlocal games_in_session, session_scores
 
-        for pid in range(4):
+        for pid in range(n_seats):
             col = scores[:, pid]
             ps = player_stats[pid]
             ps["total_score"] += int(col.sum())
@@ -263,7 +364,7 @@ async def _run_arena(  # noqa: PLR0913
             remaining = session_size - games_in_session
             chunk_end = min(batch_offset + remaining, n_batch)
             chunk = scores[batch_offset:chunk_end]
-            for pid in range(4):
+            for pid in range(n_seats):
                 session_scores[pid] += int(chunk[:, pid].sum())
             games_in_session += chunk_end - batch_offset
             batch_offset = chunk_end
@@ -287,7 +388,7 @@ async def _run_arena(  # noqa: PLR0913
         )
 
         if taroks_in_hand is not None:
-            for pid in range(4):
+            for pid in range(n_seats):
                 player_stats[pid]["taroks_in_hand_total"] += int(taroks_in_hand[:, pid].sum())
                 player_stats[pid]["taroks_in_hand_count"] += n_batch
 
@@ -306,7 +407,7 @@ async def _run_arena(  # noqa: PLR0913
                     taroks_per_contract[cname]["total_taroks"] += int(nk_taroks[c_mask].sum())
                     taroks_per_contract[cname]["count"] += int(c_mask.sum())
 
-                for pid in range(4):
+                for pid in range(n_seats):
                     pid_mask = nk_decl == pid
                     if not pid_mask.any():
                         continue
@@ -322,7 +423,7 @@ async def _run_arena(  # noqa: PLR0913
                         ptpc[cname]["count"] += int(c_mask.sum())
 
         if bid_contracts is not None:
-            for pid in range(4):
+            for pid in range(n_seats):
                 bids_col = bid_contracts[:, pid]
                 valid_mask = bids_col >= 0
                 if valid_mask.any():
@@ -363,7 +464,7 @@ async def _run_arena(  # noqa: PLR0913
 
             def_total_arr = nk_scores.sum(axis=1) - decl_scores_arr - partner_scores_arr
 
-            for pid in range(4):
+            for pid in range(n_seats):
                 ps = player_stats[pid]
                 is_decl = nk_decl == pid
                 ps["bid_won_count"] += int(is_decl.sum())
@@ -482,8 +583,13 @@ async def _run_arena(  # noqa: PLR0913
     # Lapajne uses per-move MCTS and is much slower than heuristic baselines;
     # keep batches small so progress updates frequently and the UI doesn't look frozen.
     has_lapajne = any(label == "bot_lapajne" for label in seat_config.split(","))
+    has_centaur = any(label == "centaur" for label in seat_config.split(","))
     if has_lapajne:
         batch_cap = 250
+    elif has_centaur:
+        # Centaur runs PIMC / alpha-mu per late-game decision; it's
+        # CPU-heavy, so keep batches modest and progress responsive.
+        batch_cap = 500
     elif has_nn:
         batch_cap = 2_000
     else:
@@ -505,6 +611,11 @@ async def _run_arena(  # noqa: PLR0913
                     include_replay_data=True,
                     lapajne_mc_worlds=lapajne_mc_worlds,
                     lapajne_mc_sims=lapajne_mc_sims,
+                    centaur_handoff_trick=centaur_handoff_trick,
+                    centaur_pimc_worlds=centaur_pimc_worlds,
+                    centaur_endgame_solver=centaur_endgame_solver,
+                    centaur_alpha_mu_depth=centaur_alpha_mu_depth,
+                    variant=variant_int,
                 ),
             )
 
@@ -549,13 +660,13 @@ async def _run_arena(  # noqa: PLR0913
             "analytics": _current_analytics(),
         }
         _arena_progress = {**payload, "total_games": total}
-        arena_history.persist_run(agent_configs, total, session_size, payload)
+        arena_history.persist_run(agent_configs, total, session_size, payload, variant=variant)
         return
     except Exception:
         log.exception("Arena failed at game %d/%d", games_done, total)
         payload = {"status": "error", "games_done": games_done, "analytics": _current_analytics()}
         _arena_progress = {**payload, "total_games": total}
-        arena_history.persist_run(agent_configs, total, session_size, payload)
+        arena_history.persist_run(agent_configs, total, session_size, payload, variant=variant)
         return
     finally:
         if ts_model_path:
@@ -566,19 +677,19 @@ async def _run_arena(  # noqa: PLR0913
 
     payload = {"status": "done", "games_done": games_done, "analytics": _current_analytics()}
     _arena_progress = {**payload, "total_games": total}
-    arena_history.persist_run(agent_configs, total, session_size, payload)
+    arena_history.persist_run(agent_configs, total, session_size, payload, variant=variant)
 
 
 # ---- Helpers ----
 
 
-def _empty_player_stats(name: str, agent_type: str) -> dict:
+def _empty_player_stats(name: str, agent_type: str, n_seats: int = 4) -> dict:
     return {
         "name": name,
         "type": agent_type,
         "total_score": 0,
         "games_played": 0,
-        "placements": {1: 0, 2: 0, 3: 0, 4: 0},
+        "placements": {p: 0 for p in range(1, n_seats + 1)},
         "placement_sum": 0.0,
         "wins": 0.0,
         "positive_games": 0,
@@ -626,10 +737,13 @@ class DuplicateArenaRequest(BaseModel):
     defender: str
     boards: int = 1000
     seed: int = 0
-    pairing: str = "rotation_8game"  # rotation_8game | rotation_4game | single_seat_2game
+    pairing: str = (
+        "rotation_8game"  # rotation_8game | rotation_4game | single_seat_2game | rotation_6game
+    )
     explore_rate: float = 0.0
     concurrency: int = 1
     bootstrap_samples: int = 1000
+    variant: str | None = None  # auto-detected from challenger/defender if omitted
 
 
 @router.get("/duplicate/history")
@@ -675,7 +789,12 @@ async def start_duplicate_arena(req: DuplicateArenaRequest):
 
     if req.boards <= 0:
         return {"status": "error", "message": "boards must be > 0"}
-    if req.pairing not in ("rotation_8game", "rotation_4game", "single_seat_2game"):
+    if req.pairing not in (
+        "rotation_8game",
+        "rotation_4game",
+        "single_seat_2game",
+        "rotation_6game",
+    ):
         return {"status": "error", "message": f"unsupported pairing: {req.pairing}"}
 
     challenger_path = resolve_checkpoint(req.challenger)
@@ -684,6 +803,46 @@ async def start_duplicate_arena(req: DuplicateArenaRequest):
         return {"status": "error", "message": f"challenger checkpoint not found: {req.challenger}"}
     if defender_path is None:
         return {"status": "error", "message": f"defender checkpoint not found: {req.defender}"}
+
+    # Variant must match between challenger and defender, and must agree with
+    # the requested pairing (rotation_6game ⇔ 3p; everything else ⇔ 4p).
+    ch_variant = _checkpoint_variant(challenger_path)
+    de_variant = _checkpoint_variant(defender_path)
+    if ch_variant and de_variant and ch_variant != de_variant:
+        return {
+            "status": "error",
+            "message": (
+                f"Challenger ({ch_variant}) and defender ({de_variant}) must "
+                "share the same variant."
+            ),
+        }
+    detected = ch_variant or de_variant
+    if req.variant in ("three_player", "four_player"):
+        variant = req.variant
+        if detected and variant != detected:
+            return {
+                "status": "error",
+                "message": (
+                    f"Requested variant '{variant}' does not match checkpoint variant '{detected}'."
+                ),
+            }
+    else:
+        variant = detected or "four_player"
+
+    pairing_is_3p = req.pairing == "rotation_6game"
+    if variant == "three_player" and req.pairing in ("rotation_8game", "rotation_4game"):
+        return {
+            "status": "error",
+            "message": (
+                f"Pairing '{req.pairing}' is 4-player only; use 'rotation_6game' "
+                "for 3-player checkpoints."
+            ),
+        }
+    if variant == "four_player" and pairing_is_3p:
+        return {
+            "status": "error",
+            "message": "Pairing 'rotation_6game' requires 3-player checkpoints.",
+        }
 
     try:
         challenger_ts = export_checkpoint_to_torchscript(str(challenger_path))

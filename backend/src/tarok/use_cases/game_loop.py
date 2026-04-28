@@ -207,10 +207,18 @@ class RustGameLoop:
         allow_berac: bool = True,
         decision_recorder: Callable[[dict[str, Any]], None] | None = None,
         score_breakdown_parser: ScoreBreakdownParserPort | None = None,
+        variant: str = "four_player",
     ):
         assert te is not None, "tarok_engine Rust extension not installed"
-        assert len(players) == 4
+        if variant == "three_player":
+            assert len(players) == 3, f"3-player variant requires 3 players, got {len(players)}"
+        else:
+            assert len(players) == 4, f"4-player variant requires 4 players, got {len(players)}"
         self._players = players
+        self._variant = variant
+        self._n_players = 3 if variant == "three_player" else 4
+        self._hand_size = 16 if variant == "three_player" else 12
+        self._variant_u8 = 1 if variant == "three_player" else 0
         self._observer: GameObserverPort = observer or NullObserver()
         self._rng = rng or random.Random()
         self._allow_berac = allow_berac
@@ -254,7 +262,13 @@ class RustGameLoop:
         preset_talon: list[int] | None = None,
     ) -> tuple[GameState, dict[int, int]]:
         """Play one full game, returning (final_state, {player: score})."""
-        gs = te.RustGameState(dealer)
+        try:
+            gs = te.RustGameState(dealer=dealer, variant=self._variant_u8)
+        except TypeError:
+            # Backward-compat with older engine builds that only accept dealer.
+            if self._variant_u8 != 0:
+                raise
+            gs = te.RustGameState(dealer=dealer)
         self._decision_step = 0
         if preset_hands is not None and preset_talon is not None:
             gs.deal_hands(preset_hands, preset_talon)
@@ -275,7 +289,7 @@ class RustGameLoop:
 
         if contract is None:
             # Re-deal on all pass (shouldn't happen with klop)
-            return await self.run(dealer=(dealer + 1) % 4)
+            return await self.run(dealer=(dealer + 1) % self._n_players)
 
         py_contract = _RUST_U8_TO_PY_CONTRACT.get(contract)
 
@@ -289,7 +303,7 @@ class RustGameLoop:
 
         # Store initial tarok counts for metrics
         initial_tarok_counts = {}
-        for p in range(4):
+        for p in range(self._n_players):
             hand = gs.hand(p)
             initial_tarok_counts[p] = sum(1 for c in hand if c < 22)
 
@@ -350,9 +364,11 @@ class RustGameLoop:
         # === TRICK PLAY ===
         gs.phase = te.PHASE_TRICK_PLAY
         lead_player = (
-            declarer if (_is_berac(contract) and declarer is not None) else (dealer + 1) % 4
+            declarer
+            if (_is_berac(contract) and declarer is not None)
+            else (dealer + 1) % self._n_players
         )
-        for trick_num in range(12):
+        for trick_num in range(self._hand_size):
             lead = lead_player
             trick_cards: list[tuple[int, Card]] = []
             gs.start_trick(lead_player)
@@ -363,8 +379,8 @@ class RustGameLoop:
                 ),
             )
 
-            for offset in range(4):
-                player = (lead_player + offset) % 4
+            for offset in range(self._n_players):
+                player = (lead_player + offset) % self._n_players
                 gs.current_player = player
 
                 agent = self._players[player]
@@ -375,6 +391,12 @@ class RustGameLoop:
 
                 if hasattr(agent, "_decide_from_tensors"):
                     # Fast tensor path
+                    if (
+                        self._variant == "three_player"
+                        and getattr(agent, "is_three_player", False)
+                        and hasattr(gs, "encode_state_3p")
+                    ):
+                        card_state_np = gs.encode_state_3p(player, te.DT_CARD_PLAY)
                     state_t = torch.from_numpy(card_state_np).float()
                     legal_mask = torch.from_numpy(card_mask_np).float()
                     action_idx = agent._decide_from_tensors(
@@ -412,7 +434,7 @@ class RustGameLoop:
                 gs.play_card(player, action_idx)
                 trick_cards.append((player, DECK[action_idx]))
                 # Broadcast next player so UI can surface legal actions immediately.
-                next_player = (player + 1) % 4
+                next_player = (player + 1) % self._n_players
                 gs.current_player = next_player
                 await self._observer.on_card_played(
                     player,
@@ -445,7 +467,7 @@ class RustGameLoop:
         # === SCORING ===
         gs.phase = te.PHASE_SCORING
         scores_arr = gs.score_game()
-        scores = {i: int(scores_arr[i]) for i in range(4)}
+        scores = {i: int(scores_arr[i]) for i in range(self._n_players)}
 
         # Build a minimal Python GameState for observer/API compatibility.
         py_state = _build_py_state_stub(
@@ -489,13 +511,14 @@ class RustGameLoop:
         bid_history: list[_PyBid],
     ) -> tuple[int | None, int | None]:
         """Run bidding, returns (rust_contract_u8, declarer_player)."""
-        passed = [False] * 4
+        n = self._n_players
+        passed = [False] * n
         highest: int | None = None  # Rust contract u8
         winning_player: int | None = None
-        bidder = (gs.dealer + 2) % 4  # bidding starts after forehand
+        bidder = (gs.dealer + 2) % n  # bidding starts after forehand
 
         for _round in range(20):
-            active = [i for i in range(4) if not passed[i]]
+            active = [i for i in range(n) if not passed[i]]
             if len(active) <= 1 and winning_player is not None:
                 break
             if len(active) == 0:
@@ -517,7 +540,10 @@ class RustGameLoop:
                     if py_c is not None:
                         py_legal_bids.append(py_c)
 
-            bid_state_np = gs.encode_state(bidder, te.DT_BID)
+            if self._variant == "three_player" and getattr(agent, "is_three_player", False):
+                bid_state_np = gs.encode_state_3p(bidder, te.DT_BID)
+            else:
+                bid_state_np = gs.encode_state(bidder, te.DT_BID)
             bid_mask = encode_bid_mask(py_legal_bids)
 
             if hasattr(agent, "_decide_from_tensors"):
@@ -563,15 +589,15 @@ class RustGameLoop:
             )
 
             # Determine whether bidding is over *before* advertising next bidder.
-            active_after = [i for i in range(4) if not passed[i]]
+            active_after = [i for i in range(n) if not passed[i]]
             bidding_done = (len(active_after) <= 1 and winning_player is not None) or len(
                 active_after
             ) == 0
 
             next_bidder = bidder
             if not bidding_done:
-                for _ in range(4):
-                    next_bidder = (next_bidder + 1) % 4
+                for _ in range(n):
+                    next_bidder = (next_bidder + 1) % n
                     if not passed[next_bidder]:
                         break
                 bidder = next_bidder
@@ -596,7 +622,7 @@ class RustGameLoop:
             gs.declarer = winning_player
             gs.contract = highest
             gs.set_role(winning_player, 0)  # Declarer
-            for i in range(4):
+            for i in range(n):
                 if i != winning_player:
                     gs.set_role(i, 2)  # Opponent
 
@@ -604,6 +630,11 @@ class RustGameLoop:
                 gs.phase = te.PHASE_TRICK_PLAY
                 gs.current_player = winning_player
             elif _is_solo(highest):
+                gs.phase = te.PHASE_TALON_EXCHANGE
+                gs.current_player = winning_player
+            elif self._variant == "three_player":
+                # 3p has no king-call phase — head straight to talon for solo*
+                # contracts (already covered above) or skip to trick play.
                 gs.phase = te.PHASE_TALON_EXCHANGE
                 gs.current_player = winning_player
             else:
@@ -614,10 +645,10 @@ class RustGameLoop:
         else:
             # All passed → Klop
             gs.contract = 0  # Klop = 0
-            for i in range(4):
+            for i in range(n):
                 gs.set_role(i, 2)  # Opponent
             gs.phase = te.PHASE_TRICK_PLAY
-            gs.current_player = (gs.dealer + 1) % 4
+            gs.current_player = (gs.dealer + 1) % n
             return 0, None
 
     async def _run_king_call(self, gs, declarer: int) -> int | None:
@@ -674,7 +705,7 @@ class RustGameLoop:
         gs.set_called_king(chosen_card_idx)
 
         # Identify partner (who has the called king)
-        for p in range(4):
+        for p in range(self._n_players):
             if p != declarer:
                 hand = gs.hand(p)
                 if chosen_card_idx in hand:
@@ -787,7 +818,7 @@ class RustGameLoop:
         )
 
         gs.phase = te.PHASE_TRICK_PLAY
-        gs.current_player = (gs.dealer + 1) % 4
+        gs.current_player = (gs.dealer + 1) % self._n_players
         return picked, discarded_idxs
 
 

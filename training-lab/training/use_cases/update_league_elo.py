@@ -125,7 +125,14 @@ class UpdateLeagueElo:
         if n_games == 0:
             return
 
-        recent_outplace_rate = learner_outplaces / n_games
+        # Reported rate excludes draws from the denominator: a "same" outcome
+        # should not be counted against the learner the way a "worse" outcome
+        # is. Elo below still credits draws as 0.5 so rating dynamics are
+        # unchanged.
+        decisive = learner_outplaces + opp_outplaces
+        recent_outplace_rate = (
+            learner_outplaces / decisive if decisive > 0 else 0.5
+        )
 
         # Aggregate outcome as a fraction: 1.0 = opponent won all,
         # 0.0 = learner won all, draws count as 0.5 each.
@@ -135,8 +142,9 @@ class UpdateLeagueElo:
         for entry in entries_for_token:
             entry.games_played += n_games
             entry.learner_outplaces += learner_outplaces
+            entry.draws += draws
             entry.recent_outplace_rate = recent_outplace_rate
-            entry.recent_outplace_samples = n_games
+            entry.recent_outplace_samples = decisive
 
             opp_elo = entry.elo
             e_learner = _elo_expected(pool.learner_elo, opp_elo)

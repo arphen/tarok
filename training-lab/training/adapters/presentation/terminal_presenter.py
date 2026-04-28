@@ -225,16 +225,27 @@ class TerminalPresenter(PresenterPort):
         else:
             print(f"{n_total:,} exp  [{_format_time(elapsed)}]")
 
-    def on_learner_contract_stats(self, stats: dict[str, dict[str, int]]) -> None:
+    def on_learner_contract_stats(self, stats: dict[str, dict[str, float | int]]) -> None:
         print("      learner contract stats (per iter):")
-        print("        contract         bids  won_bid  won_contract  win%")
+        print(
+            "        contract         bids  won_bid  won_contract  win%  avg_bid_rw  played  avg_score  avg_reward"
+        )
         for contract, row in stats.items():
             bids = int(row.get("bids_made", 0))
             won_bid = int(row.get("bids_won", 0))
             won_contract = int(row.get("contracts_won", 0))
             win_pct = (100.0 * won_contract / won_bid) if won_bid > 0 else 0.0
+            bid_rw_count = int(row.get("bid_reward_count", 0))
+            bid_rw_sum = float(row.get("bid_reward_sum", 0.0))
+            avg_bid_rw = (bid_rw_sum / bid_rw_count) if bid_rw_count > 0 else 0.0
+            played = int(row.get("played_count", 0))
+            played_score_sum = float(row.get("played_score_sum", 0.0))
+            played_reward_sum = float(row.get("played_reward_sum", 0.0))
+            avg_score = (played_score_sum / played) if played > 0 else 0.0
+            avg_reward = (played_reward_sum / played) if played > 0 else 0.0
             print(
                 f"        {contract:<14} {bids:>5} {won_bid:>8} {won_contract:>13} {win_pct:>5.1f}%"
+                f" {avg_bid_rw:>11.1f} {played:>7} {avg_score:>10.1f} {avg_reward:>11.1f}"
             )
 
     def on_duplicate_selfplay_start(

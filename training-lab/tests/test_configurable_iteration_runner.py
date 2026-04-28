@@ -167,7 +167,12 @@ def _duplicate_config(tmp_path: Path, *, enabled: bool) -> TrainingConfig:
         bench_games=8,
         iteration_runner_mode="spawn",
         iteration_runner_restart_every=5,
-        duplicate=DuplicateConfig(enabled=enabled, pods_per_iteration=2),
+        duplicate=DuplicateConfig(
+            enabled=enabled,
+            pods_per_iteration=2,
+            negative_reward_multiplier=3.0,
+            berac_bid_penalty=-10.0,
+        ),
     )
 
 
@@ -207,6 +212,8 @@ def test_adapter_factory_for_spawn_constructs_duplicate_ports_when_enabled(
     assert isinstance(selfplay, SeededSelfPlayAdapter)
     assert isinstance(dup_pairing, RotationPairingAdapter)
     assert isinstance(dup_reward, ShadowScoreRewardAdapter)
+    assert dup_reward._negative_reward_multiplier == 3.0
+    assert dup_reward._berac_bid_penalty == -10.0
     assert isinstance(dup_shadow, PreviousIterationShadowSource)
     from training.adapters.duplicate.numpy_iteration_stats import NumpyDuplicateIterationStats
     assert isinstance(dup_stats, NumpyDuplicateIterationStats)

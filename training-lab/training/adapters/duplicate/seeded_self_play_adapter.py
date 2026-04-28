@@ -57,7 +57,7 @@ _HEURISTIC_SHADOW_TOKENS = frozenset({
 
 
 def _render_seat_config(
-    seating: tuple[str, str, str, str],
+    seating: tuple[str, ...],
     learner_pos: int,
     actor_path: str,
 ) -> tuple[str, str]:
@@ -82,7 +82,7 @@ def _render_seat_config(
     return ",".join(rendered), actor_path
 
 
-def _learner_mask_for_seating(seating: tuple[str, str, str, str]) -> np.ndarray:
+def _learner_mask_for_seating(seating: tuple[str, ...]) -> np.ndarray:
     """Seats that will emit experiences in an active run."""
     return np.asarray(
         [s in LEARNER_SEAT_LABELS for s in seating],
@@ -162,17 +162,24 @@ class SeededSelfPlayAdapter(SelfPlayPort):
         centaur_endgame_solver: str | None = None,
         centaur_alpha_mu_depth: int | None = None,
         centaur_deterministic_seed: int | None = None,
+        variant: int = 0,
     ) -> DuplicateRunResult:
         if not pods:
             raise ValueError("run_seeded_pods requires at least one pod")
 
         n_pods = len(pods)
         n_games_per_group = pods[0].n_games_per_group
+        n_seats = pods[0].n_seats
         for p in pods:
             if p.n_games_per_group != n_games_per_group:
                 raise ValueError(
                     "all pods must share the same n_games_per_group; got "
                     f"{p.n_games_per_group} and {n_games_per_group}"
+                )
+            if p.n_seats != n_seats:
+                raise ValueError(
+                    "all pods must share the same n_seats; got "
+                    f"{p.n_seats} and {n_seats}"
                 )
 
         deck_seeds = [int(p.deck_seed) for p in pods]
@@ -181,7 +188,15 @@ class SeededSelfPlayAdapter(SelfPlayPort):
         # a given invocation share the seating, so deck_seeds alone drives
         # dealing differences.
         active_runs: list[dict[str, Any]] = []
-        shadow_scores = np.zeros((n_pods, n_games_per_group, 4), dtype=np.int32)
+        shadow_scores = np.zeros((n_pods, n_games_per_group, n_seats), dtype=np.int32)
+        # Per-pair contract played by the shadow table. Used by the reward
+        # adapter to detect bid divergence between learner and shadow and
+        # redirect the duplicate-advantage signal away from the card head
+        # when the contracts differ. Sentinel 255 = "unset" (no contract
+        # captured); aligns with Contract being a u8 with values <= 10.
+        shadow_contracts = np.full(
+            (n_pods, n_games_per_group), 255, dtype=np.uint8
+        )
 
         learner_positions = np.zeros((n_pods, n_games_per_group), dtype=np.int8)
         for pod_idx, p in enumerate(pods):
@@ -198,7 +213,7 @@ class SeededSelfPlayAdapter(SelfPlayPort):
             # because opponents are sampled per pod, so we issue one Rust
             # call per (variant_idx, opponent_tuple) group.
             groups: dict[
-                tuple[tuple[str, str, str, str], tuple[str, str, str, str], int],
+                tuple[tuple[str, ...], tuple[str, ...], int],
                 list[int],
             ] = {}
             for pod_idx, p in enumerate(pods):
@@ -239,6 +254,7 @@ class SeededSelfPlayAdapter(SelfPlayPort):
                     centaur_alpha_mu_depth=centaur_alpha_mu_depth,
                     centaur_deterministic_seed=centaur_deterministic_seed,
                     deck_seeds=group_seeds,
+                    variant=int(variant),
                 )
                 # Tag each experience row with (pod_idx, variant_idx) so we
                 # can stitch them back into global arrays later.
@@ -268,12 +284,24 @@ class SeededSelfPlayAdapter(SelfPlayPort):
                     centaur_alpha_mu_depth=centaur_alpha_mu_depth,
                     centaur_deterministic_seed=centaur_deterministic_seed,
                     deck_seeds=group_seeds,
+                    variant=int(variant),
                 )
-                sh_scores = np.asarray(shadow_raw["scores"], dtype=np.int32)
+                sh_scores = np.asarray(
+                    shadow_raw.get("reward_scores", shadow_raw["scores"]),
+                    dtype=np.int32,
+                )
+                sh_contracts = np.asarray(
+                    shadow_raw.get("contracts", []), dtype=np.uint8
+                )
                 # scores from run_self_play are indexed by game_id which the
                 # Rust side assigns 0..n_games-1 in group order.
+                # The Rust engine always returns scores reshaped as
+                # (n_games, 4) regardless of variant; for ThreePlayer the
+                # 4th column is unused, so slice down to n_seats.
                 for local_g, pod_idx in enumerate(group_pod_ids):
-                    shadow_scores[pod_idx, variant_idx, :] = sh_scores[local_g, :]
+                    shadow_scores[pod_idx, variant_idx, :] = sh_scores[local_g, :n_seats]
+                    if sh_contracts.size > local_g:
+                        shadow_contracts[pod_idx, variant_idx] = sh_contracts[local_g]
 
         # Merge all active runs into one experience dict + per-step pod_ids.
         active_merged, pod_ids_flat, active_game_ids = _merge_active_runs(
@@ -286,6 +314,7 @@ class SeededSelfPlayAdapter(SelfPlayPort):
             pod_ids=pod_ids_flat,
             learner_positions=learner_positions,
             active_game_ids=active_game_ids,
+            shadow_contracts=shadow_contracts,
         )
 
 
@@ -324,7 +353,7 @@ def _merge_active_runs(
     ]
     carry_keys_2d = ["states", "legal_masks", "oracle_states"]
     # Per-game metadata arrays: indexed by game_id, shape (n_games, ...)
-    per_game_keys = ["scores", "bid_contracts", "contracts", "declarers", "partners", "taroks_in_hand"]
+    per_game_keys = ["scores", "reward_scores", "bid_contracts", "contracts", "declarers", "partners", "taroks_in_hand"]
 
     active_game_ids = np.zeros((n_pods, n_games_per_group), dtype=np.int64)
 

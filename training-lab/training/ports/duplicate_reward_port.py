@@ -27,6 +27,7 @@ class DuplicateRewardPort(ABC):
         active_raw: Any,
         shadow_scores: Any,
         pods: list["DuplicatePod"],
+        shadow_contracts: Any = None,
     ) -> Any:
         """Return a per-step reward array of shape ``(n_active_steps,)``.
 
@@ -36,4 +37,14 @@ class DuplicateRewardPort(ABC):
         ``precomputed_rewards`` override into the GAE input stream
         (conservative mode) or directly into ``_broadcast_terminal_advantage``
         (actor-only mode).
+
+        ``shadow_contracts`` (optional) is a 2D ``np.ndarray`` of shape
+        ``(n_pods, n_games_per_group)`` giving the contract that was
+        played by the shadow table paired with each active game. When
+        provided, the adapter MAY redirect the reward away from the
+        terminal cardplay step for trajectories whose learner-side
+        contract differs from the shadow-side contract — credit
+        assignment then flows only to bidding-phase decision heads. When
+        ``None`` (legacy behaviour) the adapter places the reward at the
+        terminal cardplay step regardless of bid divergence.
         """

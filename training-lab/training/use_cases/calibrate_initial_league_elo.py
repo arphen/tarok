@@ -14,11 +14,18 @@ from training.use_cases.league_calibration_utils import (
 )
 
 
-def _pick_three_opponents(tokens: list[str]) -> tuple[str, str, str]:
+def _pick_n_opponents(tokens: list[str], n: int) -> tuple[str, ...]:
+    if n <= 0:
+        return ()
     if not tokens:
-        return "nn", "nn", "nn"
+        return tuple(["nn"] * n)
     cyc = cycle(tokens)
-    return next(cyc), next(cyc), next(cyc)
+    return tuple(next(cyc) for _ in range(n))
+
+
+def _pick_three_opponents(tokens: list[str]) -> tuple[str, str, str]:
+    picked = _pick_n_opponents(tokens, 3)
+    return picked[0], picked[1], picked[2]
 
 
 class CalibrateInitialLeagueElo:
@@ -40,6 +47,7 @@ class CalibrateInitialLeagueElo:
         on_pair_done: Callable[[int, int, str, str, int, int, int, float], None] | None = None,
         on_mixed_result: Callable[[int, int, str, tuple[str, str, str], tuple[float, float, float, float]], None] | None = None,
         include_checkpoints: bool = False,
+        variant: int = 0,
     ) -> bool:
         entries = [
             e for e in pool.entries
@@ -69,6 +77,10 @@ class CalibrateInitialLeagueElo:
                     anchor_idx = i
                     break
 
+        # Number of total seats: 4 for FourPlayer (variant=0), 3 for ThreePlayer (variant=1).
+        n_seats = 3 if int(variant) == 1 else 4
+        n_filler = n_seats - 1
+
         place_by_name: dict[str, float] = {}
         total_runs = len(entries)
         for run_idx, entry in enumerate(entries, start=1):
@@ -78,11 +90,12 @@ class CalibrateInitialLeagueElo:
                 for e in entries
                 if e.opponent.name != target_name
             ]
-            seat1, seat2, seat3 = _pick_three_opponents(other_tokens)
-            seat_config = f"{entry.opponent.seat_token()},{seat1},{seat2},{seat3}"
+            filler = _pick_n_opponents(other_tokens, n_filler)
+            seat_config = ",".join((entry.opponent.seat_token(),) + filler)
+            filler_label = ",".join(filler)
 
             if on_pair_start is not None:
-                on_pair_start(run_idx, total_runs, target_name, f"{seat1},{seat2},{seat3}")
+                on_pair_start(run_idx, total_runs, target_name, filler_label)
 
             raw = selfplay.run(
                 model_path=model_path,
@@ -94,6 +107,7 @@ class CalibrateInitialLeagueElo:
                 include_oracle_states=False,
                 lapajne_mc_worlds=lapajne_mc_worlds,
                 lapajne_mc_sims=lapajne_mc_sims,
+                variant=variant,
             )
             scores = raw.get("scores")
             if scores is None or len(scores) == 0:
@@ -105,9 +119,12 @@ class CalibrateInitialLeagueElo:
 
             place_by_name[target_name] = placements[0]
             if on_mixed_result is not None:
-                on_mixed_result(run_idx, total_runs, target_name, (seat1, seat2, seat3), placements)
+                # Pad filler to length 3 for the legacy callback signature.
+                padded = (filler + ("",) * 3)[:3]
+                placements_padded = (placements + (0.0,) * 4)[:4]
+                on_mixed_result(run_idx, total_runs, target_name, padded, placements_padded)
             if on_pair_done is not None:
-                on_pair_done(run_idx, total_runs, target_name, f"{seat1},{seat2},{seat3}", 0, 0, 0, 0.0)
+                on_pair_done(run_idx, total_runs, target_name, filler_label, 0, 0, 0, 0.0)
 
         anchor_entry = entries[anchor_idx]
         anchor_place = place_by_name.get(anchor_entry.opponent.name)

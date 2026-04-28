@@ -45,13 +45,14 @@ def _run_paired(
     *,
     seat0_token: str,
     seat0_path: str | None,
-    filler_tokens: tuple[str, str],
+    filler_tokens: tuple[str, ...],
     deck_seeds: list[int],
     concurrency: int,
     lapajne_mc_worlds: int | None,
     lapajne_mc_sims: int | None,
+    variant: int = 0,
 ) -> np.ndarray:
-    """Return the ``n_games x 4`` score array for this side of the pairing.
+    """Return the ``n_games x N`` score array for this side of the pairing.
 
     When ``seat0_token`` is a learner/NN token or an ``.pt`` path, seat 0 is
     rendered as ``"nn"`` and the model loaded at that seat is ``seat0_path``.
@@ -65,9 +66,13 @@ def _run_paired(
         seat0_rendered = seat0_token
         model_path = None
 
-    seat_cfg = f"{seat0_rendered},{filler_tokens[0]},{filler_tokens[1]},{filler_tokens[0]}"
-    # Pattern-4 seat: reuse filler_tokens[0] for parity; the important thing
-    # is that both sides of the pair see the same seat_cfg at seats 1..3.
+    n_seats = 3 if int(variant) == 1 else 4
+    # Repeat fillers to fill the remaining seats (so both sides of the pair
+    # see the same seat_cfg at seats 1..N-1).
+    needed = n_seats - 1
+    filler_seq = list(filler_tokens) if filler_tokens else [_LEARNER_TOKEN]
+    repeated = [filler_seq[i % len(filler_seq)] for i in range(needed)]
+    seat_cfg = ",".join([seat0_rendered] + repeated)
 
     kwargs: dict[str, Any] = dict(
         n_games=len(deck_seeds),
@@ -77,6 +82,7 @@ def _run_paired(
         include_replay_data=False,
         include_oracle_states=False,
         deck_seeds=deck_seeds,
+        variant=int(variant),
     )
     if model_path is not None:
         kwargs["model_path"] = model_path
@@ -104,14 +110,12 @@ def _paired_win_rate(candidate_scores: np.ndarray, opponent_scores: np.ndarray) 
     return (wins + 0.5 * draws) / float(n)
 
 
-def _pick_fillers(entries: list[LeaguePoolEntry], target_idx: int) -> tuple[str, str]:
+def _pick_fillers(entries: list[LeaguePoolEntry], target_idx: int, n: int = 2) -> tuple[str, ...]:
     filler_indices = [i for i in range(len(entries)) if i != target_idx]
     if not filler_indices:
         filler_indices = [target_idx]
     cyc = cycle(filler_indices)
-    a = entries[next(cyc)].opponent.seat_token()
-    b = entries[next(cyc)].opponent.seat_token()
-    return a, b
+    return tuple(entries[next(cyc)].opponent.seat_token() for _ in range(n))
 
 
 class DuplicateTournamentLeagueCalibrationAdapter(LeagueCalibrationPort):
@@ -135,6 +139,7 @@ class DuplicateTournamentLeagueCalibrationAdapter(LeagueCalibrationPort):
         lapajne_mc_worlds: int | None = None,
         lapajne_mc_sims: int | None = None,
         on_mixed_result: Callable[[int, int, str, tuple[str, str, str], tuple[float, float, float, float]], None] | None = None,
+        variant: int = 0,
     ) -> bool:
         # Strategy: pin anchor at ``anchor_elo``; for every other pool entry
         # compute a paired-deal H2H against the anchor. Then compute the
@@ -146,6 +151,9 @@ class DuplicateTournamentLeagueCalibrationAdapter(LeagueCalibrationPort):
 
         if n_games_per_pair <= 0:
             return False
+
+        n_seats = 3 if int(variant) == 1 else 4
+        n_filler = n_seats - 1
 
         # Resolve anchor.
         anchor_idx = 0
@@ -172,7 +180,7 @@ class DuplicateTournamentLeagueCalibrationAdapter(LeagueCalibrationPort):
 
             # Shared deck seeds across the two sides of the pair.
             deck_seeds = [rng.getrandbits(63) for _ in range(n_games_per_pair)]
-            fillers = _pick_fillers(entries, target_idx=i)
+            fillers = _pick_fillers(entries, target_idx=i, n=n_filler)
 
             candidate_scores = _run_paired(
                 seat0_token=target_tok,
@@ -182,6 +190,7 @@ class DuplicateTournamentLeagueCalibrationAdapter(LeagueCalibrationPort):
                 concurrency=concurrency,
                 lapajne_mc_worlds=lapajne_mc_worlds,
                 lapajne_mc_sims=lapajne_mc_sims,
+                variant=variant,
             )
             anchor_scores = _run_paired(
                 seat0_token=anchor_tok,
@@ -191,6 +200,7 @@ class DuplicateTournamentLeagueCalibrationAdapter(LeagueCalibrationPort):
                 concurrency=concurrency,
                 lapajne_mc_worlds=lapajne_mc_worlds,
                 lapajne_mc_sims=lapajne_mc_sims,
+                variant=variant,
             )
             wr = _paired_win_rate(candidate_scores, anchor_scores)
             if wr is None:
@@ -204,17 +214,18 @@ class DuplicateTournamentLeagueCalibrationAdapter(LeagueCalibrationPort):
                 # target's average "placement" against the anchor so the UI
                 # shows something meaningful.
                 pseudo_place = 2.0 - wr
+                padded_fillers = (fillers + (anchor.opponent.name,) + ("",) * 3)[:3]
                 on_mixed_result(
-                    progress, total_pairs, target.opponent.name, fillers + (anchor.opponent.name,),
+                    progress, total_pairs, target.opponent.name, padded_fillers,
                     (pseudo_place, 1.0 + wr, pseudo_place, pseudo_place),
                 )
 
         # Learner Elo: paired H2H vs the anchor using the same approach.
         # The learner is always an NN checkpoint at ``model_path``.
         deck_seeds = [rng.getrandbits(63) for _ in range(n_games_per_pair)]
-        learner_fillers = (
-            entries[(anchor_idx + 1) % len(entries)].opponent.seat_token(),
-            entries[(anchor_idx + 2) % len(entries)].opponent.seat_token(),
+        learner_fillers = tuple(
+            entries[(anchor_idx + 1 + k) % len(entries)].opponent.seat_token()
+            for k in range(n_filler)
         )
         learner_scores = _run_paired(
             seat0_token=_LEARNER_TOKEN,
@@ -224,6 +235,7 @@ class DuplicateTournamentLeagueCalibrationAdapter(LeagueCalibrationPort):
             concurrency=concurrency,
             lapajne_mc_worlds=lapajne_mc_worlds,
             lapajne_mc_sims=lapajne_mc_sims,
+            variant=variant,
         )
         anchor_scores = _run_paired(
             seat0_token=anchor_tok,
@@ -233,6 +245,7 @@ class DuplicateTournamentLeagueCalibrationAdapter(LeagueCalibrationPort):
             concurrency=concurrency,
             lapajne_mc_worlds=lapajne_mc_worlds,
             lapajne_mc_sims=lapajne_mc_sims,
+            variant=variant,
         )
         wr = _paired_win_rate(learner_scores, anchor_scores)
         if wr is None:
@@ -253,6 +266,7 @@ class DuplicateTournamentLeagueCalibrationAdapter(LeagueCalibrationPort):
         n_games_per_opponent: int,
         lapajne_mc_worlds: int | None = None,
         lapajne_mc_sims: int | None = None,
+        variant: int = 0,
     ) -> float | None:
         opponents = list(pool.entries)
         if not opponents:
@@ -260,13 +274,15 @@ class DuplicateTournamentLeagueCalibrationAdapter(LeagueCalibrationPort):
         if n_games_per_opponent <= 0:
             return None
 
+        n_seats = 3 if int(variant) == 1 else 4
+        n_filler = n_seats - 1
         rng = random.Random(self._rng_seed)
         implied_elos: list[float] = []
 
         for target_idx, target in enumerate(opponents):
             target_tok = target.opponent.seat_token()
             target_path = target.opponent.path
-            fillers = _pick_fillers(opponents, target_idx=target_idx)
+            fillers = _pick_fillers(opponents, target_idx=target_idx, n=n_filler)
 
             deck_seeds = [rng.getrandbits(63) for _ in range(n_games_per_opponent)]
 
@@ -278,6 +294,7 @@ class DuplicateTournamentLeagueCalibrationAdapter(LeagueCalibrationPort):
                 concurrency=concurrency,
                 lapajne_mc_worlds=lapajne_mc_worlds,
                 lapajne_mc_sims=lapajne_mc_sims,
+                variant=variant,
             )
             opponent_scores = _run_paired(
                 seat0_token=target_tok,
@@ -287,6 +304,7 @@ class DuplicateTournamentLeagueCalibrationAdapter(LeagueCalibrationPort):
                 concurrency=concurrency,
                 lapajne_mc_worlds=lapajne_mc_worlds,
                 lapajne_mc_sims=lapajne_mc_sims,
+                variant=variant,
             )
             wr = _paired_win_rate(candidate_scores, opponent_scores)
             if wr is None:

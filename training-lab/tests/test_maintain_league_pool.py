@@ -31,6 +31,7 @@ class _FakeSelfPlay:
         centaur_endgame_solver: str | None = None,
         centaur_alpha_mu_depth: int | None = None,
         centaur_deterministic_seed: int | None = None,
+        variant: int = 0,
     ) -> dict[str, list[list[float]]]:
         del model_path
         del n_games
@@ -45,6 +46,7 @@ class _FakeSelfPlay:
         del centaur_endgame_solver
         del centaur_alpha_mu_depth
         del centaur_deterministic_seed
+        del variant
         self.calls.append(seat_config)
         return {"scores": self.scores}
 
@@ -115,6 +117,7 @@ def test_maintain_league_pool_admits_calibrated_snapshot_and_evicts_weakest(tmp_
 
     ghost = next(e for e in pool.entries if e.opponent.name == "ghost@7")
     assert ghost.elo == 1450.0
+    assert pool.learner_elo == 1350.0
     assert out == 1450.0
     assert len(selfplay.calls) == 3
 
@@ -158,4 +161,47 @@ def test_maintain_league_pool_rejects_candidate_below_checkpoint_margin(tmp_path
 
     assert [e.opponent.name for e in pool.entries] == ["Anchor", "old-high"]
     assert out == 1300.0
+    assert len(selfplay.calls) == 2
+
+
+def test_maintain_league_pool_fallback_calibrates_without_port(tmp_path: Path) -> None:
+    cfg = LeagueConfig(enabled=True, snapshot_interval=1, snapshot_elo_delta=10.0, max_active_snapshots=2)
+    pool = LeaguePool(config=cfg)
+    pool.entries = [
+        LeaguePoolEntry(opponent=LeagueOpponent("V3", "bot_v3"), elo=1500.0),
+        LeaguePoolEntry(opponent=LeagueOpponent("M6", "bot_m6"), elo=1500.0),
+    ]
+    pool.learner_elo = 1200.0
+
+    ts_path = tmp_path / "current.pt"
+    ts_path.write_bytes(b"x")
+
+    presenter = MagicMock()
+    persistence = MagicMock()
+    # Candidate (seat0) consistently outplaces seat1 target -> implied elo 1750.
+    selfplay = _FakeSelfPlay(scores=[[20, 0, -10, -20]])
+    use_case = MaintainLeaguePool(
+        updater=UpdateLeagueElo(),
+        presenter=presenter,
+        persistence=persistence,
+        selfplay=selfplay,
+        league_calibration=None,
+    )
+
+    out = use_case.execute(
+        pool=pool,
+        result=_result(),
+        iteration=9,
+        ts_path=str(ts_path),
+        league_pool_dir=tmp_path / "league_pool",
+        last_snapshot_elo=None,
+        concurrency=4,
+        session_size=1,
+    )
+
+    ghost = next(e for e in pool.entries if e.opponent.name == "ghost@9")
+    assert out == 1750.0
+    assert ghost.elo == 1750.0
+    # Learner is intentionally anchored below newly admitted snapshot.
+    assert pool.learner_elo == 1650.0
     assert len(selfplay.calls) == 2

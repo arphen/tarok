@@ -3,7 +3,7 @@ import './BotArena.css';
 
 interface BotArenaProps {
   onBack: () => void;
-  checkpoints: { filename: string; episode: number; win_rate: number; model_name?: string; is_hof?: boolean }[];
+  checkpoints: { filename: string; episode: number; win_rate: number; model_name?: string; is_hof?: boolean; variant?: string }[];
   onReplayGame?: (gameId: string) => void;
 }
 
@@ -100,11 +100,17 @@ interface ArenaHistoryRun {
   analytics: ArenaAnalytics | null;
 }
 
-const DEFAULT_AGENTS: AgentSetup[] = [
+const DEFAULT_AGENTS_4P: AgentSetup[] = [
   { name: 'Bot-A', type: 'stockskis', checkpoint: '' },
   { name: 'Bot-B', type: 'stockskis', checkpoint: '' },
   { name: 'Bot-C', type: 'stockskis', checkpoint: '' },
   { name: 'Bot-D', type: 'stockskis', checkpoint: '' },
+];
+
+const DEFAULT_AGENTS_3P: AgentSetup[] = [
+  { name: 'Bot-A', type: 'stockskis_m6_3p', checkpoint: '' },
+  { name: 'Bot-B', type: 'stockskis_m6_3p', checkpoint: '' },
+  { name: 'Bot-C', type: 'stockskis_m6_3p', checkpoint: '' },
 ];
 
 const PLAYER_COLORS = ['#e74c3c', '#3498db', '#2ecc71', '#f39c12'];
@@ -112,11 +118,19 @@ const PLAYER_COLORS = ['#e74c3c', '#3498db', '#2ecc71', '#f39c12'];
 type Tab = 'overview' | 'bidding' | 'contracts' | 'announcements' | 'best_worst' | 'scores' | 'history';
 
 export default function BotArena({ onBack, checkpoints, onReplayGame }: BotArenaProps) {
-  const [agents, setAgents] = useState<AgentSetup[]>(DEFAULT_AGENTS.map(a => ({ ...a })));
+  const [variant, setVariant] = useState<'four_player' | 'three_player'>(() => {
+    const stored = typeof window !== 'undefined' ? window.localStorage.getItem('tarok.arena.variant') : null;
+    return stored === 'three_player' ? 'three_player' : 'four_player';
+  });
+  const [agents, setAgents] = useState<AgentSetup[]>(
+    () => (variant === 'three_player' ? DEFAULT_AGENTS_3P : DEFAULT_AGENTS_4P).map(a => ({ ...a })),
+  );
   const [totalGames, setTotalGames] = useState(100000);
   const [sessionSize, setSessionSize] = useState(50);
   const [lapajneMcWorlds, setLapajneMcWorlds] = useState(8);
   const [lapajneMcSims, setLapajneMcSims] = useState(8);
+  const [centaurHandoffTrick, setCentaurHandoffTrick] = useState(8);
+  const [centaurPimcWorlds, setCentaurPimcWorlds] = useState(100);
   const [progress, setProgress] = useState<ArenaProgress | null>(null);
   const [running, setRunning] = useState(false);
   const [tab, setTab] = useState<Tab>('overview');
@@ -136,6 +150,37 @@ export default function BotArena({ onBack, checkpoints, onReplayGame }: BotArena
   const updateAgent = (idx: number, patch: Partial<AgentSetup>) => {
     setAgents(prev => prev.map((a, i) => i === idx ? { ...a, ...patch } : a));
   };
+
+  const updateVariant = (v: 'four_player' | 'three_player') => {
+    setVariant(v);
+    try { window.localStorage.setItem('tarok.arena.variant', v); } catch { /* ignore */ }
+    const slots = v === 'three_player' ? 3 : 4;
+    const filler = v === 'three_player' ? 'stockskis_m6_3p' : 'stockskis';
+    setAgents(prev => {
+      const next: AgentSetup[] = [];
+      for (let i = 0; i < slots; i++) {
+        const cur = prev[i];
+        if (!cur) {
+          next.push({ name: `Bot-${String.fromCharCode(65 + i)}`, type: filler, checkpoint: '' });
+          continue;
+        }
+        // Drop checkpoint if it was selected for the wrong variant.
+        let { type, checkpoint } = cur;
+        if (checkpoint) {
+          const cp = checkpoints.find(c => c.filename === checkpoint);
+          if (cp && cp.variant && cp.variant !== v) checkpoint = '';
+        }
+        // Replace 4p-only filler with 3p filler (and vice versa) for fresh slots.
+        if (type === 'stockskis' && v === 'three_player') type = filler;
+        if ((type === 'stockskis_v3_3p' || type === 'stockskis_m6_3p') && v === 'four_player') type = 'stockskis';
+        next.push({ ...cur, type, checkpoint });
+      }
+      return next;
+    });
+  };
+
+  const isCheckpointDisabled = (cp: { variant?: string }) =>
+    Boolean(cp.variant && cp.variant !== variant);
 
   const pollProgress = useCallback(() => {
     fetch('/api/arena/progress')
@@ -184,8 +229,11 @@ export default function BotArena({ onBack, checkpoints, onReplayGame }: BotArena
           })),
           total_games: totalGames,
           session_size: sessionSize,
+          variant,
           lapajne_mc_worlds: lapajneMcWorlds,
           lapajne_mc_sims: lapajneMcSims,
+          centaur_handoff_trick: centaurHandoffTrick,
+          centaur_pimc_worlds: centaurPimcWorlds,
         }),
       });
       const data = await resp.json();
@@ -254,6 +302,31 @@ export default function BotArena({ onBack, checkpoints, onReplayGame }: BotArena
       {/* Configuration */}
       <div className="arena-config">
         {startError && <div className="arena-error-banner">{startError}</div>}
+        <div className="arena-variant" style={{ display: 'flex', gap: 16, marginBottom: 12 }}>
+          <strong style={{ alignSelf: 'center' }}>Variant:</strong>
+          <label style={{ display: 'flex', alignItems: 'center', gap: 6, cursor: 'pointer' }}>
+            <input
+              type="radio"
+              name="arena-variant"
+              value="four_player"
+              checked={variant === 'four_player'}
+              onChange={() => updateVariant('four_player')}
+              disabled={running}
+            />
+            <span>4-player</span>
+          </label>
+          <label style={{ display: 'flex', alignItems: 'center', gap: 6, cursor: 'pointer' }}>
+            <input
+              type="radio"
+              name="arena-variant"
+              value="three_player"
+              checked={variant === 'three_player'}
+              onChange={() => updateVariant('three_player')}
+              disabled={running}
+            />
+            <span>3-player</span>
+          </label>
+        </div>
         <div className="arena-agents">
           <h3>Agents</h3>
           <div className="arena-agent-grid">
@@ -272,24 +345,44 @@ export default function BotArena({ onBack, checkpoints, onReplayGame }: BotArena
                   onChange={e => updateAgent(idx, { type: e.target.value, checkpoint: '' })}
                 >
                   <option value="random">Random</option>
-                  <option value="stockskis">StockŠkis (latest)</option>
-                  {stockskisTypes.map(t => (
+                  {variant === 'four_player' && (
+                    <option value="stockskis">StockŠkis (latest)</option>
+                  )}
+                  {variant === 'three_player' && (
+                    <option value="stockskis_m6_3p">StockSkis m6 (3-player)</option>
+                  )}
+                  {variant === 'three_player' && (
+                    <option value="stockskis_v3_3p">StockŠkis v3 (3-player)</option>
+                  )}
+                  {variant === 'four_player' && stockskisTypes.map(t => (
                     <option key={t} value={t}>{t.replace('_', ' ')}</option>
                   ))}
+                  {variant === 'four_player' && (
+                    <option value="centaur">Centaur (NN + PIMC endgame)</option>
+                  )}
                   <option value="rl">Neural Network (checkpoint)</option>
                 </select>
-                {agent.type === 'rl' && (
+                {(agent.type === 'rl' || agent.type === 'centaur') && (
                   <select
                     className="arena-select"
                     value={agent.checkpoint}
                     onChange={e => updateAgent(idx, { checkpoint: e.target.value })}
                   >
                     <option value="">Latest checkpoint</option>
-                    {checkpoints.map(cp => (
-                      <option key={cp.filename} value={cp.filename}>
-                        {cp.model_name || cp.filename} (WR: {(cp.win_rate * 100).toFixed(0)}%)
-                      </option>
-                    ))}
+                    {checkpoints.map(cp => {
+                      const disabled = isCheckpointDisabled(cp);
+                      const trainedFor = cp.variant === 'three_player' ? '3-player' : '4-player';
+                      return (
+                        <option
+                          key={cp.filename}
+                          value={cp.filename}
+                          disabled={disabled}
+                          title={disabled ? `Trained for ${trainedFor}; switch variant to use` : undefined}
+                        >
+                          {cp.model_name || cp.filename} (WR: {(cp.win_rate * 100).toFixed(0)}%){disabled ? ` — ${trainedFor} only` : ''}
+                        </option>
+                      );
+                    })}
                   </select>
                 )}
               </div>
@@ -317,6 +410,16 @@ export default function BotArena({ onBack, checkpoints, onReplayGame }: BotArena
             Lapajne MC Sims
             <input type="number" min={1} max={4096} step={1} value={lapajneMcSims}
               onChange={e => setLapajneMcSims(Number(e.target.value))} />
+          </label>
+          <label>
+            Centaur Handoff Trick
+            <input type="number" min={0} max={12} step={1} value={centaurHandoffTrick}
+              onChange={e => setCentaurHandoffTrick(Number(e.target.value))} />
+          </label>
+          <label>
+            Centaur PIMC Worlds
+            <input type="number" min={1} max={2000} step={10} value={centaurPimcWorlds}
+              onChange={e => setCentaurPimcWorlds(Number(e.target.value))} />
           </label>
           <div className="arena-actions">
             {!running ? (

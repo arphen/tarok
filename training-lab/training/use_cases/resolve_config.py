@@ -75,6 +75,8 @@ def _parse_duplicate(raw: dict[str, Any]) -> DuplicateConfig:
         shadow_refresh_interval=int(raw.get("shadow_refresh_interval", 1)),
         apply_shaped_bonuses=bool(raw.get("apply_shaped_bonuses", False)),
         reward_model=str(raw.get("reward_model", "shadow_score_diff")),
+        negative_reward_multiplier=float(raw.get("negative_reward_multiplier", 2.0)),
+        berac_bid_penalty=float(raw.get("berac_bid_penalty", 0.0)),
         rng_seed=int(raw.get("rng_seed", 0)),
         learner_seat_token=str(raw.get("learner_seat_token", "nn")),
     )
@@ -185,4 +187,5 @@ class ResolveConfig:
             human_data_dir=merged.get("human_data_dir"),
             league=league,
             duplicate=duplicate,
+            variant=str(merged.get("variant", "four_player")),
         )

@@ -36,14 +36,18 @@ pub enum Contract {
     Solo = 7,
     Berac = 8,
     BarvniValat = 9,
+    /// Valat as a contract (not just an announcement). Used in 3-player tarok
+    /// where Valat can be bid directly. In 4-player it remains announcement-only,
+    /// so this variant is not part of `BIDDABLE_FOUR_PLAYER`.
+    Valat = 10,
 }
 
 impl Contract {
-    pub const NUM: usize = 10;
+    pub const NUM: usize = 11;
 
     pub fn strength(self) -> u8 {
         // Bidding order intentionally differs from enum discriminants.
-        // Barvni Valat is not an active bid here; it is handled separately.
+        // Barvni Valat is not an active bid in 4p; it is handled separately.
         match self {
             Contract::Klop => 0,
             Contract::Three => 1,
@@ -55,6 +59,7 @@ impl Contract {
             Contract::Berac => 7,
             Contract::Solo => 8,
             Contract::BarvniValat => 9,
+            Contract::Valat => 10,
         }
     }
 
@@ -90,23 +95,52 @@ impl Contract {
         }
     }
 
+    /// 4-player base value. For 3-player use `base_value_for(Variant::ThreePlayer)`.
     pub fn base_value(self) -> i32 {
-        match self {
-            Contract::Klop => 0,
-            Contract::Three => 10,
-            Contract::Two => 20,
-            Contract::One => 30,
-            Contract::SoloThree => 40,
-            Contract::SoloTwo => 50,
-            Contract::SoloOne => 60,
-            Contract::Solo => 80,
-            Contract::Berac => 70,
-            Contract::BarvniValat => 125,
+        self.base_value_for(Variant::FourPlayer)
+    }
+
+    /// Variant-aware base contract value. The 3p table is initial and tunable
+    /// (see `Variant::ThreePlayer` docs); user can adjust via the constants in
+    /// the match arm below.
+    pub fn base_value_for(self, variant: Variant) -> i32 {
+        match variant {
+            Variant::FourPlayer => match self {
+                Contract::Klop => 0,
+                Contract::Three => 10,
+                Contract::Two => 20,
+                Contract::One => 30,
+                Contract::SoloThree => 40,
+                Contract::SoloTwo => 50,
+                Contract::SoloOne => 60,
+                Contract::Solo => 80,
+                Contract::Berac => 70,
+                Contract::BarvniValat => 125,
+                Contract::Valat => 250, // unused as a bid in 4p
+            },
+            // 3p contract values. Three/Two/One and Solo are unused (not biddable).
+            // Initial values; tune empirically. Pattern: solo grades scale similarly
+            // to 4p but compressed since *every* non-klop game in 3p is solo.
+            Variant::ThreePlayer => match self {
+                Contract::Klop => 0,
+                Contract::Three => 0,    // unused
+                Contract::Two => 0,      // unused
+                Contract::One => 0,      // unused
+                Contract::SoloThree => 20,
+                Contract::SoloTwo => 30,
+                Contract::SoloOne => 40,
+                Contract::Solo => 0,     // unused
+                Contract::Berac => 70,
+                Contract::BarvniValat => 125,
+                Contract::Valat => 250,
+            },
         }
     }
 
     pub fn is_biddable(self) -> bool {
-        !matches!(self, Contract::Klop | Contract::BarvniValat)
+        // Backward-compatible 4p check (Klop and BarvniValat are not actively bid in 4p).
+        // For variant-aware checks, prefer `Variant::biddable_contracts`.
+        !matches!(self, Contract::Klop | Contract::BarvniValat | Contract::Valat)
     }
 
     pub fn from_u8(v: u8) -> Option<Contract> {
@@ -121,12 +155,16 @@ impl Contract {
             7 => Some(Contract::Solo),
             8 => Some(Contract::Berac),
             9 => Some(Contract::BarvniValat),
+            10 => Some(Contract::Valat),
             _ => None,
         }
     }
 
-    /// Contracts that can be actively bid (excludes Klop and BarvniValat).
-    pub const BIDDABLE: [Contract; 8] = [
+    /// 4-player biddable contracts (excludes Klop, BarvniValat, Valat).
+    /// Kept as `BIDDABLE` for backward compatibility with existing callsites.
+    pub const BIDDABLE: [Contract; 8] = Self::BIDDABLE_FOUR_PLAYER;
+
+    pub const BIDDABLE_FOUR_PLAYER: [Contract; 8] = [
         Contract::Three,
         Contract::Two,
         Contract::One,
@@ -136,6 +174,128 @@ impl Contract {
         Contract::Solo,
         Contract::Berac,
     ];
+
+    /// 3-player biddable contracts: graded solos + Berac.
+    /// Klop is implicit (all-pass result), so not in the bid list.
+    /// Three/Two/One/Solo do not exist in 3p (no 2v2 partnership; everything is 1v2).
+    /// Valat/BarvniValat are announcement-style outcomes, not active bids.
+    pub const BIDDABLE_THREE_PLAYER: [Contract; 4] = [
+        Contract::SoloThree,
+        Contract::SoloTwo,
+        Contract::SoloOne,
+        Contract::Berac,
+        // Valat/BarvniValat intentionally excluded from active bids.
+    ];
+}
+
+// -----------------------------------------------------------------------
+// Variant — 4-player vs 3-player Tarok
+// -----------------------------------------------------------------------
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[repr(u8)]
+pub enum Variant {
+    FourPlayer = 0,
+    /// 3-player Tarok ("tarok v treh"): 16/16/16 hands + 6-card talon, no king
+    /// calling, contracts limited to Klop/Berac/SoloThree/SoloTwo/SoloOne/
+    /// Valat/BarvniValat announcements. Always 1v2.
+    ThreePlayer = 1,
+}
+
+impl Variant {
+    pub fn num_players(self) -> usize {
+        match self {
+            Variant::FourPlayer => 4,
+            Variant::ThreePlayer => 3,
+        }
+    }
+
+    pub fn hand_size(self) -> usize {
+        match self {
+            Variant::FourPlayer => 12,
+            Variant::ThreePlayer => 16,
+        }
+    }
+
+    pub fn talon_size(self) -> usize {
+        // Both variants use a 6-card talon (per user spec for 3p).
+        6
+    }
+
+    pub fn tricks_per_game(self) -> usize {
+        // 3p: 16 cards/hand → 16 tricks. 4p: 12 cards/hand → 12 tricks.
+        self.hand_size()
+    }
+
+    pub fn has_king_call(self) -> bool {
+        matches!(self, Variant::FourPlayer)
+    }
+
+    pub fn is_three_player(self) -> bool {
+        matches!(self, Variant::ThreePlayer)
+    }
+
+    pub fn biddable_contracts(self) -> &'static [Contract] {
+        match self {
+            Variant::FourPlayer => &Contract::BIDDABLE_FOUR_PLAYER,
+            Variant::ThreePlayer => &Contract::BIDDABLE_THREE_PLAYER,
+        }
+    }
+
+    pub fn from_u8(v: u8) -> Option<Variant> {
+        match v {
+            0 => Some(Variant::FourPlayer),
+            1 => Some(Variant::ThreePlayer),
+            _ => None,
+        }
+    }
+}
+
+/// Process-global variant guard. The first `GameState` constructed in a
+/// process locks the variant; subsequent constructions with a different
+/// variant panic. This enforces the user's "ban mixing variants in one
+/// process" invariant. For tests that need to switch variants, use
+/// `reset_process_variant_for_tests()` (gated to `#[cfg(test)]`-style use
+/// via a debug assertion — call sparingly).
+use std::sync::Mutex;
+use std::sync::OnceLock;
+
+static PROCESS_VARIANT: OnceLock<Mutex<Option<Variant>>> = OnceLock::new();
+
+fn process_variant_cell() -> &'static Mutex<Option<Variant>> {
+    PROCESS_VARIANT.get_or_init(|| Mutex::new(None))
+}
+
+fn lock_variant_cell() -> std::sync::MutexGuard<'static, Option<Variant>> {
+    // Recover from poisoning: a panic mid-lock should not permanently break
+    // the engine. The state inside the mutex is just `Option<Variant>`, which
+    // is always valid.
+    process_variant_cell()
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+}
+
+pub fn lock_process_variant(v: Variant) {
+    let mut guard = lock_variant_cell();
+    match *guard {
+        None => {
+            *guard = Some(v);
+        }
+        Some(existing) if existing == v => {}
+        Some(existing) => panic!(
+            "process variant already locked to {:?}; cannot construct GameState for {:?}",
+            existing, v
+        ),
+    }
+}
+
+pub fn current_process_variant() -> Option<Variant> {
+    *lock_variant_cell()
+}
+
+/// Reset the process variant guard. Intended for tests only.
+pub fn reset_process_variant_for_tests() {
+    *lock_variant_cell() = None;
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -344,6 +504,7 @@ pub const TALON_SIZE: usize = 6;
 
 #[derive(Debug, Clone)]
 pub struct GameState {
+    pub variant: Variant,
     pub phase: Phase,
     pub hands: [CardSet; NUM_PLAYERS],
     pub talon: CardSet,
@@ -386,13 +547,22 @@ pub struct GameState {
 
 impl GameState {
     pub fn new(dealer: u8) -> GameState {
+        Self::new_with_variant(Variant::FourPlayer, dealer)
+    }
+
+    /// Variant-aware constructor. Locks the process-global variant on first call.
+    pub fn new_with_variant(variant: Variant, dealer: u8) -> GameState {
+        lock_process_variant(variant);
+        let n = variant.num_players() as u8;
+        // Bidding starts at dealer+2 in 4p (forehand last). For 3p, same convention:
+        // forehand = dealer+1, current_bidder starts at dealer+2 mod n.
         GameState {
+            variant,
             phase: Phase::Dealing,
             hands: [CardSet::EMPTY; NUM_PLAYERS],
             talon: CardSet::EMPTY,
             bids: Vec::new(),
-            // Forehand (obvezen) goes last; start bidding at dealer+2
-            current_bidder: (dealer + 2) % NUM_PLAYERS as u8,
+            current_bidder: (dealer + 2) % n,
             declarer: None,
             contract: None,
             called_king: None,
@@ -401,9 +571,9 @@ impl GameState {
             put_down: CardSet::EMPTY,
             announcements: [0; NUM_PLAYERS],
             kontra_levels: [KontraLevel::None; KontraTarget::NUM],
-            tricks: Vec::with_capacity(TRICKS_PER_GAME),
+            tricks: Vec::with_capacity(variant.tricks_per_game()),
             current_trick: None,
-            current_player: (dealer + 1) % NUM_PLAYERS as u8,
+            current_player: (dealer + 1) % n,
             played_cards: CardSet::EMPTY,
             roles: [PlayerRole::Opponent; NUM_PLAYERS],
             dealer,
@@ -411,9 +581,14 @@ impl GameState {
         }
     }
 
+    /// Number of active players in this game (3 or 4).
+    pub fn num_players(&self) -> usize {
+        self.variant.num_players()
+    }
+
     /// The forehand / obvezen player (first after dealer).
     pub fn forehand(&self) -> u8 {
-        (self.dealer + 1) % NUM_PLAYERS as u8
+        (self.dealer + 1) % self.variant.num_players() as u8
     }
 
     pub fn get_team(&self, player: u8) -> Team {
@@ -480,6 +655,7 @@ impl GameState {
             Contract::Solo => "solo",
             Contract::Berac => "berac",
             Contract::BarvniValat => "barvni_valat",
+            Contract::Valat => "valat",
         })
     }
 
@@ -525,13 +701,17 @@ impl GameState {
     // Game lifecycle methods (moved from PyGameState for self-play use)
     // ------------------------------------------------------------------
 
-    /// Shuffle a full deck and deal 12 cards per player + 6 to talon.
+    /// Shuffle a full deck and deal hands + talon according to `self.variant`.
+    /// 4p: 12 cards/player + 6 talon. 3p: 16 cards/player + 6 talon.
     pub fn deal(&mut self, rng: &mut impl Rng) {
         let mut deck = build_deck();
         deck.shuffle(rng);
+        let n = self.variant.num_players();
+        let hand_size = self.variant.hand_size();
+        let total_in_hands = n * hand_size;
         for (i, &card) in deck.iter().enumerate() {
-            if i < 48 {
-                self.hands[i / 12].insert(card);
+            if i < total_in_hands {
+                self.hands[i / hand_size].insert(card);
             } else {
                 self.talon.insert(card);
             }
@@ -554,7 +734,8 @@ impl GameState {
             .max_by_key(|c| c.strength());
 
         let mut result = Vec::new();
-        for c in Contract::BIDDABLE {
+        for &c in self.variant.biddable_contracts() {
+            // 4p-only forehand restriction on Three. (Three doesn't appear in 3p list.)
             if c == Contract::Three && !is_forehand {
                 continue;
             }
@@ -612,7 +793,9 @@ impl GameState {
     /// Evaluate the current trick, archive it, return (winner, points).
     pub fn finish_trick(&mut self) -> (u8, u8) {
         let trick = self.current_trick.take().expect("No current trick");
-        let is_last = self.tricks.len() == 11;
+        // Last trick index depends on variant: 11 (4p) or 15 (3p).
+        let last_trick_idx = self.variant.tricks_per_game() - 1;
+        let is_last = self.tricks.len() == last_trick_idx;
         let result = trick_eval::evaluate_trick(&trick, is_last, self.contract);
         self.tricks.push(trick);
         (result.winner, result.points)

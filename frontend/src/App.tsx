@@ -16,9 +16,13 @@ type Page = 'home' | 'training' | 'lab' | 'play' | 'lobby' | 'spectate' | 'tourn
 
 export default function App() {
   const [page, setPage] = useState<Page>('home');
-  const [checkpoints, setCheckpoints] = useState<{ filename: string; episode: number; win_rate: number; session?: number; model_name?: string; is_hof?: boolean }[]>([]);
+  const [checkpoints, setCheckpoints] = useState<{ filename: string; episode: number; win_rate: number; session?: number; model_name?: string; is_hof?: boolean; model_arch?: string; variant?: string }[]>([]);
   const [agents, setAgents] = useState<{ id: string; name: string; description: string; category: string }[]>([]);
-  const [opponents, setOpponents] = useState<[string, string, string]>(['latest', 'latest', 'latest']);
+  const [variant, setVariant] = useState<'four_player' | 'three_player'>(() => {
+    const stored = typeof window !== 'undefined' ? window.localStorage.getItem('tarok.variant') : null;
+    return stored === 'three_player' ? 'three_player' : 'four_player';
+  });
+  const [opponents, setOpponents] = useState<string[]>(['latest', 'latest', 'latest']);
   const [numRounds, setNumRounds] = useState(1);
   const [playSidebarOpen, setPlaySidebarOpen] = useState(false);
   const [showAllHands, setShowAllHands] = useState(false);
@@ -37,7 +41,10 @@ export default function App() {
   }, [page]);
 
   const handleStartGame = async () => {
-    await game.startNewGame(opponents, numRounds);
+    const nOpp = variant === 'three_player' ? 2 : 3;
+    const sized = opponents.slice(0, nOpp);
+    while (sized.length < nOpp) sized.push('latest');
+    await game.startNewGame(sized, numRounds, undefined, variant);
     setPage('play');
   };
 
@@ -55,13 +62,38 @@ export default function App() {
   }
 
   if (page === 'lobby') {
+    const nOpp = variant === 'three_player' ? 2 : 3;
     const setOpponent = (idx: number, value: string) => {
       setOpponents(prev => {
-        const next = [...prev] as [string, string, string];
+        const next = [...prev];
+        while (next.length < nOpp) next.push('latest');
         next[idx] = value;
         return next;
       });
     };
+
+    const updateVariant = (v: 'four_player' | 'three_player') => {
+      setVariant(v);
+      try { window.localStorage.setItem('tarok.variant', v); } catch { /* ignore */ }
+      // Reset any opponent slots that point to checkpoints from the wrong variant.
+      setOpponents(prev => {
+        const next: string[] = [];
+        const slots = v === 'three_player' ? 2 : 3;
+        for (let i = 0; i < slots; i++) {
+          const cur = prev[i] ?? 'latest';
+          const cp = checkpoints.find(c => c.filename === cur);
+          if (cp && cp.variant && cp.variant !== v) {
+            next.push('latest');
+          } else {
+            next.push(cur);
+          }
+        }
+        return next;
+      });
+    };
+
+    const isCheckpointDisabled = (cp: { variant?: string }) =>
+      Boolean(cp.variant && cp.variant !== variant);
 
     const ckptLabel = (filename: string) => {
       const cp = checkpoints.find(c => c.filename === filename);
@@ -79,25 +111,57 @@ export default function App() {
         <div className="lobby-page">
           <button className="btn-secondary btn-sm lobby-back" onClick={() => setPage('home')}>← Back</button>
           <h2 className="lobby-title">Game Setup</h2>
-          <p className="lobby-subtitle">Choose a model for each AI opponent</p>
+          <p className="lobby-subtitle">Choose a variant and a model for each AI opponent</p>
+
+          <div className="lobby-variant" style={{ display: 'flex', gap: 16, justifyContent: 'center', marginBottom: 16 }}>
+            <label style={{ display: 'flex', alignItems: 'center', gap: 6, cursor: 'pointer' }}>
+              <input
+                type="radio"
+                name="variant"
+                value="four_player"
+                checked={variant === 'four_player'}
+                onChange={() => updateVariant('four_player')}
+              />
+              <span>4-player Tarok</span>
+            </label>
+            <label style={{ display: 'flex', alignItems: 'center', gap: 6, cursor: 'pointer' }}>
+              <input
+                type="radio"
+                name="variant"
+                value="three_player"
+                checked={variant === 'three_player'}
+                onChange={() => updateVariant('three_player')}
+              />
+              <span>3-player Tarok</span>
+            </label>
+          </div>
 
           <div className="lobby-opponents">
-            {[0, 1, 2].map(i => (
+            {Array.from({ length: nOpp }).map((_, i) => (
               <div key={i} className="lobby-opponent">
                 <label className="lobby-label">AI-{i + 1}</label>
                 <select
                   className="lobby-select"
-                  value={opponents[i]}
+                  value={opponents[i] ?? 'latest'}
                   onChange={e => setOpponent(i, e.target.value)}
                 >
                   {/* Neural network models */}
                   <optgroup label="Neural Network">
                     <option value="latest">Latest trained model</option>
-                    {checkpoints.map(cp => (
-                      <option key={cp.filename} value={cp.filename}>
-                        {ckptLabel(cp.filename)}
-                      </option>
-                    ))}
+                    {checkpoints.map(cp => {
+                      const disabled = isCheckpointDisabled(cp);
+                      const trainedFor = cp.variant === 'three_player' ? '3-player' : '4-player';
+                      return (
+                        <option
+                          key={cp.filename}
+                          value={cp.filename}
+                          disabled={disabled}
+                          title={disabled ? `Trained for ${trainedFor}; switch variant to use` : undefined}
+                        >
+                          {ckptLabel(cp.filename)}{disabled ? ` — ${trainedFor} only` : ''}
+                        </option>
+                      );
+                    })}
                   </optgroup>
 
                   {/* Heuristic bots (StockŠkis v1-v5+ from registry) */}

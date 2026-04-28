@@ -1,0 +1,80 @@
+# ---------------------------------------------------------
+# 3-player Tarok — duplicate RL smoke config (rotation_6game).
+#
+# Goal: verify the full 3p duplicate-RL pipeline end-to-end with
+# rotation_6game pairing in seconds. This exercises:
+#   - DuplicatePod with n_seats=3
+#   - rotation_6game pairing (3 active + 3 shadow seatings per pod)
+#   - SeededSelfPlayAdapter with variant=ThreePlayer
+#   - ShadowScoreReward + NumpyDuplicateIterationStats with n_seats=3
+#   - LeagueElo calibration threaded with variant=1
+#
+# Run:
+#   make train-new CONFIG=three-player-duplicate-smoke
+# ---------------------------------------------------------
+
+variant: three_player
+model_arch: v3p
+
+seats: "centaur,bot_m6_3p,bot_m6_3p"
+bench_seats: "nn,bot_m6_3p,bot_m6_3p"
+
+iterations: 1
+games: 6  # ignored when duplicate is enabled (pods drive volume)
+outplace_session_size: 3
+bench_games: 6
+benchmark_checkpoints: [0]
+
+gamma: 0.995
+gae_lambda: 0.98
+clip_epsilon: 0.2
+value_coef: 0.5
+
+explore_rate_schedule: constant
+explore_rate: 0.1
+
+ppo_epochs: 1
+batch_size: 64
+
+lr: 0.0003
+lr_schedule: constant
+
+entropy_coef: 0.01
+entropy_schedule: constant
+
+imitation_coef: 0.0
+
+concurrency: 2
+device: auto
+
+oracle_critic: false
+
+iteration_runner_mode: inprocess
+
+centaur_handoff_trick: 16
+centaur_pimc_worlds: 1
+centaur_endgame_solver: pimc
+centaur_deterministic_seed: 1
+
+league:
+  enabled: true
+  min_nn_per_game: 1
+  sampling: matchmaking
+  snapshot_interval: 100
+  snapshot_elo_delta: 50
+  max_active_snapshots: 0
+  elo_outplace_unit_weight: 2
+  initial_calibration_enabled: false
+  opponents:
+    - name: M6_3P
+      type: bot_m6_3p
+
+duplicate:
+  enabled: true
+  pairing: rotation_6game
+  pods_per_iteration: 2
+  shadow_source: previous_iteration
+  shadow_refresh_interval: 1
+  reward_model: shadow_score_diff
+  learner_seat_token: centaur
+  rng_seed: 7

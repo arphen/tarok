@@ -31,18 +31,24 @@ For a single comparison unit:
 The reported per-entry rate is:
 
 ```text
-outplace_rate = learner_outplaces / games_played
+decisive_games = learner_outplaces + opponent_outplaces
+outplace_rate  = learner_outplaces / decisive_games
 ```
 
-Note: **draws are not awarded half-credit in this reported rate.** They sit in
-the denominator but not the numerator. This is the main reason the number
-*looks* punishing when measured per-game (many games end in a tie because
-declarer-vs-defender scoring zeros out three seats per game).
+**Draws are excluded from the denominator.** A tie on the comparison unit
+neither helps nor hurts the reported rate — because a "same" outcome is
+strictly better for the network than a "worse" outcome, and weighting draws
+equal to losses (the old behaviour, `learner_outplaces / games_played`)
+unfairly penalised networks that played to a draw against equal-strength
+opponents. This makes the dashboard number intuitive: **0.5 = equal
+strength on decisive comparisons, >0.5 = beating the opponent, <0.5 =
+losing to it.**
 
-For the Elo update, draws *are* counted as 0.5 — so ratings are calibrated
-correctly even when the reported rate is not:
+For the Elo update, draws still count as 0.5 — so ratings stay calibrated
+even though the reported rate ignores draws:
 
 ```text
+n_games         = learner_outplaces + opponent_outplaces + draws
 learner_outcome = (learner_outplaces + 0.5 * draws) / n_games
 ```
 
@@ -126,13 +132,17 @@ Totals per game:
 | B outplaces A | 0.25 |
 | draw | 0.50 |
 
-**So with four equal players, the per-game reported outplace rate is
-expected to be ~0.25, not 0.5.** This is the metric’s biggest source of
-"brutality": at equilibrium, `outplace_rate ≈ 0.25` — it looks like a losing
-signal, but it is actually the calibrated draw-adjusted expectation.
+Because draws are excluded from the reported denominator
+(`decisive_games = outplaces_{A} + outplaces_{B}`), the **expected
+per-game `outplace_rate` at equal strength is 0.5**, not 0.25 as under the
+old "draws-count-as-losses" definition. Ties still dominate the raw game
+count (0.5 of games are draws in this equal-strength model), but they no
+longer deflate the reported number — the rate reflects only decisive
+comparisons.
 
-Klop games shift this: everyone scores individually, so ties are rare and
-rate climbs toward 0.5 on Klop hands.
+Klop games shift the *share* of draws (Klop scores individually, so ties
+are rare), but the reported rate stays near 0.5 at equal strength because
+it already conditions on decisive outcomes.
 
 For the Elo *outcome* value (`learner_outcome`), draws are 0.5, so:
 
@@ -161,7 +171,7 @@ So reported `outplace_rate` at equilibrium with `session_size = 50` is
 
 | Unit | Expected `outplace_rate` at equal strength | Expected Elo drift |
 |---|---|---|
-| per game (session_size=1) | ~0.25 (≈0.33 if mixed with Klop hands) | 0 |
+| per game (session_size=1) | ~0.5 (draws excluded from denominator) | 0 |
 | session_size=50 | ~0.5 | 0 |
 
 ---
@@ -213,8 +223,10 @@ The drift scales inversely with `sqrt(games_per_iteration)` — doubling
 
 ## 6. Practical calibration implications
 
-1. **Do not read per-game `outplace_rate` as a win rate.** The equal-strength
-   equilibrium is ~0.25, not 0.5. Compare to that baseline.
+1. **Read per-game `outplace_rate` directly as a win rate on decisive
+   games.** The equal-strength equilibrium is ~0.5 at any session size.
+   A sustained value below 0.5 means the learner loses more decisive
+   comparisons than it wins; above 0.5 means the opposite.
 
 2. **Prefer session-based outplacing (`session_size=50`) for human-readable
    dashboards.** The number then matches intuition: 0.5 = equal, >0.5 =
@@ -243,17 +255,14 @@ The drift scales inversely with `sqrt(games_per_iteration)` — doubling
 6. **Calibration check.** If you see steady drift of learner Elo against a
    frozen equal-strength bot over many iterations, the metric is working
    correctly only when the *cumulative* outplace rate converges to the
-   expected equilibrium (0.25 per-game or 0.5 per-session). A short-run
-   rate far from that baseline is noise, not signal.
+   expected equilibrium (~0.5 at any session size, since draws are
+   excluded). A short-run rate far from that baseline is noise, not
+   signal.
 
 ---
 
 ## 7. Open questions / future work
 
-- Swapping the reported rate to the draw-adjusted form
-  `(learner_outplaces + 0.5 * draws) / games_played` would make the
-  dashboard number match the Elo outcome value and the "0.5 at equilibrium"
-  intuition, at the cost of breaking historical comparability.
 - Per-entry K tapering (`k_factor / sqrt(entry.games_played)`) would damp
   variance as a pairing matures. Noted but not implemented in
   `update_league_elo.py`.

@@ -39,6 +39,7 @@ def persist_run(
     total_games: int,
     session_size: int,
     payload: dict,
+    variant: str = "four_player",
 ) -> None:
     analytics = payload.get("analytics") or {}
     checkpoints = sorted(
@@ -52,6 +53,7 @@ def persist_run(
     run = {
         "run_id": f"arena-{time.time_ns()}",
         "created_at": datetime.now(timezone.utc).isoformat(),
+        "variant": variant,
         "status": payload.get("status", "done"),
         "games_done": int(payload.get("games_done", 0)),
         "total_games": int(total_games),

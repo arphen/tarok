@@ -34,7 +34,7 @@ class IterationResult:
     mean_duplicate_advantage: float | None = None
     duplicate_advantage_std: float | None = None
     n_duplicate_games: int = 0
-    learner_contract_stats: dict[str, dict[str, int]] = field(default_factory=dict)
+    learner_contract_stats: dict[str, dict[str, float | int]] = field(default_factory=dict)
     learner_elo: float = 0.0
 
     @property

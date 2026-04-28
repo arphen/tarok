@@ -94,7 +94,12 @@ class RotationPairingAdapter(DuplicatePairingPort):
         pairing: str = "rotation_8game",
         max_opponent_triplets: int | None = 4,
     ) -> None:
-        if pairing not in {"rotation_8game", "rotation_4game", "single_seat_2game"}:
+        if pairing not in {
+            "rotation_8game",
+            "rotation_4game",
+            "single_seat_2game",
+            "rotation_6game",
+        }:
             raise ValueError(f"Unknown pairing mode: {pairing!r}")
         if max_opponent_triplets is not None and max_opponent_triplets < 1:
             raise ValueError(
@@ -102,6 +107,14 @@ class RotationPairingAdapter(DuplicatePairingPort):
             )
         self._pairing = pairing
         self._max_opponent_triplets = max_opponent_triplets
+
+    @property
+    def _n_seats(self) -> int:
+        return 3 if self._pairing == "rotation_6game" else 4
+
+    @property
+    def _n_opponents(self) -> int:
+        return self._n_seats - 1
 
     def build_pods(
         self,
@@ -118,22 +131,25 @@ class RotationPairingAdapter(DuplicatePairingPort):
 
         rng = random.Random(rng_seed)
         opponent_tokens = _pool_opponent_tokens(pool)
-        if len(opponent_tokens) < 3:
-            # Pad by repetition so we can always fill 3 opponent slots.
-            opponent_tokens = tuple((opponent_tokens * 3)[:3]) if opponent_tokens else (
-                _DEFAULT_OPPONENT_ROSTER
+        n_opp = self._n_opponents
+        if len(opponent_tokens) < n_opp:
+            # Pad by repetition so we can always fill the opponent slots.
+            opponent_tokens = (
+                tuple((opponent_tokens * n_opp)[:n_opp])
+                if opponent_tokens
+                else _DEFAULT_OPPONENT_ROSTER[:n_opp]
             )
 
-        def _sample_triplet() -> tuple[str, str, str]:
-            if len(opponent_tokens) >= 3:
-                return tuple(rng.sample(list(opponent_tokens), 3))  # type: ignore[return-value]
-            return tuple(rng.choices(list(opponent_tokens), k=3))  # type: ignore[return-value]
+        def _sample_triplet() -> tuple[str, ...]:
+            if len(opponent_tokens) >= n_opp:
+                return tuple(rng.sample(list(opponent_tokens), n_opp))
+            return tuple(rng.choices(list(opponent_tokens), k=n_opp))
 
         # Pre-sample a bounded pool of ordered triplets so the downstream
         # Rust runner can batch pods sharing the same seating into a single
         # `run_self_play` invocation. See class docstring for rationale.
         if self._max_opponent_triplets is None:
-            triplet_pool: list[tuple[str, str, str]] | None = None
+            triplet_pool: list[tuple[str, ...]] | None = None
         else:
             pool_size = min(self._max_opponent_triplets, n_pods)
             triplet_pool = [_sample_triplet() for _ in range(pool_size)]
@@ -142,7 +158,7 @@ class RotationPairingAdapter(DuplicatePairingPort):
         for pod_idx in range(n_pods):
             deck_seed = rng.getrandbits(64)
             if triplet_pool is None:
-                opponents: tuple[str, str, str] = _sample_triplet()
+                opponents: tuple[str, ...] = _sample_triplet()
             else:
                 opponents = triplet_pool[pod_idx % len(triplet_pool)]
 
@@ -164,32 +180,31 @@ class RotationPairingAdapter(DuplicatePairingPort):
 
     def _build_seatings(
         self,
-        opponents: tuple[str, str, str],
+        opponents: tuple[str, ...],
         learner_token: str,
         shadow_token: str,
     ) -> tuple[
-        tuple[tuple[str, str, str, str], ...],
-        tuple[tuple[str, str, str, str], ...],
+        tuple[tuple[str, ...], ...],
+        tuple[tuple[str, ...], ...],
         tuple[int, ...],
     ]:
         if self._pairing == "rotation_8game":
-            positions = (0, 1, 2, 3)
+            positions: tuple[int, ...] = (0, 1, 2, 3)
         elif self._pairing == "rotation_4game":
             positions = (0, 0)  # two active+shadow games at the same seat
+        elif self._pairing == "rotation_6game":
+            positions = (0, 1, 2)  # 3 active + 3 shadow = 6 games (ThreePlayer)
         else:  # single_seat_2game
             positions = (0,)
 
-        active: list[tuple[str, str, str, str]] = []
-        shadow: list[tuple[str, str, str, str]] = []
-        a, b, c = opponents
+        n_seats = self._n_seats
+        active: list[tuple[str, ...]] = []
+        shadow: list[tuple[str, ...]] = []
         for pos in positions:
-            seats_active: list[str] = [a, b, c, a]  # placeholder; will be overwritten
-            seats_shadow: list[str] = [a, b, c, a]
-            # Fill all 4 seats: learner goes to `pos`, the 3 opponents fill the other 3
-            # seats in fixed cyclic order (a, b, c).
-            opps_cycle = [a, b, c]
-            opp_iter = iter(opps_cycle)
-            for i in range(4):
+            seats_active: list[str] = [""] * n_seats
+            seats_shadow: list[str] = [""] * n_seats
+            opp_iter = iter(opponents)
+            for i in range(n_seats):
                 if i == pos:
                     seats_active[i] = learner_token
                     seats_shadow[i] = shadow_token
@@ -197,6 +212,6 @@ class RotationPairingAdapter(DuplicatePairingPort):
                     tok = next(opp_iter)
                     seats_active[i] = tok
                     seats_shadow[i] = tok
-            active.append((seats_active[0], seats_active[1], seats_active[2], seats_active[3]))
-            shadow.append((seats_shadow[0], seats_shadow[1], seats_shadow[2], seats_shadow[3]))
+            active.append(tuple(seats_active))
+            shadow.append(tuple(seats_shadow))
         return tuple(active), tuple(shadow), tuple(positions)

@@ -16,6 +16,7 @@ use rand::rngs::SmallRng;
 
 use crate::card::*;
 use crate::encoding;
+use crate::encoding_3p;
 use crate::game_state::*;
 use crate::legal_moves;
 use crate::player::{
@@ -23,6 +24,41 @@ use crate::player::{
     CARD_ACTION_SIZE, TALON_ACTION_SIZE,
 };
 use crate::scoring;
+
+// -----------------------------------------------------------------------
+// Variant-aware encoding dispatch helpers
+// -----------------------------------------------------------------------
+
+/// Public state vector length for a given variant. Used to size scratch
+/// buffers and to flatten experiences on the Python side.
+pub fn state_size_for(variant: Variant) -> usize {
+    match variant {
+        Variant::FourPlayer => encoding::STATE_SIZE,
+        Variant::ThreePlayer => encoding_3p::STATE_SIZE_3P,
+    }
+}
+
+/// Oracle (perfect-information) state vector length for a given variant.
+pub fn oracle_state_size_for(variant: Variant) -> usize {
+    match variant {
+        Variant::FourPlayer => encoding::ORACLE_STATE_SIZE,
+        Variant::ThreePlayer => encoding_3p::ORACLE_STATE_SIZE_3P,
+    }
+}
+
+fn encode_state_dispatch(buf: &mut [f32], gs: &GameState, player: u8, dt: u8) {
+    match gs.variant {
+        Variant::FourPlayer => encoding::encode_state(buf, gs, player, dt),
+        Variant::ThreePlayer => encoding_3p::encode_state_3p(buf, gs, player, dt, false),
+    }
+}
+
+fn encode_oracle_state_dispatch(buf: &mut [f32], gs: &GameState, player: u8, dt: u8) {
+    match gs.variant {
+        Variant::FourPlayer => encoding::encode_oracle_state(buf, gs, player, dt),
+        Variant::ThreePlayer => encoding_3p::encode_state_3p(buf, gs, player, dt, true),
+    }
+}
 
 // -----------------------------------------------------------------------
 // In-flight game
@@ -117,6 +153,10 @@ pub struct RawExperience {
 pub struct GameResult {
     pub game_id: u32,
     pub scores: [i32; 4],
+    /// Per-seat training reward signal (non-zero-sum). See
+    /// [`crate::scoring::score_game_reward`]. Leaderboard/UI code should use
+    /// `scores`; RL training code should use `reward_scores`.
+    pub reward_scores: [i32; 4],
     pub experiences: Vec<RawExperience>,
     // Arena metadata
     pub contract: u8,
@@ -135,11 +175,19 @@ pub struct GameResult {
 
 pub struct SelfPlayRunner {
     players: [Arc<dyn BatchPlayer>; 4],
+    variant: Variant,
 }
 
 impl SelfPlayRunner {
     pub fn new(players: [Arc<dyn BatchPlayer>; 4]) -> Self {
-        SelfPlayRunner { players }
+        SelfPlayRunner { players, variant: Variant::FourPlayer }
+    }
+
+    /// Construct a runner for a specific variant. For 3-player games, slot 3
+    /// of `players` is unused (the engine never asks player 3 to decide); pass
+    /// any `Arc<dyn BatchPlayer>` as a phantom.
+    pub fn new_with_variant(players: [Arc<dyn BatchPlayer>; 4], variant: Variant) -> Self {
+        SelfPlayRunner { players, variant }
     }
 
     pub fn run(&self, n_games: u32, concurrency: usize) -> Vec<GameResult> {
@@ -181,7 +229,7 @@ impl SelfPlayRunner {
         // Seed initial games
         let n_initial = concurrency.min(n_games as usize);
         for i in 0..n_initial {
-            slots[i] = Some(Self::new_game_dispatch(next_game, &mut rng, deck_seeds.as_deref()));
+            slots[i] = Some(Self::new_game_dispatch(next_game, &mut rng, deck_seeds.as_deref(), self.variant));
             game_exps.push(Vec::new());
             next_game += 1;
             active += 1;
@@ -228,7 +276,7 @@ impl SelfPlayRunner {
                             let exps = std::mem::take(&mut game_exps[gid]);
                             results.push(Self::build_result(game, exps));
                             if next_game < n_games {
-                                *game = Self::new_game_dispatch(next_game, &mut rng, deck_seeds.as_deref());
+                                *game = Self::new_game_dispatch(next_game, &mut rng, deck_seeds.as_deref(), self.variant);
                                 game_exps.push(Vec::new());
                                 next_game += 1;
                             } else {
@@ -299,12 +347,13 @@ impl SelfPlayRunner {
                 let gid = game.game_id as usize;
                 // Move the game's scratch buffers into RawExperience (zero clones),
                 // replacing each with a fresh pre-allocated buffer for the next
-                // decision in this slot.
+                // decision in this slot. Buffer sizes track the game variant.
+                let v = game.gs.variant;
                 let state =
-                    std::mem::replace(&mut game.state_buf, vec![0f32; encoding::STATE_SIZE]);
+                    std::mem::replace(&mut game.state_buf, vec![0f32; state_size_for(v)]);
                 let oracle_state = std::mem::replace(
                     &mut game.oracle_state_buf,
-                    vec![0f32; encoding::ORACLE_STATE_SIZE],
+                    vec![0f32; oracle_state_size_for(v)],
                 );
                 let legal_mask =
                     std::mem::replace(&mut game.legal_mask, vec![0f32; CARD_ACTION_SIZE]);
@@ -342,7 +391,7 @@ impl SelfPlayRunner {
                 let exps = std::mem::take(&mut game_exps[gid]);
                 results.push(Self::build_result(game, exps));
                 if next_game < n_games {
-                    *game = Self::new_game_dispatch(next_game, &mut rng, deck_seeds.as_deref());
+                    *game = Self::new_game_dispatch(next_game, &mut rng, deck_seeds.as_deref(), self.variant);
                     game_exps.push(Vec::new());
                     next_game += 1;
                 } else {
@@ -366,22 +415,33 @@ impl SelfPlayRunner {
         game_id: u32,
         shared_rng: &mut impl Rng,
         deck_seeds: Option<&[u64]>,
+        variant: Variant,
     ) -> InFlightGame {
         match deck_seeds {
             Some(seeds) => {
                 let mut per_game_rng = SmallRng::seed_from_u64(seeds[game_id as usize]);
-                Self::new_game(game_id, &mut per_game_rng)
+                Self::new_game_with_variant(game_id, &mut per_game_rng, variant)
             }
-            None => Self::new_game(game_id, shared_rng),
+            None => Self::new_game_with_variant(game_id, shared_rng, variant),
         }
     }
 
     fn new_game(game_id: u32, rng: &mut impl Rng) -> InFlightGame {
-        let dealer = (game_id % 4) as u8;
-        let mut gs = GameState::new(dealer);
+        Self::new_game_with_variant(game_id, rng, Variant::FourPlayer)
+    }
+
+    fn new_game_with_variant(
+        game_id: u32,
+        rng: &mut impl Rng,
+        variant: Variant,
+    ) -> InFlightGame {
+        let n = variant.num_players() as u32;
+        let dealer = (game_id % n) as u8;
+        let mut gs = GameState::new_with_variant(variant, dealer);
         gs.deal(rng);
-        let forehand = (dealer + 1) % 4;
-        let first_bidder = (dealer + 2) % 4;
+        let n_u8 = variant.num_players() as u8;
+        let forehand = (dealer + 1) % n_u8;
+        let first_bidder = (dealer + 2) % n_u8;
         let mut initial_taroks = [0u8; 4];
         let initial_hands = gs.hands;
         let initial_talon = gs.talon;
@@ -393,7 +453,16 @@ impl SelfPlayRunner {
             dealer,
             game_id,
             phase: GamePhase::Bid,
-            passed: [false; 4],
+            // For 3p, slot 3 is a phantom seat: pre-mark as passed so the
+            // bidding loop in `bid_step` doesn't treat it as an active bidder.
+            // 4p uses all four slots.
+            passed: {
+                let mut p = [false; 4];
+                if variant.is_three_player() {
+                    p[3] = true;
+                }
+                p
+            },
             highest_bid: None,
             winning_bidder: None,
             current_bidder: first_bidder,
@@ -407,8 +476,8 @@ impl SelfPlayRunner {
             initial_hands,
             initial_talon,
             trace: GameTrace::default(),
-            state_buf: vec![0f32; encoding::STATE_SIZE],
-            oracle_state_buf: vec![0f32; encoding::ORACLE_STATE_SIZE],
+            state_buf: vec![0f32; state_size_for(variant)],
+            oracle_state_buf: vec![0f32; oracle_state_size_for(variant)],
             legal_mask: vec![0f32; CARD_ACTION_SIZE],
         }
     }
@@ -428,12 +497,14 @@ impl SelfPlayRunner {
 
     fn build_result(game: &InFlightGame, exps: Vec<RawExperience>) -> GameResult {
         let scores = Self::score_game(&game.gs);
+        let reward_scores = scoring::score_game_reward(&game.gs);
         let contract = game.gs.contract.map(|c| c as u8).unwrap_or(0);
         let declarer = game.gs.declarer.map(|d| d as i8).unwrap_or(-1);
         let partner = game.gs.partner.map(|p| p as i8).unwrap_or(-1);
         GameResult {
             game_id: game.game_id,
             scores,
+            reward_scores,
             experiences: exps,
             contract,
             declarer,
@@ -481,9 +552,9 @@ impl SelfPlayRunner {
         }
 
         game.state_buf.fill(0.0);
-        encoding::encode_state(&mut game.state_buf, &game.gs, bidder, encoding::DT_BID);
+        encode_state_dispatch(&mut game.state_buf, &game.gs, bidder, encoding::DT_BID);
         game.oracle_state_buf.fill(0.0);
-        encoding::encode_oracle_state(
+        encode_oracle_state_dispatch(
             &mut game.oracle_state_buf,
             &game.gs,
             bidder,
@@ -493,8 +564,12 @@ impl SelfPlayRunner {
         game.legal_mask.fill(0.0);
         game.legal_mask[0] = 1.0; // pass always legal
         let legal = game.gs.legal_bids(bidder);
+        let bid_table: &[Option<Contract>] = match game.gs.variant {
+            Variant::FourPlayer => &BID_IDX_TO_CONTRACT,
+            Variant::ThreePlayer => &encoding_3p::BID_IDX_TO_CONTRACT_3P,
+        };
         for contract in &legal {
-            for (idx, mapped) in BID_IDX_TO_CONTRACT.iter().enumerate() {
+            for (idx, mapped) in bid_table.iter().enumerate() {
                 if *mapped == Some(*contract) {
                     game.legal_mask[idx] = 1.0;
                 }
@@ -512,10 +587,21 @@ impl SelfPlayRunner {
     fn apply_bid(game: &mut InFlightGame, action_idx: usize) {
         let bidder = game.current_bidder;
         game.trace.bids.push((bidder, action_idx as u8));
-        let contract = if action_idx < BID_IDX_TO_CONTRACT.len() {
-            BID_IDX_TO_CONTRACT[action_idx]
-        } else {
-            None
+        let contract = match game.gs.variant {
+            Variant::FourPlayer => {
+                if action_idx < BID_IDX_TO_CONTRACT.len() {
+                    BID_IDX_TO_CONTRACT[action_idx]
+                } else {
+                    None
+                }
+            }
+            Variant::ThreePlayer => {
+                if action_idx < encoding_3p::BID_IDX_TO_CONTRACT_3P.len() {
+                    encoding_3p::BID_IDX_TO_CONTRACT_3P[action_idx]
+                } else {
+                    None
+                }
+            }
         };
 
         match contract {
@@ -541,8 +627,9 @@ impl SelfPlayRunner {
     }
 
     fn next_bidder(game: &mut InFlightGame) {
-        for _ in 0..4 {
-            game.current_bidder = (game.current_bidder + 1) % 4;
+        let n = game.gs.variant.num_players() as u8;
+        for _ in 0..n {
+            game.current_bidder = (game.current_bidder + 1) % n;
             if !game.passed[game.current_bidder as usize] {
                 break;
             }
@@ -550,25 +637,25 @@ impl SelfPlayRunner {
     }
 
     fn resolve_bidding(game: &mut InFlightGame) {
+        let n = game.gs.variant.num_players() as u8;
         if let (Some(bidder), Some(contract)) = (game.winning_bidder, game.highest_bid) {
             game.gs.declarer = Some(bidder);
             game.gs.contract = Some(contract);
             game.gs.roles[bidder as usize] = PlayerRole::Declarer;
-            for i in 0..4u8 {
+            for i in 0..n {
                 if i != bidder {
                     game.gs.roles[i as usize] = PlayerRole::Opponent;
                 }
             }
             match contract {
-                Contract::Berac | Contract::BarvniValat => {
+                // No-talon contracts: straight to trick play.
+                Contract::Berac
+                | Contract::BarvniValat
+                | Contract::Valat
+                | Contract::Klop => {
                     game.gs.phase = Phase::TrickPlay;
                     game.phase = GamePhase::TrickPlay;
-                    game.lead_player = (game.dealer + 1) % 4;
-                }
-                Contract::Klop => {
-                    game.gs.phase = Phase::TrickPlay;
-                    game.phase = GamePhase::TrickPlay;
-                    game.lead_player = (game.dealer + 1) % 4;
+                    game.lead_player = (game.dealer + 1) % n;
                 }
                 _ if contract.is_solo() => {
                     let tc = contract.talon_cards();
@@ -578,10 +665,17 @@ impl SelfPlayRunner {
                     } else {
                         game.gs.phase = Phase::TrickPlay;
                         game.phase = GamePhase::TrickPlay;
-                        game.lead_player = (game.dealer + 1) % 4;
+                        game.lead_player = (game.dealer + 1) % n;
                     }
                 }
                 _ => {
+                    // 4p partner contracts (Three/Two/One): king calling next.
+                    // The 3p variant never reaches this arm because its biddable
+                    // contracts are exhausted by the matches above.
+                    debug_assert!(
+                        game.gs.variant.has_king_call(),
+                        "reached king-call branch in a variant that has no kings",
+                    );
                     game.gs.phase = Phase::KingCalling;
                     game.phase = GamePhase::KingCall;
                 }
@@ -589,12 +683,12 @@ impl SelfPlayRunner {
         } else {
             // Klop (nobody bid)
             game.gs.contract = Some(Contract::Klop);
-            for i in 0..4 {
+            for i in 0..n as usize {
                 game.gs.roles[i] = PlayerRole::Opponent;
             }
             game.gs.phase = Phase::TrickPlay;
             game.phase = GamePhase::TrickPlay;
-            game.lead_player = (game.dealer + 1) % 4;
+            game.lead_player = (game.dealer + 1) % n;
         }
     }
 
@@ -611,14 +705,14 @@ impl SelfPlayRunner {
         }
 
         game.state_buf.fill(0.0);
-        encoding::encode_state(
+        encode_state_dispatch(
             &mut game.state_buf,
             &game.gs,
             declarer,
             encoding::DT_KING_CALL,
         );
         game.oracle_state_buf.fill(0.0);
-        encoding::encode_oracle_state(
+        encode_oracle_state_dispatch(
             &mut game.oracle_state_buf,
             &game.gs,
             declarer,
@@ -655,8 +749,9 @@ impl SelfPlayRunner {
 
         game.gs.called_king = Some(chosen);
 
-        // Find partner
-        for p in 0..4u8 {
+        // Find partner (4p only — king-call phase is only entered when variant has kings)
+        let n = game.gs.variant.num_players() as u8;
+        for p in 0..n {
             if p != declarer && game.gs.hands[p as usize].contains(chosen) {
                 game.gs.partner = Some(p);
                 game.gs.roles[p as usize] = PlayerRole::Partner;
@@ -670,13 +765,14 @@ impl SelfPlayRunner {
     fn transition_after_king_call(game: &mut InFlightGame) {
         let contract = game.gs.contract.unwrap_or(Contract::Three);
         let tc = contract.talon_cards();
+        let n = game.gs.variant.num_players() as u8;
         if tc > 0 {
             game.gs.phase = Phase::TalonExchange;
             game.phase = GamePhase::TalonPick;
         } else {
             game.gs.phase = Phase::TrickPlay;
             game.phase = GamePhase::TrickPlay;
-            game.lead_player = (game.dealer + 1) % 4;
+            game.lead_player = (game.dealer + 1) % n;
         }
     }
 
@@ -688,10 +784,11 @@ impl SelfPlayRunner {
         let declarer = game.gs.declarer?;
         let contract = game.gs.contract?;
         let tc = contract.talon_cards() as usize;
+        let n = game.gs.variant.num_players() as u8;
         if tc == 0 {
             game.gs.phase = Phase::TrickPlay;
             game.phase = GamePhase::TrickPlay;
-            game.lead_player = (game.dealer + 1) % 4;
+            game.lead_player = (game.dealer + 1) % n;
             return Self::advance_until_decision(game);
         }
 
@@ -706,14 +803,14 @@ impl SelfPlayRunner {
         game.gs.talon_revealed = groups;
 
         game.state_buf.fill(0.0);
-        encoding::encode_state(
+        encode_state_dispatch(
             &mut game.state_buf,
             &game.gs,
             declarer,
             encoding::DT_TALON_PICK,
         );
         game.oracle_state_buf.fill(0.0);
-        encoding::encode_oracle_state(
+        encode_oracle_state_dispatch(
             &mut game.oracle_state_buf,
             &game.gs,
             declarer,
@@ -789,9 +886,10 @@ impl SelfPlayRunner {
         // Record discarded cards in trace
         game.trace.put_down = game.gs.put_down.iter().map(|c| c.0).collect();
 
+        let n = game.gs.variant.num_players() as u8;
         game.gs.phase = Phase::TrickPlay;
         game.phase = GamePhase::TrickPlay;
-        game.lead_player = (game.dealer + 1) % 4;
+        game.lead_player = (game.dealer + 1) % n;
     }
 
     // ------------------------------------------------------------------
@@ -799,7 +897,9 @@ impl SelfPlayRunner {
     // ------------------------------------------------------------------
 
     fn trick_step(game: &mut InFlightGame) -> Option<Pending> {
-        if game.trick_num >= 12 {
+        let total_tricks = game.gs.variant.tricks_per_game() as u8;
+        let n = game.gs.variant.num_players() as u8;
+        if game.trick_num >= total_tricks {
             game.phase = GamePhase::Done;
             return None;
         }
@@ -808,18 +908,18 @@ impl SelfPlayRunner {
             game.gs.start_trick(game.lead_player);
         }
 
-        let player = (game.lead_player + game.trick_offset) % 4;
+        let player = (game.lead_player + game.trick_offset) % n;
         game.gs.current_player = player;
 
         game.state_buf.fill(0.0);
-        encoding::encode_state(
+        encode_state_dispatch(
             &mut game.state_buf,
             &game.gs,
             player,
             encoding::DT_CARD_PLAY,
         );
         game.oracle_state_buf.fill(0.0);
-        encoding::encode_oracle_state(
+        encode_oracle_state_dispatch(
             &mut game.oracle_state_buf,
             &game.gs,
             player,
@@ -843,7 +943,9 @@ impl SelfPlayRunner {
     }
 
     fn apply_trick_card(game: &mut InFlightGame, action_idx: usize) {
-        let player = (game.lead_player + game.trick_offset) % 4;
+        let n = game.gs.variant.num_players() as u8;
+        let total_tricks = game.gs.variant.tricks_per_game() as u8;
+        let player = (game.lead_player + game.trick_offset) % n;
         let card = Card(action_idx as u8);
 
         let actual_card;
@@ -859,13 +961,13 @@ impl SelfPlayRunner {
 
         game.trick_offset += 1;
 
-        if game.trick_offset >= 4 {
+        if game.trick_offset >= n {
             let (winner, _points) = game.gs.finish_trick();
             game.lead_player = winner;
             game.trick_num += 1;
             game.trick_offset = 0;
 
-            if game.trick_num >= 12 {
+            if game.trick_num >= total_tricks {
                 game.phase = GamePhase::Done;
             }
         }

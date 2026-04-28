@@ -15,6 +15,7 @@ _VALID_PAIRINGS: frozenset[str] = frozenset({
     "rotation_8game",
     "rotation_4game",
     "single_seat_2game",
+    "rotation_6game",
 })
 
 _VALID_SHADOW_SOURCES: frozenset[str] = frozenset({
@@ -34,6 +35,7 @@ _VALID_SHADOW_SOURCES: frozenset[str] = frozenset({
     "bot_lustrek",
     "bot_v1",
     "bot_v3",
+    "bot_v3_3p",
     "bot_v5",
     "bot_v6",
     "bot_m6",
@@ -84,6 +86,13 @@ class DuplicateConfig:
     shadow_refresh_interval: int = 1
     apply_shaped_bonuses: bool = False
     reward_model: str = "shadow_score_diff"
+    # Amplify negative duplicate rewards to push the learner away from
+    # low-EV contracts more aggressively (e.g. over-bidding Berač).
+    negative_reward_multiplier: float = 2.0
+    # Additive reward shaping applied at the learner's bidding decision when
+    # the learner bids Berač (contract id 8). Negative values discourage
+    # over-bidding Berač even when terminal-cardplay gradients are noisy.
+    berac_bid_penalty: float = 0.0
     rng_seed: int = 0
     # Which engine-side player type sits at the learner position in each pod.
     # "nn" (default) keeps the existing pure-NN learner; "centaur" routes the
@@ -115,6 +124,11 @@ class DuplicateConfig:
             raise ValueError(
                 f"duplicate.reward_model must be one of {sorted(_VALID_REWARD_MODELS)}, "
                 f"got {self.reward_model!r}"
+            )
+        if self.negative_reward_multiplier <= 0:
+            raise ValueError(
+                "duplicate.negative_reward_multiplier must be > 0, "
+                f"got {self.negative_reward_multiplier}"
             )
         if self.pods_per_iteration < 0:
             raise ValueError(
